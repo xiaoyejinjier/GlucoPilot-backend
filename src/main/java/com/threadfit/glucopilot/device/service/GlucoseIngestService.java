@@ -1,12 +1,12 @@
-package com.threadfit.glucopilot.glucose.service;
+package com.threadfit.glucopilot.device.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.constant.GlucoseNodes;
 import com.threadfit.glucopilot.common.exception.BizException;
-import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
-import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
-import com.threadfit.glucopilot.glucose.port.GlucoseIngestPort;
+import com.threadfit.glucopilot.device.entity.GlucoseRecord;
+import com.threadfit.glucopilot.device.mapper.GlucoseRecordMapper;
+import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

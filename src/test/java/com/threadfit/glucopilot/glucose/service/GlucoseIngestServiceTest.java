@@ -1,10 +1,10 @@
-package com.threadfit.glucopilot.device.service;
+package com.threadfit.glucopilot.glucose.service;
 
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
-import com.threadfit.glucopilot.device.entity.GlucoseRecord;
-import com.threadfit.glucopilot.device.mapper.GlucoseRecordMapper;
-import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
+import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
+import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
+import com.threadfit.glucopilot.glucose.port.GlucoseIngestPort;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;

@@ -4,7 +4,7 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
-import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
+import com.threadfit.glucopilot.glucose.port.GlucoseIngestPort;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 

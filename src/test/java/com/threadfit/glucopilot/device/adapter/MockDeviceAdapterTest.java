@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.device.adapter;
 
 import com.threadfit.glucopilot.common.exception.BizException;
-import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
+import com.threadfit.glucopilot.glucose.port.GlucoseIngestPort;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;

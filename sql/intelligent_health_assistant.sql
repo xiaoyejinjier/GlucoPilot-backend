@@ -1,5 +1,7 @@
 -- =============================================================================
 -- AI 控糖助手 · 生产库 DDL（intelligent_health_assistant）
+-- 日常开发请用 Flyway：backend/src/main/resources/db/migration/（启动后端自动迁移）
+-- 本文件用于整库对照/手工 DROP+重建；内容与 V1+V2 迁移对齐。
 -- 版本：v2.1（对齐《数据库设计文档》20260914-01-02 · 38 表）
 -- 设计依据：docs/数据库设计文档.docx（生产基线 merged-v2）
 --
@@ -227,7 +229,7 @@ CREATE TABLE user_session (
   login_type      TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '登录方式1微信2手机号',
   expire_at       DATETIME(3)     NOT NULL COMMENT '过期时间',
   client_ip       VARCHAR(45)     NULL COMMENT '客户端IP',
-  user_agent      VARCHAR(256)    NULL COMMENT 'UA',
+  user_agent      VARCHAR(512)    NULL COMMENT 'UA（微信开发者工具等环境可能较长）',
   is_valid        TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '是否有效0否1是',
   created_by    BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '创建人',
   gmt_create    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
@@ -433,7 +435,7 @@ CREATE TABLE ops_session (
   access_token   VARCHAR(512)    NOT NULL COMMENT '访问令牌(随机串/JWT均够用)',
   expire_at      DATETIME(3)     NOT NULL COMMENT '过期时间',
   client_ip      VARCHAR(45)     NULL COMMENT '客户端IP',
-  user_agent     VARCHAR(256)    NULL COMMENT 'UA',
+  user_agent     VARCHAR(512)    NULL COMMENT 'UA（浏览器/客户端环境可能较长）',
   session_status TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '状态 0失效1有效',
   created_by    BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '创建人',
   gmt_create    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',

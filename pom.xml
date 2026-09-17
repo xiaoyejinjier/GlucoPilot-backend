@@ -74,6 +74,13 @@
             <version>${mybatis-plus.version}</version>
         </dependency>
 
+        <!-- 分页插件 PaginationInnerInterceptor（3.5.9+ 独立模块） -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+            <version>${mybatis-plus.version}</version>
+        </dependency>
+
 
         <!-- ==================== 数据库版本管理 ==================== -->
 
@@ -87,14 +94,6 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-mysql</artifactId>
-        </dependency>
-
-
-        <!-- ==================== Redis ==================== -->
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
 

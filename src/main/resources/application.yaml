@@ -1,3 +1,42 @@
 spring:
   application:
     name: GlucoPilot Backend
+
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/sugar_health?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false&createDatabaseIfNotExist=true
+    username: root
+    password: "123456"
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # 空库：执行 V1→V3；已有表且无 flyway_schema_history：自动 baseline 到 3，避免重复建表/插种子
+    baseline-on-migrate: true
+    baseline-version: 3
+
+server:
+  port: 8080
+
+# MyBatis-Plus：逻辑删除与下划线映射
+mybatis-plus:
+  global-config:
+    db-config:
+      logic-delete-field: isDeleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      id-type: auto
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+logging:
+  level:
+    com.threadfit.glucopilot: INFO
+    com.baomidou.mybatisplus: WARN
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

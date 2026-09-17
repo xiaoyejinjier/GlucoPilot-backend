@@ -70,7 +70,7 @@
 | 消息推送（4.1~4.6） | `msg_push_*` 三表已建，二期实现 |
 | 运营后台接口（3.1~3.34） | 库表与接口文档已定义，后台前端另有排期 |
 | C 端补充接口（5.1~5.4 资讯互动、会话管理） | 二期实现 |
-| 多图一餐、真实设备（CGM/血糖仪）直连 | 表结构预留（`glucose_record.provider_code`、`external_record_id`），一期仅手动/OCR/设备 Mock |
+| 多图一餐、真实设备（CGM/血糖仪）直连 | **DDL 未预留设备来源列**：`glucose_record` 仅有 `source_type`（1 手动 2 OCR 3 设备），无 `provider_code` / `external_record_id`；一期仅手动/OCR/设备 Mock，设备直连需先走库表变更 |
 
 ---
 
@@ -176,3 +176,4 @@
 |---|---|---|
 | v1 | 2026-09-04 | 首版 MVP 草案（含 `ai_task`/`prediction_record`/`meal_response`、手机号+密码登录、时间型血糖模型） |
 | **v2** | **2026-09-15** | **对齐 38 表 DDL、数据库设计文档与接口设计文档**：修正登录口径、表名、九时段节点模型、OCR 任务替代 `ai_task`、饮食分析替代独立预测表、统计摘要替代 overview/trend；补充 MVP 接口清单、库表落点、联调顺序与验收标准 |
+| **v2.1** | **2026-09-15** | **修正 3.2 节笔误**：`glucose_record` 无 `provider_code` / `external_record_id` 列，设备直连需先走库表变更（与《AI 模块开发方案》9.5 一致） |

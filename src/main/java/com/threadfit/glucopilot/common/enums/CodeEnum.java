@@ -90,4 +90,44 @@ public interface CodeEnum {
         NO(0), YES(1);
         private final int code;
     }
+
+    /** chat_session.session_status */
+    @Getter
+    @RequiredArgsConstructor
+    enum ChatSessionStatus implements CodeEnum {
+        ARCHIVED(0), ACTIVE(1), ENDED(2);
+        private final int code;
+    }
+
+    /** chat_session.session_type */
+    @Getter
+    @RequiredArgsConstructor
+    enum ChatSessionType implements CodeEnum {
+        TEXT(1), VOICE(2), MIXED(3);
+        private final int code;
+    }
+
+    /** chat_message.msg_role */
+    @Getter
+    @RequiredArgsConstructor
+    enum ChatMsgRole implements CodeEnum {
+        USER(1), ASSISTANT(2), SYSTEM(3);
+        private final int code;
+    }
+
+    /** chat_message.msg_type */
+    @Getter
+    @RequiredArgsConstructor
+    enum ChatMsgType implements CodeEnum {
+        TEXT(1), IMAGE(2), VOICE(3);
+        private final int code;
+    }
+
+    /** chat_message.finish_reason（DDL CHECK 仅允许 1~4，允许 NULL） */
+    @Getter
+    @RequiredArgsConstructor
+    enum ChatFinishReason implements CodeEnum {
+        NORMAL(1), LENGTH(2), CONTENT_FILTER(3), ERROR(4);
+        private final int code;
+    }
 }

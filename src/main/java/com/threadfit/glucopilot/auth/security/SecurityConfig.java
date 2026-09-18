@@ -10,6 +10,8 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
+import jakarta.servlet.DispatcherType;
+
 /**
  * C/B 端鉴权：公开读 + 登录放行；C=/api/v1/**，B=/admin/v1/**。
  */
@@ -27,6 +29,11 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // SSE 等异步请求在 emitter.complete() 后会被容器再走一次 ASYNC 派发；
+                        // 自定义鉴权 Filter 是 OncePerRequestFilter，默认跳过 ASYNC 派发，
+                        // 若这里不放行，AuthorizationFilter 会因拿不到认证而抛 Access Denied
+                        // （响应已提交，只能在日志里刷一屏栈）。ERROR 派发同理。
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers(HttpMethod.POST,
                                 "/api/v1/auth/wechat/sessions",

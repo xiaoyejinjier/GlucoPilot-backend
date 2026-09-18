@@ -1,0 +1,18 @@
+# 开发环境差异项（profile=dev）。
+# 启动：--spring.profiles.active=dev,local（local 放个人密钥，见 application-local.yaml）
+# 之所以不写在 application.yaml 根文档里：spring.config.activate.on-profile 放在根文档会让
+# **整个文件**都变成 dev 专属，不带 profile 启动会直接因缺少 datasource 而失败。
+spring:
+  flyway:
+    # 开发库常被手工改过结构：已有表但无 flyway_schema_history 时自动 baseline，避免重复建表/插种子。
+    # 生产不要开这个开关，否则会静默跳过建表与种子。
+    baseline-on-migrate: true
+    baseline-version: 3
+
+logging:
+  level:
+    com.threadfit.glucopilot: INFO
+    com.threadfit.glucopilot.ai: DEBUG
+    # 单独压掉 Mapper 日志：MyBatis 的 DEBUG 会把 SQL 参数（含用户对话原文、健康数据）整条打进日志。
+    # 排查 SQL 时临时调到 DEBUG 即可，不要长期打开。
+    com.threadfit.glucopilot.ai.business.chat.mapper: INFO

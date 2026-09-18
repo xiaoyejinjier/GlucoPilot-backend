@@ -26,9 +26,28 @@
         <jjwt.version>0.13.0</jjwt.version>
         <springdoc.version>3.1.0</springdoc.version>
         <minio.version>8.6.0</minio.version>
+        <spring-ai.version>2.0.1</spring-ai.version>
     </properties>
 
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
+
+        <!-- ==================== SpringAI ==================== -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-deepseek</artifactId>
+        </dependency>
 
         <!-- ==================== Spring 基础 ==================== -->
 

@@ -53,6 +53,7 @@ public class OpsRoleResolver {
             return Set.of();
         }
         return sysRoleMapper.selectBatchIds(roleIds).stream()
+                .filter(role -> role.getRoleStatus() != null && role.getRoleStatus() == 1)
                 .map(SysRole::getRoleCode)
                 .filter(StringUtils::hasText)
                 .collect(Collectors.toSet());

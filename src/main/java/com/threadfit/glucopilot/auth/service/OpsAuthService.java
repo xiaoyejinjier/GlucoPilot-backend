@@ -7,6 +7,7 @@ import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.IdUtils;
 import com.threadfit.glucopilot.auth.dto.OpsAuthDtos;
+import com.threadfit.glucopilot.auth.dto.RuoYiSystemDtos;
 import com.threadfit.glucopilot.auth.entity.OpsAccount;
 import com.threadfit.glucopilot.auth.entity.OpsProfile;
 import com.threadfit.glucopilot.auth.entity.OpsSession;
@@ -31,6 +32,7 @@ public class OpsAuthService {
     private final OpsProfileMapper opsProfileMapper;
     private final OpsSessionMapper opsSessionMapper;
     private final OpsRoleResolver opsRoleResolver;
+    private final RuoYiAuthorizationService ruoyiAuthorizationService;
     private final PasswordEncoder passwordEncoder;
 
     @Transactional
@@ -70,6 +72,7 @@ public class OpsAuthService {
                 ? profile.getRealName()
                 : account.getUsername();
 
+        RuoYiSystemDtos.UserInfo userInfo = ruoyiAuthorizationService.userInfoOf(account.getId());
         return OpsAuthDtos.SessionResponse.builder()
                 .accessToken(session.getAccessToken())
                 .expiresIn(TOKEN_SECONDS)
@@ -77,6 +80,9 @@ public class OpsAuthService {
                 .nickname(nickname)
                 .role(opsRoleResolver.resolveFrontRole(account.getId()))
                 .opsId(account.getId())
+                .roles(userInfo.getRoles())
+                .permissions(userInfo.getPermissions())
+                .menus(userInfo.getMenus())
                 .build();
     }
 

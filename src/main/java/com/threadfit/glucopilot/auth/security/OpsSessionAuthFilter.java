@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.auth.entity.OpsSession;
 import com.threadfit.glucopilot.auth.service.OpsAuthService;
+import com.threadfit.glucopilot.auth.service.RuoYiAuthorizationService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -12,13 +13,15 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 解析 B 端 Bearer，校验 ops_session，写入 RequestContext.opsId。
@@ -28,6 +31,7 @@ import java.util.Collections;
 public class OpsSessionAuthFilter extends OncePerRequestFilter {
 
     private final OpsAuthService opsAuthService;
+    private final RuoYiAuthorizationService ruoyiAuthorizationService;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -47,8 +51,15 @@ public class OpsSessionAuthFilter extends OncePerRequestFilter {
                 try {
                     OpsSession session = opsAuthService.requireValidSession(token);
                     RequestContext.setOpsId(session.getOpsId());
+                    Set<SimpleGrantedAuthority> authorities = ruoyiAuthorizationService.permissionCodesOf(session.getOpsId())
+                            .stream()
+                            .map(code -> new SimpleGrantedAuthority("PERM_" + code))
+                            .collect(Collectors.toSet());
+                    authorities.addAll(ruoyiAuthorizationService.roleCodesOf(session.getOpsId()).stream()
+                            .map(code -> new SimpleGrantedAuthority("ROLE_" + code))
+                            .toList());
                     UsernamePasswordAuthenticationToken authentication =
-                            new UsernamePasswordAuthenticationToken(session.getOpsId(), null, Collections.emptyList());
+                            new UsernamePasswordAuthenticationToken(session.getOpsId(), null, authorities);
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 } catch (BizException ex) {
                     SecurityContextHolder.clearContext();

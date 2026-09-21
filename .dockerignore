@@ -1,0 +1,8 @@
+.git
+.mvn
+target
+*.log
+.env
+README.md
+docs
+sql

@@ -12,6 +12,8 @@ import com.threadfit.glucopilot.auth.mapper.OpsProfileMapper;
 import com.threadfit.glucopilot.auth.mapper.SysOpsRoleMapper;
 import com.threadfit.glucopilot.auth.mapper.SysPermissionMapper;
 import com.threadfit.glucopilot.auth.mapper.SysRolePermissionMapper;
+import com.threadfit.glucopilot.ruoyi.entity.SysMenu;
+import com.threadfit.glucopilot.ruoyi.mapper.SysMenuMapper;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -39,6 +43,7 @@ public class RuoYiAuthorizationService {
     private final SysOpsRoleMapper sysOpsRoleMapper;
     private final SysRolePermissionMapper sysRolePermissionMapper;
     private final SysPermissionMapper sysPermissionMapper;
+    private final SysMenuMapper sysMenuMapper;
     private final OpsRoleResolver opsRoleResolver;
 
     public boolean hasPermission(Long opsId, String permission) {
@@ -73,14 +78,33 @@ public class RuoYiAuthorizationService {
             }
             query.in(SysPermission::getPermCode, codes);
         }
-        return sysPermissionMapper.selectList(query).stream()
-                .map(permission -> RuoYiSystemDtos.MenuItem.builder()
+        Map<String, RuoYiSystemDtos.MenuItem> menus = new LinkedHashMap<>();
+        sysPermissionMapper.selectList(query).forEach(permission -> menus.put(permission.getPermCode(), RuoYiSystemDtos.MenuItem.builder()
                         .permission(permission.getPermCode())
                         .name(permission.getPermName())
                         .path(permission.getPathUrl())
                         .order(permission.getSortNo())
-                        .build())
-                .toList();
+                        .build()));
+        Set<String> granted = roleCodes.contains(OpsRoleResolver.CODE_SUPER_ADMIN)
+                ? Set.of(ALL_PERMISSION)
+                : permissionCodesOf(opsId, roleCodes);
+        sysMenuMapper.selectList(new LambdaQueryWrapper<SysMenu>()
+                        .eq(SysMenu::getMenuStatus, ENABLED)
+                        .eq(SysMenu::getVisible, ENABLED)
+                        .ne(SysMenu::getMenuType, "M")
+                        .orderByAsc(SysMenu::getSortNo)
+                        .orderByAsc(SysMenu::getId))
+                .stream()
+                .filter(menu -> roleCodes.contains(OpsRoleResolver.CODE_SUPER_ADMIN)
+                        || (StringUtils.hasText(menu.getPermCode()) && granted.contains(menu.getPermCode())))
+                .forEach(menu -> menus.put(menu.getPermCode(), RuoYiSystemDtos.MenuItem.builder()
+                        .permission(menu.getPermCode())
+                        .name(menu.getMenuName())
+                        .path(menu.getPathUrl())
+                        .order(menu.getSortNo())
+                        .build()));
+        return menus.values().stream().sorted(java.util.Comparator.comparing(
+                item -> item.getOrder() == null ? Integer.MAX_VALUE : item.getOrder())).toList();
     }
 
     public RuoYiSystemDtos.UserInfo userInfoOf(Long opsId) {

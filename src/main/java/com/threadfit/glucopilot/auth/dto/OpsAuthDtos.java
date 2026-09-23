@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.List;
+
 public final class OpsAuthDtos {
 
     private OpsAuthDtos() {
@@ -27,5 +29,10 @@ public final class OpsAuthDtos {
         /** admin | editor（来自 sys_ops_role：super_admin→admin，其余→editor） */
         private String role;
         private Long opsId;
+        /** RuoYi 后端角色编码。 */
+        private List<String> roles;
+        /** RuoYi 权限标识；超级管理员返回 *:*:*。 */
+        private List<String> permissions;
+        private List<RuoYiSystemDtos.MenuItem> menus;
     }
 }

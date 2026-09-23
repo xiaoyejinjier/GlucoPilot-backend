@@ -12,10 +12,22 @@ spring:
     default: dev,local
 
   datasource:
-    url: jdbc:mysql://127.0.0.1:3306/sugar_health?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false&createDatabaseIfNotExist=true
-    username: root
-    password: "123456"
+    # 开发、测试和生产均连接团队统一部署的 MySQL；禁止在代码中写入服务器地址或密码。
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:sugar_health}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=${DB_SSL_ENABLED:false}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
+
+  data:
+    redis:
+      # Redis 必须由远程环境部署；本服务只通过环境变量连接，不在 compose 中创建临时数据容器。
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      username: ${REDIS_USERNAME:}
+      password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL_ENABLED:false}
+      timeout: ${REDIS_TIMEOUT:3s}
 
   flyway:
     enabled: true

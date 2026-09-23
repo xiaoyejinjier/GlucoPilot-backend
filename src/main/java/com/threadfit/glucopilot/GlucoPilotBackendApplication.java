@@ -18,6 +18,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @MapperScan(
         value = {
                 "com.threadfit.glucopilot.auth.mapper",
+                "com.threadfit.glucopilot.ruoyi.mapper",
                 "com.threadfit.glucopilot.content.mapper",
                 "com.threadfit.glucopilot.device.mapper",
                 "com.threadfit.glucopilot.ai.business.chat.mapper"

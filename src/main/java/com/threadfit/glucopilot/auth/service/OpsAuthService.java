@@ -7,12 +7,14 @@ import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.IdUtils;
 import com.threadfit.glucopilot.auth.dto.OpsAuthDtos;
+import com.threadfit.glucopilot.auth.dto.RuoYiSystemDtos;
 import com.threadfit.glucopilot.auth.entity.OpsAccount;
 import com.threadfit.glucopilot.auth.entity.OpsProfile;
 import com.threadfit.glucopilot.auth.entity.OpsSession;
 import com.threadfit.glucopilot.auth.mapper.OpsAccountMapper;
 import com.threadfit.glucopilot.auth.mapper.OpsProfileMapper;
 import com.threadfit.glucopilot.auth.mapper.OpsSessionMapper;
+import com.threadfit.glucopilot.ruoyi.service.RuoYiAuditService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -31,6 +33,8 @@ public class OpsAuthService {
     private final OpsProfileMapper opsProfileMapper;
     private final OpsSessionMapper opsSessionMapper;
     private final OpsRoleResolver opsRoleResolver;
+    private final RuoYiAuthorizationService ruoyiAuthorizationService;
+    private final RuoYiAuditService ruoyiAuditService;
     private final PasswordEncoder passwordEncoder;
 
     @Transactional
@@ -39,14 +43,17 @@ public class OpsAuthService {
                 .eq(OpsAccount::getUsername, request.getUsername().trim())
                 .last("LIMIT 1"));
         if (account == null) {
+            ruoyiAuditService.recordLogin(request.getUsername(), false, "账号或密码错误");
             throw new BizException(ErrorCode.BIZ_REJECTED, "账号或密码错误");
         }
         if (account.getAccountStatus() == null
                 || account.getAccountStatus() != CodeEnum.OpsAccountStatus.NORMAL.getCode()) {
+            ruoyiAuditService.recordLogin(account.getUsername(), false, "账号已禁用");
             throw new BizException(ErrorCode.FORBIDDEN, "账号已禁用");
         }
         String hash = account.getPasswordHash();
         if (!StringUtils.hasText(hash) || !passwordEncoder.matches(request.getPassword(), hash)) {
+            ruoyiAuditService.recordLogin(account.getUsername(), false, "账号或密码错误");
             throw new BizException(ErrorCode.BIZ_REJECTED, "账号或密码错误");
         }
 
@@ -70,6 +77,8 @@ public class OpsAuthService {
                 ? profile.getRealName()
                 : account.getUsername();
 
+        RuoYiSystemDtos.UserInfo userInfo = ruoyiAuthorizationService.userInfoOf(account.getId());
+        ruoyiAuditService.recordLogin(account.getUsername(), true, "登录成功");
         return OpsAuthDtos.SessionResponse.builder()
                 .accessToken(session.getAccessToken())
                 .expiresIn(TOKEN_SECONDS)
@@ -77,6 +86,9 @@ public class OpsAuthService {
                 .nickname(nickname)
                 .role(opsRoleResolver.resolveFrontRole(account.getId()))
                 .opsId(account.getId())
+                .roles(userInfo.getRoles())
+                .permissions(userInfo.getPermissions())
+                .menus(userInfo.getMenus())
                 .build();
     }
 

@@ -21,6 +21,8 @@
 
     <properties>
         <java.version>21</java.version>
+        <!-- JDK 23+ 不再隐式执行注解处理；显式开启以保证 Lombok 在本机与容器构建一致。 -->
+        <maven.compiler.proc>full</maven.compiler.proc>
 
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
         <jjwt.version>0.13.0</jjwt.version>
@@ -73,6 +75,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Redis：用于远程环境的缓存、限流与会话扩展；连接信息统一由环境变量提供。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
 

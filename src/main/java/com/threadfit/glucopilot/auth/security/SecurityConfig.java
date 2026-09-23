@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
@@ -16,6 +17,7 @@ import jakarta.servlet.DispatcherType;
  * C/B 端鉴权：公开读 + 登录放行；C=/api/v1/**，B=/admin/v1/**。
  */
 @Configuration
+@EnableMethodSecurity
 public class SecurityConfig {
 
     @Bean

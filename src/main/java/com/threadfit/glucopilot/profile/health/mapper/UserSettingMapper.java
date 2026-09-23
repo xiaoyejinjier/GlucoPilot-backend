@@ -1,7 +1,7 @@
-package com.threadfit.glucopilot.auth.mapper;
+package com.threadfit.glucopilot.profile.health.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.threadfit.glucopilot.auth.entity.UserSetting;
+import com.threadfit.glucopilot.profile.health.entity.UserSetting;
 import org.apache.ibatis.annotations.Mapper;
 
 @Mapper

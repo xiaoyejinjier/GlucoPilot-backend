@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.auth.entity;
+package com.threadfit.glucopilot.profile.health.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.threadfit.glucopilot.common.model.BaseEntity;

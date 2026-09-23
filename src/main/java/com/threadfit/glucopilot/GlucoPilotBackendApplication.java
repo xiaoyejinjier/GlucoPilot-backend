@@ -20,7 +20,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
                 "com.threadfit.glucopilot.auth.mapper",
                 "com.threadfit.glucopilot.ruoyi.mapper",
                 "com.threadfit.glucopilot.content.mapper",
-                "com.threadfit.glucopilot.device.mapper"
+                "com.threadfit.glucopilot.device.mapper",
+                "com.threadfit.glucopilot.profile.health.mapper"
         },
         markerInterface = BaseMapper.class
 )

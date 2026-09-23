@@ -90,4 +90,20 @@ public interface CodeEnum {
         NO(0), YES(1);
         private final int code;
     }
+
+    /** 界面字号（user_setting.font_size）。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum FontSize implements CodeEnum {
+        STANDARD(1), LARGE(2), LARGER(3);
+        private final int code;
+    }
+
+    /** 界面主题（user_setting.theme_code）。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum ThemeCode implements CodeEnum {
+        GREEN(1), TEAL(2), SIMPLE(3);
+        private final int code;
+    }
 }

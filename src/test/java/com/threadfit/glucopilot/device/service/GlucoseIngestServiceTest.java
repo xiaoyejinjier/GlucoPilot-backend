@@ -1,13 +1,11 @@
 package com.threadfit.glucopilot.device.service;
 
 import com.threadfit.glucopilot.common.enums.CodeEnum;
-import com.threadfit.glucopilot.common.exception.BizException;
-import com.threadfit.glucopilot.device.entity.GlucoseRecord;
-import com.threadfit.glucopilot.device.mapper.GlucoseRecordMapper;
 import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
+import com.threadfit.glucopilot.glucose.dto.GlucoseDtos;
+import com.threadfit.glucopilot.glucose.record.GlucoseRecordService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -17,47 +15,42 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * 设备同步现在只是 glucose 模块的转交层：这里只验证参数透传，
+ * 「餐点节点被拒」「越界血糖值被拒」等业务校验见 GlucoseRecordServiceTest。
+ */
 @ExtendWith(MockitoExtension.class)
 class GlucoseIngestServiceTest {
 
     @Mock
-    private GlucoseRecordMapper glucoseRecordMapper;
+    private GlucoseRecordService glucoseRecordService;
 
     @InjectMocks
     private GlucoseIngestService service;
 
     @Test
-    void rejectsMealNode() {
-        var cmd = new GlucoseIngestPort.IngestCommand(
-                1L, LocalDate.now(), "breakfast", new BigDecimal("5.0"),
-                CodeEnum.GlucoseSourceType.DEVICE.getCode(), null, LocalDateTime.now(), null);
-        assertThrows(BizException.class, () -> service.upsertByNode(cmd));
-    }
+    void delegatesToGlucoseRecordService() {
+        when(glucoseRecordService.upsertByNode(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(GlucoseDtos.UpsertResult.builder().id("99").created(true).build());
 
-    @Test
-    void insertsWhenAbsent() {
-        when(glucoseRecordMapper.selectOne(any())).thenReturn(null);
-        when(glucoseRecordMapper.insert(any(GlucoseRecord.class))).thenAnswer(inv -> {
-            GlucoseRecord row = inv.getArgument(0);
-            row.setId(99L);
-            return 1;
-        });
-
-        var result = service.upsertByNode(new GlucoseIngestPort.IngestCommand(
+        GlucoseIngestPort.IngestResult result = service.upsertByNode(new GlucoseIngestPort.IngestCommand(
                 1L, LocalDate.of(2026, 9, 16), "before_lunch", new BigDecimal("6.2"),
                 CodeEnum.GlucoseSourceType.DEVICE.getCode(), "device:MOCK", LocalDateTime.now(), "ext-1"));
 
         assertTrue(result.created());
         assertEquals(99L, result.recordId());
-        ArgumentCaptor<GlucoseRecord> captor = ArgumentCaptor.forClass(GlucoseRecord.class);
-        verify(glucoseRecordMapper).insert(captor.capture());
-        assertEquals("before_lunch", captor.getValue().getNodeCode());
-        assertEquals(CodeEnum.GlucoseSourceType.DEVICE.getCode(), captor.getValue().getSourceType());
+
+        verify(glucoseRecordService).upsertByNode(
+                eq(1L), eq(LocalDate.of(2026, 9, 16)), eq("before_lunch"), eq(new BigDecimal("6.2")),
+                eq(CodeEnum.GlucoseSourceType.DEVICE.getCode()), eq("device:MOCK"),
+                isNull(), any(), eq("ext-1"));
     }
 }

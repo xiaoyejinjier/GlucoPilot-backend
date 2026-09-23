@@ -3,7 +3,6 @@ package com.threadfit.glucopilot.content.dto;
 import lombok.Builder;
 import lombok.Data;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public final class ContentDtos {
@@ -52,27 +51,6 @@ public final class ContentDtos {
         private Integer collectCount;
         private Boolean liked;
         private Boolean collected;
-    }
-
-    @Data
-    @Builder
-    public static class FoodCategoryItem {
-        private String id;
-        private String categoryName;
-        private Integer sortNo;
-    }
-
-    @Data
-    @Builder
-    public static class FoodItem {
-        private String id;
-        private String foodName;
-        private Integer categoryCode;
-        private String categoryId;
-        private BigDecimal carbsPer100g;
-        private BigDecimal caloriesPer100g;
-        private BigDecimal giValue;
-        private String imageUrl;
     }
 
     @Data

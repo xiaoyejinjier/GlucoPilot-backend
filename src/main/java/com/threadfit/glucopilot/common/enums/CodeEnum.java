@@ -90,4 +90,32 @@ public interface CodeEnum {
         NO(0), YES(1);
         private final int code;
     }
+
+    @Getter
+    @RequiredArgsConstructor
+    enum FeedbackType implements CodeEnum {
+        SUGGESTION(1), BUG(2), DEMAND(3), OTHER(4);
+        private final int code;
+    }
+
+    @Getter
+    @RequiredArgsConstructor
+    enum ReplyStatus implements CodeEnum {
+        RECEIVED(0), PROCESSING(1), HANDLED(2), CLOSED(3);
+        private final int code;
+    }
+
+    @Getter
+    @RequiredArgsConstructor
+    enum FontSize implements CodeEnum {
+        STANDARD(1), LARGE(2), LARGER(3);
+        private final int code;
+    }
+
+    @Getter
+    @RequiredArgsConstructor
+    enum ThemeCode implements CodeEnum {
+        GREEN(1), TEAL(2), SIMPLE(3);
+        private final int code;
+    }
 }

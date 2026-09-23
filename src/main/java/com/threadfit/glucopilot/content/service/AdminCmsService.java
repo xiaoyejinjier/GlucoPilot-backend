@@ -7,25 +7,19 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.model.BaseEntity;
 import com.threadfit.glucopilot.common.mybatis.SoftDeletes;
+import com.threadfit.glucopilot.content.dto.AdminCmsDtos;
 import com.threadfit.glucopilot.content.entity.CmsBanner;
 import com.threadfit.glucopilot.content.entity.CmsNews;
-import com.threadfit.glucopilot.content.entity.FoodCategory;
-import com.threadfit.glucopilot.content.entity.FoodNutrition;
 import com.threadfit.glucopilot.content.mapper.CmsBannerMapper;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
-import com.threadfit.glucopilot.content.mapper.FoodCategoryMapper;
-import com.threadfit.glucopilot.content.mapper.FoodNutritionMapper;
-import com.threadfit.glucopilot.content.dto.AdminCmsDtos;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -36,8 +30,6 @@ public class AdminCmsService {
 
     private final CmsBannerMapper bannerMapper;
     private final CmsNewsMapper newsMapper;
-    private final FoodCategoryMapper foodCategoryMapper;
-    private final FoodNutritionMapper foodNutritionMapper;
 
     public List<AdminCmsDtos.NewsItem> listNews() {
         return newsMapper.selectList(new LambdaQueryWrapper<CmsNews>()
@@ -121,84 +113,6 @@ public class AdminCmsService {
                 CmsBanner::getId, CmsBanner::getIsDeleted, CmsBanner::getDeletedAt, CmsBanner::getDeletedBy);
     }
 
-    public List<AdminCmsDtos.FoodCategoryItem> listCategories() {
-        return foodCategoryMapper.selectList(new LambdaQueryWrapper<FoodCategory>()
-                        .orderByAsc(FoodCategory::getSortNo)
-                        .orderByAsc(FoodCategory::getId))
-                .stream()
-                .map(c -> AdminCmsDtos.FoodCategoryItem.builder()
-                        .id(c.getId())
-                        .name(c.getCategoryName())
-                        .sort(c.getSortNo())
-                        .build())
-                .toList();
-    }
-
-    @Transactional
-    public AdminCmsDtos.FoodCategoryItem saveCategory(AdminCmsDtos.FoodCategorySaveRequest req) {
-        FoodCategory row = req.getId() == null ? new FoodCategory() : requireCategory(req.getId());
-        row.setCategoryName(req.getName().trim());
-        row.setSortNo(req.getSort() == null ? 0 : req.getSort());
-        if (row.getIsEnabled() == null) {
-            row.setIsEnabled(1);
-        }
-        if (req.getId() == null) {
-            foodCategoryMapper.insert(row);
-        } else {
-            foodCategoryMapper.updateById(row);
-        }
-        return AdminCmsDtos.FoodCategoryItem.builder()
-                .id(row.getId())
-                .name(row.getCategoryName())
-                .sort(row.getSortNo())
-                .build();
-    }
-
-    @Transactional
-    public void removeCategory(Long id) {
-        long used = foodNutritionMapper.selectCount(new LambdaQueryWrapper<FoodNutrition>()
-                .eq(FoodNutrition::getCategoryId, id));
-        if (used > 0) {
-            throw new BizException(ErrorCode.BIZ_REJECTED, "该分类下仍有食物，请先移动或删除食物");
-        }
-        softDelete(foodCategoryMapper, requireCategory(id).getId(),
-                FoodCategory::getId, FoodCategory::getIsDeleted, FoodCategory::getDeletedAt, FoodCategory::getDeletedBy);
-    }
-
-    public List<AdminCmsDtos.FoodItem> listFoods() {
-        Map<Long, String> catNames = foodCategoryMapper.selectList(null).stream()
-                .collect(java.util.stream.Collectors.toMap(FoodCategory::getId, FoodCategory::getCategoryName, (a, b) -> a));
-        return foodNutritionMapper.selectList(new LambdaQueryWrapper<FoodNutrition>()
-                        .orderByDesc(FoodNutrition::getId))
-                .stream().map(f -> toFood(f, catNames)).toList();
-    }
-
-    @Transactional
-    public AdminCmsDtos.FoodItem saveFood(AdminCmsDtos.FoodSaveRequest req) {
-        FoodCategory cat = requireCategory(req.getCategoryId());
-        FoodNutrition row = req.getId() == null ? new FoodNutrition() : requireFood(req.getId());
-        row.setFoodName(req.getName().trim());
-        row.setCategoryId(cat.getId());
-        row.setCategoryCode(cat.getId().intValue() <= 9 ? cat.getId().intValue() : 9);
-        row.setCarbsPer100g(req.getCarbs() == null ? BigDecimal.ZERO : req.getCarbs());
-        row.setCaloriesPer100g(req.getCal() == null ? BigDecimal.ZERO : req.getCal());
-        row.setGiValue(req.getGi());
-        row.setImageUrl(req.getImage());
-        row.setShelfStatus(Boolean.FALSE.equals(req.getEnabled()) ? 0 : 1);
-        if (req.getId() == null) {
-            foodNutritionMapper.insert(row);
-        } else {
-            foodNutritionMapper.updateById(row);
-        }
-        return toFood(requireFood(row.getId()), Map.of(cat.getId(), cat.getCategoryName()));
-    }
-
-    @Transactional
-    public void removeFood(Long id) {
-        softDelete(foodNutritionMapper, requireFood(id).getId(),
-                FoodNutrition::getId, FoodNutrition::getIsDeleted, FoodNutrition::getDeletedAt, FoodNutrition::getDeletedBy);
-    }
-
     private static <T extends BaseEntity> void softDelete(
             BaseMapper<T> mapper,
             Long id,
@@ -252,22 +166,6 @@ public class AdminCmsService {
                 .build();
     }
 
-    private AdminCmsDtos.FoodItem toFood(FoodNutrition f, Map<Long, String> catNames) {
-        return AdminCmsDtos.FoodItem.builder()
-                .id(f.getId())
-                .name(f.getFoodName())
-                .categoryId(f.getCategoryId())
-                .categoryName(f.getCategoryId() == null ? "" : catNames.getOrDefault(f.getCategoryId(), ""))
-                .carbs(f.getCarbsPer100g())
-                .cal(f.getCaloriesPer100g())
-                .gi(f.getGiValue())
-                .image(f.getImageUrl() == null ? "" : f.getImageUrl())
-                .description("")
-                .enabled(f.getShelfStatus() == null || f.getShelfStatus() == 1)
-                .updatedAt(fmt(f.getGmtModified()))
-                .build();
-    }
-
     private CmsNews requireNews(Long id) {
         CmsNews row = newsMapper.selectById(id);
         if (row == null) {
@@ -280,22 +178,6 @@ public class AdminCmsService {
         CmsBanner row = bannerMapper.selectById(id);
         if (row == null) {
             throw new BizException(ErrorCode.NOT_FOUND, "Banner 不存在");
-        }
-        return row;
-    }
-
-    private FoodCategory requireCategory(Long id) {
-        FoodCategory row = foodCategoryMapper.selectById(id);
-        if (row == null) {
-            throw new BizException(ErrorCode.NOT_FOUND, "分类不存在");
-        }
-        return row;
-    }
-
-    private FoodNutrition requireFood(Long id) {
-        FoodNutrition row = foodNutritionMapper.selectById(id);
-        if (row == null) {
-            throw new BizException(ErrorCode.NOT_FOUND, "食物不存在");
         }
         return row;
     }

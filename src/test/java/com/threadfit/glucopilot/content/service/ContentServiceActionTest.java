@@ -6,8 +6,6 @@ import com.threadfit.glucopilot.content.entity.CmsNews;
 import com.threadfit.glucopilot.content.entity.NewsUserAction;
 import com.threadfit.glucopilot.content.mapper.CmsBannerMapper;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
-import com.threadfit.glucopilot.content.mapper.FoodCategoryMapper;
-import com.threadfit.glucopilot.content.mapper.FoodNutritionMapper;
 import com.threadfit.glucopilot.content.mapper.NewsUserActionMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,10 +26,6 @@ class ContentServiceActionTest {
     private CmsBannerMapper bannerMapper;
     @Mock
     private CmsNewsMapper newsMapper;
-    @Mock
-    private FoodCategoryMapper foodCategoryMapper;
-    @Mock
-    private FoodNutritionMapper foodNutritionMapper;
     @Mock
     private NewsUserActionMapper newsUserActionMapper;
 

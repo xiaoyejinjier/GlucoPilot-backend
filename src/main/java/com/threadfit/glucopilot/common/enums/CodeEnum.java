@@ -70,6 +70,14 @@ public interface CodeEnum {
         private final int code;
     }
 
+    /** 文件存储 provider（media_file.storage_provider）：1=MinIO，2=阿里云OSS。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum StorageProvider implements CodeEnum {
+        MINIO(1), ALIYUN_OSS(2);
+        private final int code;
+    }
+
     @Getter
     @RequiredArgsConstructor
     enum OcrBizType implements CodeEnum {

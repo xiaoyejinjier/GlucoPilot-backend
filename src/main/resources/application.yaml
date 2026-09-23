@@ -1,6 +1,8 @@
 spring:
   application:
     name: GlucoPilot Backend
+  profiles:
+    default: dev
 
   datasource:
     # 开发、测试和生产均连接团队统一部署的 MySQL；禁止在代码中写入服务器地址或密码。

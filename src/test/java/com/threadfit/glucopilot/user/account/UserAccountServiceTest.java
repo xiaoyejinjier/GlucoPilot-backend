@@ -1,5 +1,8 @@
 package com.threadfit.glucopilot.user.account;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.threadfit.glucopilot.auth.service.AuthService;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.file.entity.MediaFile;
@@ -12,6 +15,8 @@ import com.threadfit.glucopilot.user.entity.UserProfile;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
 import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
 import com.threadfit.glucopilot.user.settings.UserSettingService;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -22,6 +27,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -47,6 +53,13 @@ class UserAccountServiceTest {
     @InjectMocks
     private UserAccountService service;
 
+    @BeforeAll
+    static void initTableInfo() {
+        // 纯单测无 MyBatis 容器，LambdaUpdateWrapper 解析实体列需要手动注册 TableInfo
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""), UserProfile.class);
+    }
+
     @Test
     void meAggregatesAccountProfileHealthAndSettings() {
         when(userAccountMapper.selectById(USER_ID)).thenReturn(account());
@@ -67,18 +80,20 @@ class UserAccountServiceTest {
 
     @Test
     void patchProfileKeepsUntouchedFields() {
-        UserProfile profile = profile();
-        when(userProfileMapper.selectOne(any())).thenReturn(profile);
+        when(userProfileMapper.selectOne(any())).thenReturn(profile());
 
         UserDtos.ProfilePatchRequest request = new UserDtos.ProfilePatchRequest();
         request.setNickname("  吴先生  ");
         service.patchProfile(USER_ID, request);
 
-        assertEquals("吴先生", profile.getNickname());
-        // 未提交的字段不动
-        assertEquals(1, profile.getGender());
-        assertEquals("吴", profile.getAvatarText());
-        verify(userProfileMapper).updateById(profile);
+        ArgumentCaptor<UserProfile> entityCaptor = ArgumentCaptor.forClass(UserProfile.class);
+        verify(userProfileMapper).update(entityCaptor.capture(), any(LambdaUpdateWrapper.class));
+        UserProfile entity = entityCaptor.getValue();
+        assertEquals(1L, entity.getId());
+        assertEquals("吴先生", entity.getNickname());
+        // 未提交的字段不进 SET，保持库中旧值
+        assertNull(entity.getGender());
+        assertNull(entity.getAvatarText());
         ArgumentCaptor<UserAccount> accountCaptor = ArgumentCaptor.forClass(UserAccount.class);
         verify(userAccountMapper).updateById(accountCaptor.capture());
         assertEquals(USER_ID, accountCaptor.getValue().getId());
@@ -98,8 +113,7 @@ class UserAccountServiceTest {
 
     @Test
     void patchProfileAcceptsOwnedAvatarUrl() {
-        UserProfile profile = profile();
-        when(userProfileMapper.selectOne(any())).thenReturn(profile);
+        when(userProfileMapper.selectOne(any())).thenReturn(profile());
         when(mediaFileService.findAvailableAvatar(USER_ID, "https://cdn.example.com/a.jpg"))
                 .thenReturn(new MediaFile());
 
@@ -107,21 +121,27 @@ class UserAccountServiceTest {
         request.setAvatarUrl("https://cdn.example.com/a.jpg");
         service.patchProfile(USER_ID, request);
 
-        assertEquals("https://cdn.example.com/a.jpg", profile.getAvatarUrl());
-        verify(userProfileMapper).updateById(profile);
+        ArgumentCaptor<UserProfile> entityCaptor = ArgumentCaptor.forClass(UserProfile.class);
+        verify(userProfileMapper).update(entityCaptor.capture(), any(LambdaUpdateWrapper.class));
+        assertEquals("https://cdn.example.com/a.jpg", entityCaptor.getValue().getAvatarUrl());
     }
 
     @Test
     void patchProfileWithEmptyAvatarUrlClearsIt() {
-        UserProfile profile = profile();
-        profile.setAvatarUrl("https://cdn.example.com/a.jpg");
-        when(userProfileMapper.selectOne(any())).thenReturn(profile);
+        when(userProfileMapper.selectOne(any())).thenReturn(profile());
 
         UserDtos.ProfilePatchRequest request = new UserDtos.ProfilePatchRequest();
         request.setAvatarUrl("   ");
         service.patchProfile(USER_ID, request);
 
-        assertNull(profile.getAvatarUrl());
+        // 空串清空：entity 不带该字段，由 wrapper 显式 SET NULL
+        ArgumentCaptor<UserProfile> entityCaptor = ArgumentCaptor.forClass(UserProfile.class);
+        ArgumentCaptor<LambdaUpdateWrapper<UserProfile>> wrapperCaptor =
+                ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(userProfileMapper).update(entityCaptor.capture(), wrapperCaptor.capture());
+        assertNull(entityCaptor.getValue().getAvatarUrl());
+        assertTrue(wrapperCaptor.getValue().getSqlSet().contains("avatar_url"),
+                "清空应生成 avatar_url 的 SET 子句");
     }
 
     @Test

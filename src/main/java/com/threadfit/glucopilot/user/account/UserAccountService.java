@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.user.account;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.threadfit.glucopilot.auth.service.AuthService;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
@@ -61,10 +62,17 @@ public class UserAccountService {
             throw new BizException(ErrorCode.BIZ_REJECTED, "头像不属于当前用户");
         }
         UserProfile profile = requireProfile(userId);
+        // 部分更新：非 null 字段走 entity（触发审计填充），空串清空走 wrapper.set(=NULL)；
+        // updateById 的 NOT_NULL 策略会跳过 null 字段，清空不生效
+        UserProfile entity = new UserProfile();
+        entity.setId(profile.getId());
+        LambdaUpdateWrapper<UserProfile> wrapper = new LambdaUpdateWrapper<UserProfile>()
+                .eq(UserProfile::getId, profile.getId());
+
         if (request.getNickname() != null) {
             Asserts.notBlank(request.getNickname(), ErrorCode.BAD_REQUEST, "昵称不能为空");
             String username = request.getNickname().trim();
-            profile.setNickname(username);
+            entity.setNickname(username);
             // user_account.username 是账号侧用户名，与资料昵称保持同步。
             UserAccount accountPatch = new UserAccount();
             accountPatch.setId(userId);
@@ -72,15 +80,24 @@ public class UserAccountService {
             userAccountMapper.updateById(accountPatch);
         }
         if (request.getAvatarUrl() != null) {
-            profile.setAvatarUrl(avatarUrl);
+            if (avatarUrl != null) {
+                entity.setAvatarUrl(avatarUrl);
+            } else {
+                wrapper.set(UserProfile::getAvatarUrl, null);
+            }
         }
+        String avatarText = nullIfBlank(request.getAvatarText());
         if (request.getAvatarText() != null) {
-            profile.setAvatarText(nullIfBlank(request.getAvatarText()));
+            if (avatarText != null) {
+                entity.setAvatarText(avatarText);
+            } else {
+                wrapper.set(UserProfile::getAvatarText, null);
+            }
         }
         if (request.getGender() != null) {
-            profile.setGender(request.getGender());
+            entity.setGender(request.getGender());
         }
-        userProfileMapper.updateById(profile);
+        userProfileMapper.update(entity, wrapper);
         return UserDtos.UpdatedResult.builder().updated(true).build();
     }
 

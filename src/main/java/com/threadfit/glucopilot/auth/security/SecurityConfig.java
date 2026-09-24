@@ -41,6 +41,7 @@ public class SecurityConfig {
                                 "/api/v1/news/*",
                                 "/api/v1/food-categories",
                                 "/api/v1/foods",
+                                "/api/v1/foods/*",
                                 "/api/v1/dict/**",
                                 "/api/v1/app-config").permitAll()
                         .requestMatchers("/api/v1/**").authenticated()

@@ -1,0 +1,147 @@
+package com.threadfit.glucopilot.user.account;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.threadfit.glucopilot.auth.service.AuthService;
+import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.common.util.Asserts;
+import com.threadfit.glucopilot.common.util.PhoneUtils;
+import com.threadfit.glucopilot.file.service.MediaFileService;
+import com.threadfit.glucopilot.profile.health.service.HealthProfileService;
+import com.threadfit.glucopilot.user.dto.UserDtos;
+import com.threadfit.glucopilot.user.entity.UserAccount;
+import com.threadfit.glucopilot.user.entity.UserProfile;
+import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
+import com.threadfit.glucopilot.user.settings.UserSettingService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * C 端账号：聚合查询、资料部分更新、手机号换绑。
+ * 健康档案读写归 profile.health（{@link HealthProfileService}），偏好设置归 user.settings，
+ * 登录签发会话仍在 auth 模块，本服务只负责登录态下的资料读写。
+ */
+@Service
+@RequiredArgsConstructor
+public class UserAccountService {
+
+    private final UserAccountMapper userAccountMapper;
+    private final UserProfileMapper userProfileMapper;
+    private final UserSettingService userSettingService;
+    private final AuthService authService;
+    private final HealthProfileService healthProfileService;
+    private final MediaFileService mediaFileService;
+
+    public UserDtos.MeResponse me(Long userId) {
+        UserAccount account = requireAccount(userId);
+        return UserDtos.MeResponse.builder()
+                .accountStatus(account.getAccountStatus())
+                .phoneMasked(PhoneUtils.mask(account.getPhone()))
+                .profile(toProfileView(requireProfile(userId)))
+                .health(healthProfileService.healthViewOf(userId))
+                .settings(userSettingService.settingsOf(userId))
+                .build();
+    }
+
+    /**
+     * 部分更新资料。avatarUrl / avatarText 传空串表示清空、传 null 表示不改
+     * （Jackson 无法区分「字段省略」与「显式 null」，故用空串表达清空）。
+     */
+    @Transactional
+    public UserDtos.UpdatedResult patchProfile(Long userId, UserDtos.ProfilePatchRequest request) {
+        if (request.getNickname() == null && request.getAvatarUrl() == null
+                && request.getAvatarText() == null && request.getGender() == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "至少提交一个待修改字段");
+        }
+        // 头像必须来自当前用户上传的可用文件，防止引用他人或伪造 URL；空串/空白表示清空，跳过归属校验
+        String avatarUrl = nullIfBlank(request.getAvatarUrl());
+        if (avatarUrl != null && mediaFileService.findAvailableAvatar(userId, avatarUrl) == null) {
+            throw new BizException(ErrorCode.BIZ_REJECTED, "头像不属于当前用户");
+        }
+        UserProfile profile = requireProfile(userId);
+        if (request.getNickname() != null) {
+            Asserts.notBlank(request.getNickname(), ErrorCode.BAD_REQUEST, "昵称不能为空");
+            String username = request.getNickname().trim();
+            profile.setNickname(username);
+            // user_account.username 是账号侧用户名，与资料昵称保持同步。
+            UserAccount accountPatch = new UserAccount();
+            accountPatch.setId(userId);
+            accountPatch.setUsername(username);
+            userAccountMapper.updateById(accountPatch);
+        }
+        if (request.getAvatarUrl() != null) {
+            profile.setAvatarUrl(avatarUrl);
+        }
+        if (request.getAvatarText() != null) {
+            profile.setAvatarText(nullIfBlank(request.getAvatarText()));
+        }
+        if (request.getGender() != null) {
+            profile.setGender(request.getGender());
+        }
+        userProfileMapper.updateById(profile);
+        return UserDtos.UpdatedResult.builder().updated(true).build();
+    }
+
+    /** 换绑手机号：先验验证码（避免账号枚举），再查占用。 */
+    @Transactional
+    public UserDtos.PhoneBindResult bindPhone(Long userId, UserDtos.PhoneBindRequest request) {
+        authService.consumeSmsCode(request.getPhone(), request.getVerifyCode());
+
+        UserAccount account = requireAccount(userId);
+        if (request.getPhone().equals(account.getPhone())) {
+            return UserDtos.PhoneBindResult.builder().phoneMasked(PhoneUtils.mask(account.getPhone())).build();
+        }
+        UserAccount occupied = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
+                .eq(UserAccount::getPhone, request.getPhone())
+                .last("LIMIT 1"));
+        if (occupied != null) {
+            throw new BizException(ErrorCode.CONFLICT, "该手机号已被其他账号绑定");
+        }
+        account.setPhone(request.getPhone());
+        userAccountMapper.updateById(account);
+        return UserDtos.PhoneBindResult.builder().phoneMasked(PhoneUtils.mask(account.getPhone())).build();
+    }
+
+    public UserAccount requireAccount(Long userId) {
+        UserAccount account = userAccountMapper.selectById(userId);
+        if (account == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "账号不存在");
+        }
+        return account;
+    }
+
+    /** 资料行由登录流程创建，缺失时兜底新建，避免历史数据导致 500。 */
+    public UserProfile requireProfile(Long userId) {
+        UserProfile profile = userProfileMapper.selectOne(new LambdaQueryWrapper<UserProfile>()
+                .eq(UserProfile::getUserId, userId)
+                .last("LIMIT 1"));
+        if (profile != null) {
+            return profile;
+        }
+        UserProfile created = new UserProfile();
+        created.setUserId(userId);
+        created.setNickname("");
+        created.setGender(0);
+        userProfileMapper.insert(created);
+        return created;
+    }
+
+    private static String nullIfBlank(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static UserDtos.ProfileView toProfileView(UserProfile p) {
+        return UserDtos.ProfileView.builder()
+                .nickname(p.getNickname())
+                .avatarUrl(p.getAvatarUrl())
+                .avatarText(p.getAvatarText())
+                .gender(p.getGender())
+                .build();
+    }
+}

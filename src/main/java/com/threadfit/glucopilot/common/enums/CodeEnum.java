@@ -99,6 +99,20 @@ public interface CodeEnum {
         private final int code;
     }
 
+    @Getter
+    @RequiredArgsConstructor
+    enum FeedbackType implements CodeEnum {
+        SUGGESTION(1), BUG(2), DEMAND(3), OTHER(4);
+        private final int code;
+    }
+
+    @Getter
+    @RequiredArgsConstructor
+    enum ReplyStatus implements CodeEnum {
+        RECEIVED(0), PROCESSING(1), HANDLED(2), CLOSED(3);
+        private final int code;
+    }
+
     /** 界面字号（user_setting.font_size）。 */
     @Getter
     @RequiredArgsConstructor

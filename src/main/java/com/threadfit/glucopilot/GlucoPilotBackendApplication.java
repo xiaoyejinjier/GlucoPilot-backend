@@ -24,7 +24,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
                 "com.threadfit.glucopilot.glucose.mapper",
                 "com.threadfit.glucopilot.user.mapper",
                 "com.threadfit.glucopilot.profile.health.mapper",
-                "com.threadfit.glucopilot.file.mapper"
+                "com.threadfit.glucopilot.file.mapper",
+                "com.threadfit.glucopilot.meal.mapper"
         },
         markerInterface = BaseMapper.class
 )

@@ -89,6 +89,16 @@ public class MediaFileServiceImpl implements MediaFileService {
                 .last("LIMIT 1"));
     }
 
+    @Override
+    public MediaFile findOwnedMedia(Long mediaId, Long userId, MediaBizType bizType) {
+        return mediaFileMapper.selectOne(new LambdaQueryWrapper<MediaFile>()
+                .eq(MediaFile::getId, mediaId)
+                .eq(MediaFile::getUserId, userId)
+                .eq(MediaFile::getBizType, bizType.getCode())
+                .eq(MediaFile::getFileStatus, FILE_STATUS_AVAILABLE)
+                .last("LIMIT 1"));
+    }
+
     private MediaFile insertMediaFile(MediaBizType bizType, RegisterRequest request, Long userId) {
         StorageProvider provider = objectStorageService.provider();
         MediaFile row = new MediaFile();

@@ -70,6 +70,14 @@ public interface CodeEnum {
         private final int code;
     }
 
+    /** 饮食饥饱（meal_record.hunger_level）：1饱腹 2一般 3微饿。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum HungerLevel implements CodeEnum {
+        FULL(1), NORMAL(2), SLIGHT_HUNGRY(3);
+        private final int code;
+    }
+
     /** 文件存储 provider（media_file.storage_provider）：1=MinIO，2=阿里云OSS。 */
     @Getter
     @RequiredArgsConstructor

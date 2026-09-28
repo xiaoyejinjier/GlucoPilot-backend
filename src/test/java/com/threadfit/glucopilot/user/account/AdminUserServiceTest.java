@@ -7,6 +7,7 @@ import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
+import com.threadfit.glucopilot.meal.service.MealRecordService;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
@@ -24,6 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -43,6 +45,8 @@ class AdminUserServiceTest {
     private UserHealthMapper userHealthMapper;
     @Mock
     private GlucoseRecordMapper glucoseRecordMapper;
+    @Mock
+    private MealRecordService mealRecordService;
 
     @InjectMocks
     private AdminUserService service;
@@ -77,6 +81,8 @@ class AdminUserServiceTest {
         GlucoseRecord high = glucose(3L, "9.2");
         when(glucoseRecordMapper.selectList(any())).thenReturn(List.of(target, high));
 
+        when(mealRecordService.countActiveByUserIds(any())).thenReturn(Map.of(3L, 5L));
+
         PageResult<AdminUserDtos.UserItem> result = service.page(null, null, new PageQuery());
 
         assertEquals(1, result.getTotal());
@@ -86,7 +92,7 @@ class AdminUserServiceTest {
         assertEquals("测试用户", item.getNickname());
         assertEquals("138****5678", item.getPhoneMasked());
         assertEquals(2L, item.getRecordCount());
-        assertEquals(0L, item.getMealCount());
+        assertEquals(5L, item.getMealCount());
         assertEquals(50, item.getComplianceRate());
     }
 

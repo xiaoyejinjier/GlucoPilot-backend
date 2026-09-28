@@ -11,6 +11,7 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
+import com.threadfit.glucopilot.meal.service.MealRecordService;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
@@ -42,6 +43,7 @@ public class AdminUserService {
     private final UserProfileMapper userProfileMapper;
     private final UserHealthMapper userHealthMapper;
     private final GlucoseRecordMapper glucoseRecordMapper;
+    private final MealRecordService mealRecordService;
 
     public PageResult<AdminUserDtos.UserItem> page(
             String keyword, Integer accountStatus, PageQuery query) {
@@ -92,13 +94,15 @@ public class AdminUserService {
         Map<Long, List<GlucoseRecord>> glucoseRows = glucoseRecordMapper.selectList(
                         new QueryWrapper<GlucoseRecord>().in("user_id", userIds)).stream()
                 .collect(Collectors.groupingBy(GlucoseRecord::getUserId));
+        Map<Long, Long> mealCounts = mealRecordService.countActiveByUserIds(userIds);
 
         List<AdminUserDtos.UserItem> items = rows.getRecords().stream()
                 .map(account -> toItem(
                         account,
                         profiles.get(account.getId()),
                         healthRows.get(account.getId()),
-                        glucoseRows.getOrDefault(account.getId(), Collections.emptyList())))
+                        glucoseRows.getOrDefault(account.getId(), Collections.emptyList()),
+                        mealCounts.getOrDefault(account.getId(), 0L)))
                 .toList();
         return PageResult.of(rows.getCurrent(), rows.getSize(), rows.getTotal(), items);
     }
@@ -120,7 +124,8 @@ public class AdminUserService {
     }
 
     private static AdminUserDtos.UserItem toItem(
-            UserAccount account, UserProfile profile, UserHealth health, List<GlucoseRecord> records) {
+            UserAccount account, UserProfile profile, UserHealth health, List<GlucoseRecord> records,
+            long mealCount) {
         String nickname = profile != null && StringUtils.hasText(profile.getNickname())
                 ? profile.getNickname()
                 : StringUtils.hasText(account.getUsername())
@@ -152,7 +157,7 @@ public class AdminUserService {
                 .registeredAt(account.getGmtCreate())
                 .lastActiveAt(account.getLastLoginAt())
                 .recordCount((long) records.size())
-                .mealCount(0L)
+                .mealCount(mealCount)
                 .complianceRate(complianceRate)
                 .build();
     }

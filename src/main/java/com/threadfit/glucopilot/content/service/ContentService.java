@@ -9,18 +9,13 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.content.dto.ContentDtos;
 import com.threadfit.glucopilot.content.entity.CmsBanner;
 import com.threadfit.glucopilot.content.entity.CmsNews;
-import com.threadfit.glucopilot.content.entity.FoodCategory;
-import com.threadfit.glucopilot.content.entity.FoodNutrition;
 import com.threadfit.glucopilot.content.entity.NewsUserAction;
 import com.threadfit.glucopilot.content.mapper.CmsBannerMapper;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
-import com.threadfit.glucopilot.content.mapper.FoodCategoryMapper;
-import com.threadfit.glucopilot.content.mapper.FoodNutritionMapper;
 import com.threadfit.glucopilot.content.mapper.NewsUserActionMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -34,8 +29,6 @@ public class ContentService {
 
     private final CmsBannerMapper bannerMapper;
     private final CmsNewsMapper newsMapper;
-    private final FoodCategoryMapper foodCategoryMapper;
-    private final FoodNutritionMapper foodNutritionMapper;
     private final NewsUserActionMapper newsUserActionMapper;
 
     public List<ContentDtos.BannerItem> listBanners() {
@@ -91,34 +84,6 @@ public class ContentService {
                 .liked(liked)
                 .collected(collected)
                 .build();
-    }
-
-    public List<ContentDtos.FoodCategoryItem> listFoodCategories() {
-        return foodCategoryMapper.selectList(new LambdaQueryWrapper<FoodCategory>()
-                        .eq(FoodCategory::getIsEnabled, 1)
-                        .orderByAsc(FoodCategory::getSortNo)
-                        .orderByAsc(FoodCategory::getId))
-                .stream()
-                .map(c -> ContentDtos.FoodCategoryItem.builder()
-                        .id(String.valueOf(c.getId()))
-                        .categoryName(c.getCategoryName())
-                        .sortNo(c.getSortNo())
-                        .build())
-                .toList();
-    }
-
-    public PageResult<ContentDtos.FoodItem> pageFoods(Integer categoryCode, String keyword, PageQuery query) {
-        Page<FoodNutrition> page = foodNutritionMapper.selectPage(
-                new Page<>(query.getPageNum(), query.getPageSize()),
-                new LambdaQueryWrapper<FoodNutrition>()
-                        .eq(FoodNutrition::getShelfStatus, SHELF_ON)
-                        .eq(categoryCode != null, FoodNutrition::getCategoryCode, categoryCode)
-                        .like(StringUtils.hasText(keyword), FoodNutrition::getFoodName, keyword)
-                        .orderByAsc(FoodNutrition::getFoodName)
-                        .orderByAsc(FoodNutrition::getId));
-        Page<ContentDtos.FoodItem> mapped = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
-        mapped.setRecords(page.getRecords().stream().map(this::toFoodItem).toList());
-        return PageResult.of(mapped);
     }
 
     @Transactional
@@ -202,19 +167,6 @@ public class ContentService {
                 .publishAt(n.getPublishAt())
                 .likeCount(n.getLikeCount())
                 .collectCount(n.getCollectCount())
-                .build();
-    }
-
-    private ContentDtos.FoodItem toFoodItem(FoodNutrition f) {
-        return ContentDtos.FoodItem.builder()
-                .id(String.valueOf(f.getId()))
-                .foodName(f.getFoodName())
-                .categoryCode(f.getCategoryCode())
-                .categoryId(f.getCategoryId() == null ? null : String.valueOf(f.getCategoryId()))
-                .carbsPer100g(f.getCarbsPer100g())
-                .caloriesPer100g(f.getCaloriesPer100g())
-                .giValue(f.getGiValue())
-                .imageUrl(f.getImageUrl())
                 .build();
     }
 

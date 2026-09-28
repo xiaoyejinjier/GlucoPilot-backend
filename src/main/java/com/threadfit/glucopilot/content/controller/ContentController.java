@@ -49,17 +49,4 @@ public class ContentController {
         Long userId = RequestContext.requireUserId();
         return ApiResponse.ok(contentService.updateNewsAction(userId, id, request));
     }
-
-    @GetMapping("/food-categories")
-    public ApiResponse<List<ContentDtos.FoodCategoryItem>> foodCategories() {
-        return ApiResponse.ok(contentService.listFoodCategories());
-    }
-
-    @GetMapping("/foods")
-    public ApiResponse<PageResult<ContentDtos.FoodItem>> foods(
-            @RequestParam(required = false) Integer categoryCode,
-            @RequestParam(required = false) String keyword,
-            @Valid PageQuery query) {
-        return ApiResponse.ok(contentService.pageFoods(categoryCode, keyword, query));
-    }
 }

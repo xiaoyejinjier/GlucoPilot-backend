@@ -4,17 +4,17 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.auth.client.WechatAuthClient;
 import com.threadfit.glucopilot.auth.dto.AuthDtos;
 import com.threadfit.glucopilot.auth.entity.AuthSmsCode;
-import com.threadfit.glucopilot.auth.entity.UserAccount;
-import com.threadfit.glucopilot.auth.entity.UserHealth;
-import com.threadfit.glucopilot.auth.entity.UserProfile;
+import com.threadfit.glucopilot.user.entity.UserAccount;
+import com.threadfit.glucopilot.user.entity.UserHealth;
+import com.threadfit.glucopilot.user.entity.UserProfile;
 import com.threadfit.glucopilot.auth.entity.UserSession;
-import com.threadfit.glucopilot.auth.entity.UserSetting;
+import com.threadfit.glucopilot.user.entity.UserSetting;
 import com.threadfit.glucopilot.auth.mapper.AuthSmsCodeMapper;
-import com.threadfit.glucopilot.auth.mapper.UserAccountMapper;
-import com.threadfit.glucopilot.auth.mapper.UserHealthMapper;
-import com.threadfit.glucopilot.auth.mapper.UserProfileMapper;
+import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserHealthMapper;
+import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
 import com.threadfit.glucopilot.auth.mapper.UserSessionMapper;
-import com.threadfit.glucopilot.auth.mapper.UserSettingMapper;
+import com.threadfit.glucopilot.user.mapper.UserSettingMapper;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
@@ -145,7 +145,8 @@ public class AuthService {
         return session;
     }
 
-    private void consumeSmsCode(String phone, String smsCode) {
+    /** 登录与绑定手机号共用：校验并消费最近一条未使用验证码。 */
+    public void consumeSmsCode(String phone, String smsCode) {
         AuthSmsCode row = authSmsCodeMapper.selectOne(new LambdaQueryWrapper<AuthSmsCode>()
                 .eq(AuthSmsCode::getPhone, phone)
                 .eq(AuthSmsCode::getIsUsed, 0)
@@ -164,6 +165,7 @@ public class AuthService {
 
     private UserAccount createUserWithOpenid(String openid, String unionId) {
         UserAccount account = new UserAccount();
+        account.setUsername("用户_" + IdUtils.uuid().substring(0, 8));
         account.setOpenid(openid);
         account.setUnionId(unionId);
         account.setAccountStatus(CodeEnum.AccountStatus.NORMAL.getCode());
@@ -171,7 +173,7 @@ public class AuthService {
 
         UserProfile profile = new UserProfile();
         profile.setUserId(account.getId());
-        profile.setNickname("");
+        profile.setNickname(account.getUsername());
         profile.setGender(CodeEnum.Gender.UNKNOWN.getCode());
         userProfileMapper.insert(profile);
 

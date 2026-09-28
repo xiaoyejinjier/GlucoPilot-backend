@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -34,4 +35,21 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
     List<ChatMessage> selectRecent(@Param("sessionId") Long sessionId,
                                    @Param("maxSeqNo") Integer maxSeqNo,
                                    @Param("limit") Integer limit);
+
+    /**
+     * 供会话记忆装配上下文：取会话内最近 N 条「有正文的用户/助手消息」（倒序返回）。
+     * 只取 1/2 两类角色——系统提示词由 ChatClient 的 defaultSystem 提供，不落库也不回放。
+     */
+    @Select("SELECT * FROM chat_message WHERE session_id = #{sessionId} AND is_deleted = 0 "
+            + "AND msg_role IN (1, 2) AND content_text IS NOT NULL AND content_text <> '' "
+            + "ORDER BY seq_no DESC, id DESC LIMIT #{limit}")
+    List<ChatMessage> selectRecentBySession(@Param("sessionId") Long sessionId, @Param("limit") Integer limit);
+
+    /**
+     * 逻辑删除会话内全部消息（接口 5.4 删除会话）。
+     * DDL 的 chk_cm_del_consistent 要求 is_deleted=1 时 deleted_at 非空，deleted_by 可空。
+     */
+    @Update("UPDATE chat_message SET is_deleted = 1, deleted_at = NOW(3) "
+            + "WHERE session_id = #{sessionId} AND is_deleted = 0")
+    int logicDeleteBySession(@Param("sessionId") Long sessionId);
 }

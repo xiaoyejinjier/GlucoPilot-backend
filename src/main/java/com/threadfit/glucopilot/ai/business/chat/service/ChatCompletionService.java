@@ -1,115 +1,180 @@
 package com.threadfit.glucopilot.ai.business.chat.service;
 
-import com.threadfit.glucopilot.ai.business.chat.context.ChatContextAssembler;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatDtos;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
-import com.threadfit.glucopilot.ai.config.AiModelInfo;
+import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.common.util.JsonUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import reactor.core.Disposable;
+import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
-import java.util.List;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * AI 流式补全（对应接口 2.25）。
  * <p>
- * 事件：{@code delta} 增量、{@code done} 结束（必带完整正文）、{@code error} 异常。
- * SSE 不包 {@code ApiResponse}；开流之前的校验失败仍走统一 JSON 响应（由 GlobalExceptionHandler 处理）。
+ * 返回 {@code Flux<ServerSentEvent<byte[]>>}，由 Spring MVC 的 {@code ReactiveTypeHandler}
+ * 负责 HTTP 侧的 SSE 写出（内部即 {@code SseEmitterSubscriber} + {@code SseEmitter}），
+ * 因此本类不再手写 emitter、超时、发送与取消：
+ * <ul>
+ *   <li>客户端断开或请求超时 → 框架取消订阅 → {@code concatWith(done)} 里的落库<b>不会执行</b>，
+ *       「取消/超时轮次不落库」由结构保证，而不是靠几处 dispose 兜住；</li>
+ *   <li>超时时间由 {@code spring.mvc.async.request-timeout} 统一配置（原先写在 {@code new SseEmitter(60s)}）；</li>
+ *   <li>发送失败、连接异常由框架处理，不再需要 {@code sendFailed} 标记。</li>
+ * </ul>
  * <p>
- * 时序约定：助手消息在流正常结束（或上游报错且已有部分内容）之后才落库，保证 content_text / tokens / latency 一次写全。
+ * <b>为什么载荷是 UTF-8 原始字节（{@code ServerSentEvent<byte[]>}）而不是 POJO / String：</b>
+ * MVC 的 {@code adapt()} 把 {@code ServerSentEvent} 转成
+ * {@code SseEmitter.event().name(...).data(payload)}，这个 {@code data(payload)} <b>不带 media type</b>，
+ * 于是框架会按响应类型 {@code text/event-stream} 找 HttpMessageConverter：
+ * <ul>
+ *   <li>POJO：Jackson 只支持 {@code application/json}，序列化会失败；</li>
+ *   <li>String：落到 {@code StringHttpMessageConverter}，charset 取决于响应内容类型，
+ *       <b>实测中文会被写成 {@code ?}</b>（观察到 {@code data:{"delta":"??"}}）；</li>
+ *   <li>byte[]：{@code ByteArrayHttpMessageConverter} 支持 {@code * /*} 且原样输出字节，
+ *       完全不经过 charset 判断——所以这里发 UTF-8 字节，字节与原先
+ *       {@code SseEmitter + MediaType.APPLICATION_JSON} 的产物一致。</li>
+ * </ul>
  * <p>
- * 客户端中途断开属于「取消」而不是「出错」：取消不会触发完成回调，因此这一轮不落库，用户重试时会重新生成完整回答。
- * 这比先落半截、之后被幂等重放成残缺回答要合理（实测：curl --max-time 中断后 chat_message 无新增行）。
+ * <b>事件协议不变</b>：{@code delta} / {@code done} / {@code error}，{@code done} 必带完整正文；
+ * 开流前的校验失败仍抛异常，由 GlobalExceptionHandler 返回统一 JSON（HTTP 4xx）。
+ * <p>
+ * <b>一处有意的退化</b>：原实现先发一个 {@code :connected} 注释行把响应头刷出去，本形态下发不了——
+ * {@code ServerSentEvent} 的纯注释会走到 {@code .data(null)}，实测不可行。因此开流的第一个字节
+ * 改为第一个 {@code delta} 到达时（首字约 2~3s）。前端不依赖该注释行（{@code utils/sse.js}
+ * 明确跳过注释行，页面另有「正在思考…」占位），故对客户端无影响。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ChatCompletionService {
 
-    /** SSE 超时：模型最慢也要在这个时间内收尾，否则释放连接与上游订阅 */
-    private static final long SSE_TIMEOUT_MS = 60_000L;
     /** 单条回复落库上限，防异常长文撑爆 TEXT */
     private static final int MAX_REPLY_CHARS = 20_000;
 
-    private final ChatClient chatClient;
+    private final AiChatClientRegistry chatClientRegistry;
     private final ChatMessageMapper chatMessageMapper;
-    private final ChatContextAssembler contextAssembler;
     private final ChatSessionService chatSessionService;
     private final ChatMessageService chatMessageService;
-    private final AiModelInfo aiModelInfo;
+    private final JsonUtils jsonUtils;
 
-    public SseEmitter complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
-        // 同步校验：这些异常在开流前抛出，客户端拿到的仍是标准 JSON 错误响应
-        ChatSession session = chatSessionService.requireOwned(userId, sessionId);
+    public Flux<ServerSentEvent<byte[]>> complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
+        // 同步校验：这些异常在返回 Flux 之前抛出，客户端拿到的仍是标准 JSON 错误响应
+        chatSessionService.requireOwned(userId, sessionId);
         ChatMessage target = resolveTargetMessage(sessionId, request.getReplyToMsgId());
+        String userText = requireUserText(target);
 
         // 幂等：本轮已生成过回复则重放 done，既避免重复扣费，也避免前端重试拿到两条助手消息
         ChatMessage generated = chatMessageMapper.selectAssistantReply(sessionId, target.getId());
         if (generated != null) {
             log.debug("本轮已生成过回复，重放 done sessionId={} replyToMsgId={}", sessionId, target.getId());
-            SseEmitter replay = new SseEmitter(SSE_TIMEOUT_MS);
-            send(replay, "done", toDoneEvent(generated));
-            replay.complete();
-            return replay;
+            return Flux.just(doneEvent(generated));
         }
-
-        List<Message> history = contextAssembler.assemble(session, target);
-        if (history.isEmpty()) {
-            throw new BizException(ErrorCode.BIZ_REJECTED, "会话没有可用于生成的上下文消息");
-        }
-
-        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
-        // 先发注释行把响应头刷出去，避免客户端以为连接没建立
-        sendComment(emitter, "connected");
 
         StreamState state = new StreamState();
-        AtomicReference<Disposable> subscription = new AtomicReference<>();
         long startNanos = System.nanoTime();
 
-        subscription.set(chatClient.prompt()
-                .messages(history)
-                .stream()
-                .chatResponse()
-                .subscribe(
-                        chunk -> onChunk(emitter, state, chunk),
-                        error -> onError(emitter, userId, sessionId, target, state, startNanos, error),
-                        () -> onComplete(emitter, userId, sessionId, target, state, startNanos)));
+        // 会话历史由 ChatMemory 注入：这里只传「本轮用户消息 + 会话 ID」
+        ChatClient.ChatClientRequestSpec promptSpec = chatClientRegistry.client(SceneCode.CHAT)
+                .prompt()
+                .advisors(advisors -> advisors.param(ChatMemory.CONVERSATION_ID, sessionId.toString()))
+                .user(userText);
+        if (chatClientRegistry.hasOverrides(SceneCode.CHAT)) {
+            promptSpec = promptSpec.options(chatClientRegistry.optionsBuilder(SceneCode.CHAT));
+        }
 
-        emitter.onCompletion(() -> dispose(subscription.get()));
-        emitter.onTimeout(() -> {
-            log.warn("SSE 超时，取消上游订阅 sessionId={}", sessionId);
-            dispose(subscription.get());
-            emitter.complete();
-        });
-        emitter.onError(e -> dispose(subscription.get()));
-        return emitter;
+        Flux<ServerSentEvent<byte[]>> deltas = promptSpec.stream()
+                .chatResponse()
+                // 先聚合再过滤：最后一个 chunk 可能只带 usage / 结束原因而正文为空，
+                // 若因为「正文为空」提前返回，token 计量就会丢
+                .doOnNext(chunk -> aggregate(state, chunk))
+                .mapNotNull(this::deltaEvent);
+
+        Mono<ServerSentEvent<byte[]>> done = Mono.fromCallable(() -> {
+                    long latencyMs = elapsedMs(startNanos);
+                    Integer finishReason = mapFinishReason(state.providerFinishReason);
+                    if (finishReason == null) {
+                        finishReason = CodeEnum.ChatFinishReason.NORMAL.getCode();
+                    }
+                    ChatMessage saved = persist(userId, sessionId, target, state, finishReason, latencyMs);
+                    log.info("流式补全完成 userId={} sessionId={} assistantMsgId={} latencyMs={} tokens={}/{} finish={}",
+                            userId, sessionId, saved.getId(), latencyMs,
+                            state.promptTokens, state.completionTokens, finishReason);
+                    return doneEvent(saved);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
+
+        return Flux.concat(deltas, done)
+                .onErrorResume(error -> errorEvents(userId, sessionId, target, state, startNanos, error));
     }
 
-    // ---------- 流式回调 ----------
+    // ---------- 事件构造 ----------
 
-    private void onChunk(SseEmitter emitter, StreamState state, ChatResponse chunk) {
+    /** SSE: event=delta；空增量返回 null 由 {@code mapNotNull} 过滤（原实现同样是跳过空增量）。 */
+    private ServerSentEvent<byte[]> deltaEvent(ChatResponse chunk) {
+        if (chunk == null || chunk.getResult() == null || chunk.getResult().getOutput() == null) {
+            return null;
+        }
+        String delta = chunk.getResult().getOutput().getText();
+        if (delta == null || delta.isEmpty()) {
+            return null;
+        }
+        return event("delta", ChatDtos.DeltaEvent.builder().delta(delta).build());
+    }
+
+    private ServerSentEvent<byte[]> doneEvent(ChatMessage message) {
+        return event("done", ChatDtos.DoneEvent.builder()
+                .assistantMsgId(message.getId())
+                .replyToMsgId(message.getReplyToMsgId())
+                .contentText(message.getContentText())
+                .finishReason(message.getFinishReason())
+                .modelCode(message.getModelCode())
+                .promptTokens(message.getPromptTokens())
+                .completionTokens(message.getCompletionTokens())
+                .latencyMs(message.getLatencyMs() == null ? null : message.getLatencyMs().longValue())
+                .build());
+    }
+
+    private ServerSentEvent<byte[]> event(String name, Object payload) {
+        // 载荷用 UTF-8 原始字节而不是 String：SSE 的 data 分片在框架里是不带 media type 的
+        // （SseEmitterSubscriber.adapt() 调用 .data(payload)），交给 StringHttpMessageConverter
+        // 时 charset 取决于响应内容类型，实测会把中文写成 '?'。ByteArrayHttpMessageConverter
+        // 支持 */* 且原样输出字节，彻底绕开 charset 判断。
+        return ServerSentEvent.builder(jsonUtils.toJson(payload).getBytes(StandardCharsets.UTF_8))
+                .event(name)
+                .build();
+    }
+
+    // ---------- 流式处理 ----------
+
+    /** 聚合计量与结束原因。只记状态，不触碰下游——发送由框架负责。 */
+    private static void aggregate(StreamState state, ChatResponse chunk) {
         if (chunk == null) {
             return;
         }
         ChatResponseMetadata metadata = chunk.getMetadata();
         if (metadata != null) {
-            if (metadata.getModel() != null) {
+            // 用 hasText 而不是 != null：测试/框架默认元数据里的 model 是空串，
+            // 若直接采信会把空模型名落进 chat_message.model_code
+            if (StringUtils.hasText(metadata.getModel())) {
                 state.modelCode = metadata.getModel();
             }
             Usage usage = metadata.getUsage();
@@ -133,52 +198,43 @@ public class ChatCompletionService {
             return;
         }
         String delta = generation.getOutput().getText();
-        if (delta == null || delta.isEmpty()) {
-            return;
-        }
-        state.text.append(delta);
-        if (!state.sendFailed) {
-            state.sendFailed = !send(emitter, "delta", ChatDtos.DeltaEvent.builder().delta(delta).build());
+        if (delta != null && !delta.isEmpty()) {
+            state.text.append(delta);
         }
     }
 
-    private void onComplete(SseEmitter emitter, Long userId, Long sessionId, ChatMessage target,
-                            StreamState state, long startNanos) {
-        long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
-        Integer finishReason = mapFinishReason(state.providerFinishReason);
-        if (finishReason == null) {
-            finishReason = CodeEnum.ChatFinishReason.NORMAL.getCode();
-        }
-        ChatMessage saved = persist(userId, sessionId, target, state, finishReason, latencyMs);
-        send(emitter, "done", toDoneEvent(saved));
-        emitter.complete();
-        log.info("流式补全完成 userId={} sessionId={} assistantMsgId={} latencyMs={} tokens={}/{} finish={}",
-                userId, sessionId, saved.getId(), latencyMs, state.promptTokens, state.completionTokens, finishReason);
-    }
-
-    private void onError(SseEmitter emitter, Long userId, Long sessionId, ChatMessage target,
-                         StreamState state, long startNanos, Throwable error) {
-        long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
+    /**
+     * 上游报错：已有内容则落库并标 4（错误），再发 {@code error} 事件。
+     * <p>
+     * 这里的落库<b>不能</b>把 error 事件带崩：落库失败只能记日志，客户端仍需要拿到可重试的信号。
+     */
+    private Flux<ServerSentEvent<byte[]>> errorEvents(Long userId, Long sessionId, ChatMessage target,
+                                                     StreamState state, long startNanos, Throwable error) {
+        long latencyMs = elapsedMs(startNanos);
         log.error("流式补全失败 userId={} sessionId={} 已生成 {} 字", userId, sessionId, state.text.length(), error);
-        // 已生成的部分仍落库并标 4（错误），避免用户看到的内容凭空消失
-        if (state.text.length() > 0) {
-            persist(userId, sessionId, target, state, CodeEnum.ChatFinishReason.ERROR.getCode(), latencyMs);
+        if (!state.persisted && state.text.length() > 0) {
+            try {
+                persist(userId, sessionId, target, state, CodeEnum.ChatFinishReason.ERROR.getCode(), latencyMs);
+            } catch (RuntimeException persistError) {
+                log.error("失败轮次的部分内容落库失败 userId={} sessionId={}", userId, sessionId, persistError);
+            }
         }
-        send(emitter, "error", ChatDtos.ErrorEvent.builder()
+        return Flux.just(event("error", ChatDtos.ErrorEvent.builder()
                 .code(ErrorCode.INTERNAL_ERROR.getCode())
                 .message("AI 服务暂时不可用，请稍后重试")
-                .build());
-        emitter.complete();
+                .build()));
     }
 
     private ChatMessage persist(Long userId, Long sessionId, ChatMessage target, StreamState state,
                                 Integer finishReason, long latencyMs) {
+        // 先置位再写库：若写库自身失败，错误分支不应再写一次（避免同一轮落出两行）
+        state.persisted = true;
         return chatMessageService.appendAssistantMessage(
                 userId,
                 sessionId,
                 target.getId(),
                 truncate(state.text.toString()),
-                state.modelCode == null ? aiModelInfo.modelCode() : state.modelCode,
+                StringUtils.hasText(state.modelCode) ? state.modelCode : chatClientRegistry.modelCode(SceneCode.CHAT),
                 state.promptTokens,
                 state.completionTokens,
                 finishReason,
@@ -202,6 +258,20 @@ public class ChatCompletionService {
         return target;
     }
 
+    /**
+     * 本轮必须有文本才能交给文本模型。
+     * 图片（msgType=2）/语音（msgType=3）消息暂时没有可送模型的文本：前者等视觉 provider 接入
+     * （场景 {@link SceneCode#CHAT_IMAGE}），后者等 ASR。这里明确拒绝，而不是把空串送给模型。
+     */
+    private static String requireUserText(ChatMessage target) {
+        String text = target.getContentText();
+        if (text == null || text.isBlank()) {
+            throw new BizException(ErrorCode.BIZ_REJECTED,
+                    "本轮消息没有文本内容，暂不支持生成回复（图片/语音消息待多模态与 ASR 接入后开放）");
+        }
+        return text;
+    }
+
     /** 供应商结束原因 → DDL 约定的 1/2/3/4；识别不了返回 null（列允许 NULL）。 */
     private static Integer mapFinishReason(String providerFinishReason) {
         if (providerFinishReason == null) {
@@ -222,48 +292,12 @@ public class ChatCompletionService {
         return text.substring(0, MAX_REPLY_CHARS);
     }
 
-    private static ChatDtos.DoneEvent toDoneEvent(ChatMessage message) {
-        return ChatDtos.DoneEvent.builder()
-                .assistantMsgId(message.getId())
-                .replyToMsgId(message.getReplyToMsgId())
-                .contentText(message.getContentText())
-                .finishReason(message.getFinishReason())
-                .modelCode(message.getModelCode())
-                .promptTokens(message.getPromptTokens())
-                .completionTokens(message.getCompletionTokens())
-                .latencyMs(message.getLatencyMs() == null ? null : message.getLatencyMs().longValue())
-                .build();
-    }
-
-    /** @return true 表示已成功写出；false 表示客户端已断开 */
-    private static boolean send(SseEmitter emitter, String event, Object payload) {
-        try {
-            emitter.send(SseEmitter.event().name(event).data(payload, MediaType.APPLICATION_JSON));
-            return true;
-        } catch (Exception e) {
-            // 客户端已断开：不再尝试发送，收尾交给 emitter 的 onError/onCompletion
-            log.debug("SSE 发送失败（客户端可能已断开）：{}", e.getMessage());
-            return false;
-        }
-    }
-
-    private static void sendComment(SseEmitter emitter, String comment) {
-        try {
-            emitter.send(SseEmitter.event().comment(comment));
-        } catch (Exception e) {
-            log.debug("SSE 注释发送失败：{}", e.getMessage());
-        }
-    }
-
-    private static void dispose(Disposable disposable) {
-        if (disposable != null && !disposable.isDisposed()) {
-            disposable.dispose();
-        }
+    private static long elapsedMs(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
     }
 
     /**
-     * 单轮流式状态。onNext 由同一个订阅串行回调，onComplete 在其之后，
-     * 因此无需加锁。
+     * 单轮流式状态。Reactor 保证 doOnNext 与后续算子串行，故无需加锁。
      */
     private static final class StreamState {
         private final StringBuilder text = new StringBuilder();
@@ -271,7 +305,7 @@ public class ChatCompletionService {
         private Integer promptTokens;
         private Integer completionTokens;
         private String providerFinishReason;
-        /** 客户端断开后置位，避免反复抛异常 */
-        private boolean sendFailed;
+        /** 本轮是否已落库：防止「落库失败 → 错误分支再落一次」造成重复行。 */
+        private boolean persisted;
     }
 }

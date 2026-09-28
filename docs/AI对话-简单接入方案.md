@@ -97,28 +97,43 @@ public static String loadPromptWithFallback(String externalPath, String classpat
 
 ## 3.2 【P1】模型配置路径写错 → 配的模型不生效（静默）
 
-yaml 写的是 `spring.ai.deepseek.chat.model`，但 Spring AI 的 DeepSeek 配置类 `DeepSeekChatProperties` 的前缀是 `spring.ai.deepseek.chat`，其下还有一层 `options`：
+> **⚠️ 本节结论已于 2026-09-23 修正：原文判断有误。** 保留标题以维持章节编号稳定。
+>
+> 原文称「只有 `chat.options.model` 生效，写 `chat.model` 会静默回落默认模型」——**这是错的**。
+> 用 `javap` 核实 `spring-ai-autoconfigure-model-deepseek-2.0.1.jar` 的
+> `META-INF/spring-configuration-metadata.json`：`DeepSeekChatProperties` 的
+> `CONFIG_PREFIX = "spring.ai.deepseek.chat"`，`model` / `temperature` / `max-tokens` /
+> `thinking` / `reasoning-effort` / `response-format` 都是**该类自身的字段**，
+> 同时它还内嵌 `Options` 类（前缀 `...chat.options`）。两套路径**都能绑定**：
 
-```yaml
-spring:
-  ai:
-    deepseek:
-      api-key: ${DEEPSEEK_API_KEY:}
-      chat:
-        options:
-          model: deepseek-chat        # ← 正确路径是 chat.options.model
-          temperature: 0.7
-```
+| 路径 | 是否生效 | 用途 |
+| --- | --- | --- |
+| `spring.ai.deepseek.chat.model` | ✅ 生效 | 主路径（当前项目用的就是这条） |
+| `spring.ai.deepseek.chat.options.model` | ✅ 也生效 | 供 `ChatOptions` 默认值使用 |
 
-写错不会报错，只会**静默回落到默认模型**（`deepseek-chat`），排查起来很费时间。
-
-> 已扫描 `spring-ai-autoconfigure-model-deepseek-2.0.1.jar` 确认前缀就是 `spring.ai.deepseek.chat`，且 `DeepSeekChatProperties` 内嵌 `Options` 类。
+> 可绑定的属性共 25 个（两套各 12 个，另加 `chat.enabled`）。
+> **请勿再按原文把 `chat.model` 改成 `chat.options.model`** —— 现在的写法本来就是对的。
 
 ## 3.3 【P1】模型名 `deepseek-v4-flash` 需要确认
 
-`spring-ai-deepseek-2.0.1.jar` 里 `DeepSeekApi$ChatModel` 只枚举了 **`deepseek-chat`** 与 **`deepseek-reasoner`**；默认 base-url 是官方 `https://api.deepseek.com`。
-
-`model` 字段本身是字符串，能填任意值，但官方端点不认的模型名会返回 **HTTP 400**。所以要么改成 `deepseek-chat`/`deepseek-reasoner`，要么确认你要接的是**第三方中转/聚合网关**（那就同时要配 `base-url`）。**这一条必须在 L0 冒烟第一枪就打真实调用确认。**
+> **⚠️ 本节结论已于 2026-09-23 修正：原文判断有误。**
+>
+> 原文称 `DeepSeekApi$ChatModel` 只枚举了 `deepseek-chat` 与 `deepseek-reasoner`。
+> 实测 2.0.1 的枚举有**四个**值，`value` 如下：
+>
+> | 枚举 | value |
+> | --- | --- |
+> | `DEEPSEEK_V4_FLASH` | `deepseek-v4-flash` |
+> | `DEEPSEEK_V4_PRO` | `deepseek-v4-pro` |
+> | `DEEPSEEK_CHAT` | `deepseek-chat` |
+> | `DEEPSEEK_REASONER` | `deepseek-reasoner` |
+>
+> 当前 yaml 原用 `deepseek-flash`，**实测可通**（L1 记录里响应回显 `model=deepseek-flash`），
+> 但它不在枚举内，属于「`model` 是字符串、可填任意值」的用法。
+>
+> ✅ **已于 2026-09-23 决策并落地**：统一改用官方枚举名 `deepseek-v4-flash`
+> （`spring.ai.deepseek.chat.model`）。该改动**尚未经真实调用验证**，
+> 第一次联调时须确认模型可用、并对比时延与 token 与旧值无异常差异。
 
 ## 3.4 【P0-安全】API Key 明文写在 `application.yaml`
 
@@ -126,15 +141,24 @@ spring:
 
 - 改成 `${DEEPSEEK_API_KEY:}`，本地值放 `application-local.yaml` 并加入 `.gitignore`；或直接走系统环境变量。
 - **如果这个 Key 曾经提交过 git，请去 DeepSeek 控制台轮换。**（顺带确认额度/余额）
+  （2026-09-23 复查：`git log --all -S 'sk-'` 与全历史 `git grep` 均未命中 `sk-` 明文，
+  可以暂不轮换；但生产仍缺 Key 的注入方式，见 §16。）
 - 日志里要过滤 `Authorization` / `api-key`，避免请求日志把 Key 打出来。
 
 ## 3.5 【P2】`builder.defaultAdvisors()` 是空调用
 
 `defaultAdvisors(Advisor... advisors)` 是可变参数，不传参数等于**什么都没做**，留着会误导后来人以为已经挂了记忆/审计。先删掉，等真要用 `MessageChatMemoryAdvisor` 时再挂。
 
+> ✅ **已解决（2026-09-23）**：现在 `AiChatClientConfig` 挂的是真实 Advisor 链
+> （`SafeGuardAdvisor` + `ChatMemoryReadAdvisor`），见 §15。
+
 ## 3.6 【P2】两个 0 字节提示词文件
 
 `promotes/agent/memory_chat.system.md`、`tool_call_prompt.system.md` 都是 0 字节。要么填内容，要么删掉，避免以后读到空系统提示词导致"模型像换了个人"。
+
+> ✅ **已解决（2026-09-23）**：两个文件已随 `resources/promotes/` 整体删除；
+> 提示词改为按场景组织在 `resources/prompts/{chat,meal-analysis,ocr-glucose}/system.md`，
+> 且启动时按声明的变量试渲染一次，空文件/花括号写错都会直接启动失败，见 §15。
 
 ---
 
@@ -369,6 +393,9 @@ ORDER BY seq_no DESC LIMIT ?     -- ? = chat_session.window_msg_count（默认 2
 
 ## 12.3 `deepseek-flash` 是推理模型（本次最重要的发现）
 
+> 注（2026-09-23）：该模型名后已统一为官方枚举名 `deepseek-v4-flash`，本节的实测结论
+> （关闭思维链快 3.4 倍、`max_tokens` 必须给足以免思维链吃光预算）与模型名无关，仍然成立。
+
 同一问题、同一套 Spring AI 代码对比：
 
 | 配置 | 耗时 | prompt/completion/total | completion 里 reasoning | 正文 |
@@ -526,6 +553,308 @@ If you have database settings to be loaded from a particular profile you may nee
 
 - 开发者工具本机联调：改成 `http://127.0.0.1:8080/api/v1`，并在「详情 → 本地设置」勾选**不校验合法域名**（`project.config.json` 里 `urlCheck: true`）；
 - 真机联调：保持电脑局域网 IP，同样关闭域名校验（详见 `frontend/docs/联调说明.md`）。
+
+---
+
+# 15. Spring AI 2.0 结构改造记录（2026-09-23）
+
+## 15.1 这次改造要解决什么
+
+L1 时期的实现把 Spring AI 当成「一个带流式 API 的 HTTP 客户端封装」在用：框架只用到
+`ChatClient.Builder` 自动装配、`ChatClient.stream()`、DeepSeek 的 yaml 绑定三处，
+其余（提示词加载、上下文装配、流状态聚合、token 采集）全部自研。
+结果是框架里最有价值的三层——**Advisor 体系、记忆扩展点、工具调用**——完全空着，
+而 AI 模块后续的 OCR / 饮食分析 / 长期记忆 / 后台配置全都要落在这三层上。
+
+本次改造的目标：**按 Spring AI 2.0 的组织方式重排 AI 模块结构**，让框架承担模型编排，
+我们只保留框架管不了的部分。**对外契约零变更**（2.23 / 2.24 / 2.25 的路径、事件名、字段一律不动），
+因此前端无需改动。
+
+## 15.2 新的模块结构
+
+```
+com.threadfit.glucopilot.ai
+├── core/                          场景与模型路由（本次新增）
+│   ├── SceneCode                  场景枚举：CHAT / CHAT_IMAGE / MEAL_ANALYSIS / OCR_GLUCOSE
+│   ├── SceneModelResolver         场景 → 模型编码 / 请求级参数（取代 AiModelInfo）
+│   └── AiChatClientRegistry       场景 → ChatClient（多 provider 的唯一改动点）
+├── config/                        Spring AI 装配
+│   ├── AIProperties               ai.* 业务编排配置（场景/记忆/安全词/工具白名单）
+│   ├── AiChatClientConfig         ChatClient 装配：提示词 + Advisor 链 + 工具白名单
+│   └── AiChatMemoryConfig         ChatMemory 装配（MessageWindowChatMemory + MySQL 存储）
+├── prompt/
+│   └── AiPromptTemplateService    提示词模板：Spring AI PromptTemplate + StTemplateRenderer
+├── memory/
+│   ├── MyBatisChatMemoryRepository  ChatMemoryRepository 的 MySQL 实现（落 chat_message）
+│   └── ChatMemoryReadAdvisor        只读记忆注入 Advisor（不写记忆）
+├── tool/
+│   └── AiToolRegistry             工具白名单注册点（当前白名单为空）
+├── support/
+│   └── SqlDuplicateKeys           唯一键冲突识别（补回缺失的 SqlDuplicateHelper 能力）
+└── business/
+    ├── chat/{controller,dto,entity,mapper,service}   对话场景（接口 2.23 / 2.24 / 2.25）
+    ├── meal/package-info.java                        饮食分析场景（2.20，待视觉模型接入）
+    └── ocr/package-info.java                         血糖识别场景（2.21 / 2.22，待视觉模型与 media）
+```
+
+**为什么按「场景」而不是按「模型能力」分层**：场景的调用契约本来就不同——对话是
+SSE 流式 + 多轮记忆 + 工具；饮食分析是同步的结构化 JSON；OCR 是异步任务 + 轮询 + 用户确认。
+「用哪个模型 / 哪套参数 / 哪份提示词」是场景的属性，因此以场景为唯一入口，
+四个场景一一对应 yaml 的 `ai.scenes.<key>`、提示词文件、以及后续 `ai_prompt_template.scene_code`。
+
+## 15.3 关键决策（含理由）
+
+| # | 决策 | 理由 |
+| --- | --- | --- |
+| 1 | **场景路由**（`SceneCode` + `SceneModelResolver` + `AiChatClientRegistry`） | 接第二个 provider（多模态）时只改 `AiChatClientRegistry.client()` 一处；视觉场景在 provider 未接入前**直接抛业务异常**，不允许回落到文本模型「假装看懂图片」 |
+| 2 | **用 `ChatMemory` 取代自研 `ChatContextAssembler`** | 窗口裁剪交给框架的 `MessageWindowChatMemory`；存储只需实现 `ChatMemoryRepository` 的 4 个方法（2.0.1 不提供 JDBC 版）。旧类已删除 |
+| 3 | **不挂框架的 `MessageChatMemoryAdvisor`**，改用自研只读 Advisor | 它会**写**记忆（调用 `ChatMemory.add`），与「助手消息必须等流结束拿到完整正文 + token 后才落库」冲突，会写出重复/残缺数据并让 `reply_to_msg_id` 幂等重放失效。写入仍由 `ChatCompletionService` 显式完成 |
+| 4 | **提示词改为 `PromptTemplate` + 场景目录** | 取代自研 `PromotesLoader`/`SystemPromptProvider`；变量渲染用框架能力，为「后台表驱动提示词」（4.11~4.13）留好落点。**保留「空/缺失即启动失败」的 fail-fast 语义**，并新增「按声明变量试渲染一次」，把模板里的花括号错误挡在启动阶段 |
+| 5 | **医疗安全用 `SafeGuardAdvisor` 做硬拦截** | 提示词里的合规约束是软约束（模型可能不遵守）；命中敏感词的请求**不发给模型**，直接返回固定话术（引导就医 + 免责声明）。可通过 `ai.guard.enabled` 关闭 |
+| 6 | **工具只走白名单，绝不包扫描** | 提示词注入诱导越权工具调用是已知风险；调用次数上限交给框架的 `spring.ai.tools.limits.*`（默认超限即抛）。当前白名单为空——领域模块未实现，没有数据可查 |
+| 7 | **`ai.*` 与 `spring.ai.*` 分工** | `spring.ai.*` 管 provider 与框架行为；`ai.*` 管业务编排（场景/记忆窗口/安全词/工具白名单）。场景里的参数是**可选覆盖**，不写就继承全局，避免同一份参数维护两处 |
+| 8 | **显式收紧重试** | `DeepSeekChatModel` 内部持有 `RetryTemplate`（真的会重试），框架默认 `max-attempts=10`、退避 2s × 5 倍；与 60s 的 SSE 超时叠加会让用户长时间干等后拿到 error。已改为 3 次 / 1s × 2 倍 |
+| 9 | **SSE 桥接保持自研** | 框架出口是 `Flux<String>`，没有 `SseEmitter` 桥接；且 L1 已经把 ASYNC 派发被 Security 拒、Nginx 缓冲、断开取消、ThreadLocal 这些坑踩完并修好。为「更框架」重写这一层是净风险 |
+
+## 15.4 文件级改动清单
+
+| 动作 | 文件 |
+| --- | --- |
+| 新增 | `core/{SceneCode,SceneModelResolver,AiChatClientRegistry}`、`prompt/AiPromptTemplateService`、`memory/{MyBatisChatMemoryRepository,ChatMemoryReadAdvisor}`、`tool/AiToolRegistry`、`support/SqlDuplicateKeys`、`config/{AiChatClientConfig,AiChatMemoryConfig}` |
+| 新增 | 提示词 `resources/prompts/chat/system.md`（= 原 `health_agent_system.md` 正文，内容未改）、`prompts/meal-analysis/system.md`、`prompts/ocr-glucose/system.md` |
+| 新增 | 单测 `ai/config/AiPropertiesBindingTest`、`ai/memory/ChatMemoryReadAdvisorTest`、`ai/prompt/AiPromptTemplateServiceTest`、`ai/support/SqlDuplicateKeysTest` |
+| 改造 | `config/AIProperties`（场景/记忆/安全词/工具段）、`business/chat/service/{ChatCompletionService,ChatSessionService,ChatMessageService}`、`business/chat/mapper/ChatMessageMapper`（新增按会话取最近消息、逻辑删除）、`application.yaml` |
+| 删除 | `config/{ChatClientConfig,SystemPromptProvider,AiModelInfo}`、`utils/PromotesLoader`（整包）、`business/chat/context/ChatContextAssembler`、`business/chat/controller/ChatSmokeController`、`business/chat/service/ChatSmokeService`、`business/chat/dto/ChatSmokeDtos`、`resources/promotes/`（含两个 0 字节文件） |
+| 删除 | 无对应接口的空占位包：`business/{food,gateway,image,recommendation,task}`、`business/chat/{context,message,session,speech}`；`business/ocr` 保留并补 `package-info.java` 说明待办 |
+
+> 顺带修掉一个**既有编译错误**：`ChatMessageService` 引用的
+> `common.util.SqlDuplicateHelper` 在当前分支已不存在，AI 模块一度**编译不过**。
+> 按模块边界，该能力先落在 `ai/support/SqlDuplicateKeys`；若 `common` 侧恢复通用工具可直接切换。
+
+## 15.5 行为变更（对外契约不变，但行为有差异，前端无需改）
+
+| # | 变更 | 说明 |
+| --- | --- | --- |
+| 1 | `chat_session.system_prompt_ver` 语义 | 由「文件名」改为「版本标签」，如 `chat@v1`（`ai.scenes.chat.version`） |
+| 2 | 会话窗口来源 | 由硬编码 20 条改为 `ai.memory.window-messages`（默认仍 20） |
+| 3 | 历史去重 | 本轮用户消息在开流前已落库，记忆注入时会去掉历史末尾的重复项（见 `ChatMemoryReadAdvisorTest`） |
+| 4 | 图片/语音消息 | 2.24 仍接受 `msgType=2/3` 并落库，但对这类消息请求生成回复会明确返回 `40001`（不把空串送给模型）；原实现的提示语较模糊，现在指明「待多模态/ASR 接入」 |
+| 5 | 医疗安全硬拦截 | 命中 `ai.guard.sensitive-words` 的提问由固定话术回复，不再调用模型 |
+| 6 | 重试次数 | 由框架默认 10 次收紧为 3 次 |
+| 7 | 启动校验 | 四个场景的提示词必须齐全且可渲染，否则**启动失败**（场景枚举、yaml、提示词文件必须同批落地） |
+
+## 15.6 已核实的框架事实（`javap` 逐个验证，避免再被文档误导）
+
+1. `DeepSeekChatProperties` 前缀 = `spring.ai.deepseek.chat`，`model`/`thinking`/`max-tokens` 是其自身字段；`chat.model` 与 `chat.options.model` **都能绑定**（共 25 个属性）——修正了 §3.2。
+2. `DeepSeekApi$ChatModel` 有四个值，含 `deepseek-v4-flash` / `deepseek-v4-pro`——修正了 §3.3。
+3. `@ConditionalOnProperty(name="spring.ai.model.chat", havingValue="deepseek", **matchIfMissing=true**)`：**一次只激活一个聊天 provider**。引入第二个 provider 后必须显式写 `spring.ai.model.chat`，否则两家争抢 Bean。
+4. `ChatClientAutoConfiguration.chatClientBuilder(..., **ChatModel**, ...)` 注入的是**单个** `ChatModel`：容器里出现第二个 `ChatModel` 就会注入歧义，需要 `@Primary` 或关掉自动装配。**并且工具/观测只存在于自动装配的 Builder 上**——手搓 `ChatClient.builder(model)` 会静默丢掉工具（已在代码注释里标注）。
+5. `ChatMemoryAutoConfiguration` 自带 `ChatMemoryRepository` 与 `ChatMemory`，均为 `@ConditionalOnMissingBean` → 提供自己的 Repository 即可接管；2.0.1 **没有** JDBC 版记忆仓储。
+6. `MessageChatMemoryAdvisor` 会写记忆（`ChatMemory.add`）→ 与本项目落库时序冲突。
+7. `BaseAdvisor.DEFAULT_SCHEDULER`：Advisor 回调不在请求线程上，`RequestContext`（ThreadLocal）在 Advisor 里同样取不到用户 —— 与已有的 Reactor 线程坑同源。
+8. `spring.ai.retry.*` 默认 `max-attempts=10`、退避 2s × 5 倍、`on-client-errors=false`。
+9. **框架没有模型级 HTTP 超时属性**（DeepSeek 25 个属性里没有 timeout），而 `ai_model_config.timeout_ms` 这一列已预留 → 超时目前仍靠 SSE 60s 兜底，是**已知缺口**。
+10. `DeepSeekApi$ChatCompletionMessage.content` 是 `String` → **DeepSeek 不支持图片输入**；`Media`/`MediaContent` 只在 `spring-ai-commons`，DeepSeek 模型接不了。**多模态必须第二个 provider。**
+11. 依赖里**没有** `VectorStore` 实现、没有 `QuestionAnswerAdvisor`、没有 `SimpleVectorStore` → RAG 需要额外 starter + 选向量库，不是「配置一下就有」。
+12. `ChatClient.Builder` 的三个 `defaultToolCallbacks(...)` 重载**全部已过时**，替代品是 `defaultTools(Object...)`。
+13. `StTemplateRenderer` 在 `spring-ai-template-st`，而它是 `spring-ai-model` 的传递依赖——**无需新增依赖**。
+
+## 15.7 验证方式与结果
+
+```bash
+cd backend
+mvn -DskipTests compile     # BUILD SUCCESS（151 个源文件）
+mvn test                    # Tests run: 22, Failures: 0, Errors: 0
+```
+
+覆盖的四个单测针对的都是「最容易静默出错」的地方：yaml 与配置类的绑定（含四个场景与提示词
+文件齐备性，等价于不启容器跑一次启动前校验）、记忆注入去重、提示词模板校验、唯一键冲突识别。
+**没有跑真实模型调用**（本机无 Key、无远程 MySQL），因此
+「Spring 容器装配是否全部正确」仍需一次 `--spring.profiles.active=dev,local` 的真实启动来确认。
+
+## 15.8 遗留与待办
+
+| # | 事项 | 说明 |
+| --- | --- | --- |
+| 1 | **工具装配未端到端验证** | `ai.tools.allow-list` 为空，无工具可验。实现第一个真实工具时，必须先用「假 ChatModel 返回 `tool_calls` 回合」的测试确认工具真的被调用（本轮尝试过，未能在纯单测里构造出工具循环，已如实记录） |
+| 2 | 模型级 HTTP 超时缺失 | 需自定义 `RestClient`/`WebClient` 或等 Boot 的 `spring.http.client.*`；注意别用全局 Bean 影响其它模块 |
+| 3 | `chat_context` / `context_summary` 仍未使用 | 上下文分片审计与滚动摘要（token 预算）尚未实现，`prompt_tokens` 会随会话持续增长 |
+| 4 | 无任何限流/配额 | Redis 已移除，需进程内 Caffeine/Semaphore；`ErrorCode.TOO_MANY_REQUESTS`(42901) 已存在，无需新增错误码 |
+| 5 | ~~Flyway 版本冲突（跨模块）~~ **已于 2026-09-28 修复** | `V4__ruoyi_full_system.sql` 与 `V4__widen_user_agent.sql` 同版本号，实测报错 `Found more than one migration with version 4`，应用完全无法启动。修复方式与依据见 §16 第 2 条 |
+| 6 | 生产缺 AI Key 注入 | `.env.example` 无 `DEEPSEEK_*`，也没有 `application-prod.yaml`，而 compose 用 `SPRING_PROFILES_ACTIVE=prod` |
+| 7 | 契约待补 | 5.3 会话列表 / 5.4 删除会话 / 历史消息接口（文档缺）尚未实现，`ChatMemoryRepository.deleteByConversationId` 已为其备好 |
+
+## 15.9 本次未做的事（守住边界）
+
+- 未改前端（`frontend/`、`admin/`）与任何接口契约；
+- 未引入第二个 provider（多模态）——路由抽象已就位，接入时只改 `AiChatClientRegistry`；
+- 未改 `SseEmitter` 桥接、幂等、`seq_no`、落库字段、鉴权与越权语义；
+- 未引入 WebFlux、未引入 VectorStore/RAG；
+- 未动 Flyway 迁移、`.env.example`、`chat/smoke` 之外的基础设施（见 §16 待确认）。
+
+---
+
+# 16. 待确认清单（需决策后动）
+
+| # | 问题 | 影响 |
+| --- | --- | --- |
+| 1 | ~~模型名用 `deepseek-flash` 还是 `deepseek-v4-flash`？~~ **已决策（2026-09-23）：改用官方枚举名 `deepseek-v4-flash`** | 待第一次真实调用确认可用性与时延/token 无异常 |
+| 2 | ~~Flyway 的 V4 撞车怎么处理？~~ **已修复（2026-09-28）** | 实测报错 `Found more than one migration with version 4`。数据库 `flyway_schema_history` 显示 `version 4 = V4__widen_user_agent.sql`（success=1，且该库是 baseline 到 3 的），故**保留它不动**，把 `V4__ruoyi_full_system.sql` 改名为 **`V7__ruoyi_full_system.sql`**（V5/V6 当天已被其他改动占用）。⚠️ 改名后必须 `mvn clean compile`——报错指向的 `target/classes/db/migration` 是资源副本，不清旧文件会继续报同样的错。该文件涉及 RuoYi 合并提交，已按需知会 |
+| 3 | 生产 AI Key 如何注入（`.env.example` 补 `DEEPSEEK_API_KEY` + 新增 `application-prod.yaml`）？ | 决定 AI 链路在生产能否起来 |
+| 4 | 是否现在补进程内限流（`AiCallGuard`）与单用户 token 配额？ | 当前任意登录用户可无限调用大模型 |
+| 5 | 多模态 provider 选型（qwen-vl / 豆包 / glm-4v …）与是否引入 `spring-ai-starter-model-openai:2.0.1` | 决定 MEAL_ANALYSIS / OCR_GLUCOSE / CHAT_IMAGE 三个场景何时可落地 |
+| 6 | 血糖仪读数用专用 OCR 还是通用视觉模型？ | 医疗数据准确性优先，建议专用 OCR 优先、VLM 兜底 |
+
+---
+
+# 17. 接口 2.25 改为返回 Flux（2026-09-24）
+
+## 17.1 改了什么
+
+§15 那轮改造把 SSE 桥接保留为自研；本轮按「让框架接管 HTTP 侧」的方向再进一步：
+**2.25 不再手写 `SseEmitter`，控制器直接返回 `Flux<ServerSentEvent<byte[]>>`**，
+由 MVC 的 `ReactiveTypeHandler`（内部 `SseEmitterSubscriber`）完成写出、超时与取消。
+
+| 动作 | 文件 | 内容 |
+| --- | --- | --- |
+| 改造 | `ChatCompletionService` | 返回类型 `SseEmitter` → `Flux<ServerSentEvent<byte[]>>`；删除 `emitter`/`AtomicReference<Disposable>`/`dispose`/`sendComment`/`sendFailed`/`SSE_TIMEOUT_MS`；落库改由 `concatWith(Mono.fromCallable(...))` 表达 |
+| 改造 | `ChatController` | 2.25 返回 `Flux<ServerSentEvent<byte[]>>`（其余两接口不变，仍返回 `ApiResponse`） |
+| 改造 | `application.yaml` | 新增 `spring.mvc.async.request-timeout: 60s`（超时口径从代码搬到配置，见 17.3） |
+| 新增 | `ChatCompletionServiceTest` | 6 条收尾语义用例（正常/上游报错/取消/usage-only/幂等重放/落库失败） |
+| 新增 | `ChatControllerSseWireTest` | 报文形态用例 + charset 根因用例 + 开流前失败同步抛出用例 |
+
+## 17.2 踩到的真坑：中文被写成 `?`
+
+第一次跑测试，框架写出的报文是：
+
+```
+event:delta
+data:{"delta":"??"}
+```
+
+**根因**：`SseEmitterSubscriber.adapt()` 把 `ServerSentEvent` 转成
+`SseEmitter.event().name(...).data(payload)`，而这个 `data(payload)` **不带 media type**，
+于是框架按响应内容类型 `text/event-stream` 去选转换器：
+
+| 载荷类型 | 选中的转换器 | 结果 |
+| --- | --- | --- |
+| POJO | Jackson 只支持 `application/json` | 序列化失败 |
+| `String` | `StringHttpMessageConverter` | charset 取决于响应内容类型，**中文变 `?`** |
+| `byte[]` | `ByteArrayHttpMessageConverter`（支持 `*/*`） | **原样输出字节，不经过 charset 判断** ✅ |
+
+**试过的弯路（记录以免后人重走）**：给 `produces` 加 `;charset=UTF-8` —— **无效**。
+实测响应内容类型仍是 `text/event-stream`（不带 charset），charset 不会进响应头。
+所以最终方案是把载荷发成 **UTF-8 原始字节**，字节与原先
+`SseEmitter + MediaType.APPLICATION_JSON`（Jackson）的产物一致。
+`ChatControllerSseWireTest.不带charset时String载荷会把中文打成问号` 把这条机理钉住了。
+
+> 顺带说明：原来的 `SseEmitter` 实现因为显式传了 `MediaType.APPLICATION_JSON` 走 Jackson，
+> 反而没有这个问题——**换成"更框架"的写法才暴露出来**，这也说明这类改造必须带报文级测试。
+
+## 17.3 两处有意的行为变更
+
+| # | 变更 | 说明 |
+| --- | --- | --- |
+| 1 | **去掉 `:connected` 开流注释行** | `ServerSentEvent` 表达不了纯注释：`adapt()` 总会调用 `.data(...)`，传 `null` 不可行，传空串会产出一个顺序不确定的多余空事件。因此开流第一个字节改为第一个 `delta` 到达时（首字约 2~3s）。前端不依赖该注释行（`utils/sse.js` 明确跳过注释行，页面另有「正在思考…」占位） |
+| 2 | **超时口径改为配置** | 原来写死在 `new SseEmitter(60_000)`；现在由 `spring.mvc.async.request-timeout: 60s` 决定。**不配就落到容器默认值（Tomcat 通常 30s）**，等于悄悄把 60s 改小——所以这个配置项是本次改动的一部分，不是可选优化 |
+
+## 17.4 语义等价与两处改善
+
+| 场景 | 行为 | 与 §15 版本是否等价 |
+| --- | --- | --- |
+| 正常结束 | 落库 + `done` | 等价 |
+| 上游报错且已有内容 | 部分内容落库（`finish_reason=4`）+ `error` 事件 | 等价 |
+| **客户端断开 / 超时** | 订阅被取消 → `concatWith(done)` 不执行 → **不落库** | 等价；且从「靠 4 处 `dispose` 兜住」变为**结构上保证** |
+| **落库自身失败** | 只尝试一次，不再由 error 分支重复落库 | ✅ 改善（新增 `state.persisted` 守卫） |
+| **模型名回落到配置值** | 上游元数据里 model 为空串时回落到 `SceneCode.CHAT` 的配置值 | ✅ 改善（原实现用 `!= null` 判断，空串会被写进 `chat_message.model_code`） |
+
+## 17.5 验证方式与结果
+
+```bash
+cd backend
+mvn test     # Tests run: 31, Failures: 0, Errors: 0
+```
+
+- `ChatCompletionServiceTest`（6 条）：收尾语义逐条锁死，其中「取消不落库」用
+  `Flux.concat(just(chunk), Flux.never())` + `take(1)` 模拟客户端断开／容器超时；
+- `ChatControllerSseWireTest`（3 条）：报文经框架写出后中文与分帧正确、charset 根因、开流前失败同步抛出。
+
+**测试写法上的一个坑（值得记录）**：裸 `MockMvc` + `asyncDispatch` 对 `SseEmitter` 的异步写出
+**捕获不可靠**——实测只能读到半截报文（停在 `event:delta`），加轮询也没用。
+改用 `MockMvcWebTestClient.bindTo(mockMvc)` 后能完整还原事件。这不是产品缺陷，是测试手段问题。
+
+## 17.6 仍未做的事（与本次无关，但会影响线上观感）
+
+- **Nginx 缓冲仍未处理**：`admin/nginx.conf` 没有 `proxy_buffering off`，Java 侧也没有
+  `X-Accel-Buffering: no`。生产上可能出现「整段一次性吐出」（流式观感失效），
+  且 `proxy_read_timeout 30s` 小于服务端 60s。这条与「用不用 Flux」无关。
+- 未做真实环境 `curl -N` 复核：本机无 Key／无远程 MySQL，无法启动完整应用。
+  建议第一次联调时按 `tools/sse-check/README` 重新抓一次夹具，顺便确认 17.2 的编码在真实链路上同样正确。
+
+---
+
+# 18. 医疗安全硬拦截误拦全体请求（2026-09-28，已修复）
+
+## 18.1 现象
+
+联调时输入「你好」「我叫小明」等完全无害的内容，**也直接返回固定话术**，
+模型从未被调用——即每一条消息都被拦，与用户说什么无关。
+
+## 18.2 根因：框架的 `SafeGuardAdvisor` 扫的是整个 Prompt
+
+字节码（`SafeGuardAdvisor.lambda$containsSensitiveWord$0`）：
+
+```java
+request.prompt().getContents()          // ← 整个 Prompt 的全部文本
+       .toLowerCase(Locale.ROOT)
+       .contains(sensitiveWord.toLowerCase(Locale.ROOT))
+```
+
+而 `Prompt.getContents()`（同样是字节码确认）是**遍历 `getInstructions()` 拼接所有消息的文本**，
+**包含 SystemMessage**。我们的系统提示词 `prompts/chat/system.md` 里写着：
+
+> 1. 严禁给出诊断、**开药**、调整降糖药/胰岛素**剂量**；
+
+「开药」「剂量」正好在 `ai.guard.sensitive-words` 词表里 → **系统提示词自己命中了词表** →
+所有请求短路，模型不被调用。§15.3 决策 5 引入该 Advisor 时，误以为它只判用户输入。
+
+值得注意的是：**框架这个版本不打印任何命中日志**，这也是问题「静默发生」的原因之一。
+
+## 18.3 修法：自研护栏，只判「本轮用户消息」
+
+新增 `ai/guard/MedicalGuardAdvisor` 替代 `SafeGuardAdvisor`，语义修正为
+**只判用户问了什么，不判我们自己的提示词写了什么**：
+
+| 点 | 做法 |
+| --- | --- |
+| 匹配对象 | Prompt 里**最后一条有文本的 UserMessage**（从末尾往前找，因此不依赖 advisor 顺序；即使将来记忆注入排到它前面，取到的仍是本轮消息） |
+| 匹配方式 | `toLowerCase(Locale.ROOT).contains(...)`，与框架保持一致 |
+| 命中行为 | 不调用下游链，直接返回 `ChatClientResponse`（一条 `AssistantMessage` 装固定话术）；流式同理返回单元素 `Flux` |
+| 可观测性 | **命中记 WARN 日志**（含命中词），补上框架缺失的那一环 |
+| 顺序 | `HIGHEST_PRECEDENCE + 100`，排最前：拦截不依赖后续 advisor，命中时连记忆查询都不必发生 |
+| 配置 | 不变，仍由 `ai.guard.enabled` / `sensitive-words` / `failure-response` 驱动 |
+
+## 18.4 回归测试（不可删）
+
+`MedicalGuardAdvisorTest` 共 7 条，其中第一条就是本次事故的回归：
+
+1. **真实提示词文件**作为 SystemMessage（并断言它确实含「剂量」「开药」）+ 用户消息「你好」→ **必须放行**；
+2. 用户消息命中敏感词 → 拦截且 `verify(chain, never()).nextCall(any())`（模型确实没被调用）；
+3. 历史里有敏感词、本轮没有 → 放行（只判本轮）；
+4. 流式路径同样拦截；
+5. 空词表不拦截；
+6. 没有用户消息不拦截；
+7. 大小写不敏感。
+
+## 18.5 教训
+
+- **「扫什么范围」必须读实现确认，不能按名字猜**：`SafeGuardAdvisor` 的名字让人以为它守护的是「用户输入」，
+  实际守护的是「整个 Prompt」。这与 §15.6 里 `chat.model` 路径、`defaultTools` 是否接受 `ToolCallback`
+  是同一类问题——**框架的语义要用字节码/源码核实**。
+- **提示词与词表会互相污染**：一份讲用药安全的提示词 + 一份「提到用药就拦」的词表，本身就冲突。
+  凡是"对文本做匹配"的功能，都要想清楚它匹配的是哪一段文本。
+- **静默失败最贵**：框架版没有日志，所以只能靠用户反馈发现。现在命中会记 WARN。
+
 
 
 

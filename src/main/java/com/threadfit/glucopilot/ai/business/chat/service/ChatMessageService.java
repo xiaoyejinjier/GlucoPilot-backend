@@ -8,7 +8,7 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
-import com.threadfit.glucopilot.common.util.SqlDuplicateHelper;
+import com.threadfit.glucopilot.ai.support.SqlDuplicateKeys;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -51,7 +51,7 @@ public class ChatMessageService {
             chatMessageMapper.insert(message);
         } catch (DuplicateKeyException e) {
             // 重复 clientMsgId：当作成功，返回既有消息（不重复计数、不重复扣费）
-            if (!SqlDuplicateHelper.isDuplicateKey(e)) {
+            if (!SqlDuplicateKeys.isDuplicateKey(e)) {
                 throw e;
             }
             log.debug("clientMsgId 重复，返回既有消息 sessionId={} clientMsgId={}", sessionId, request.getClientMsgId());

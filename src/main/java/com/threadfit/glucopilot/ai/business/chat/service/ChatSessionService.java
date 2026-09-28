@@ -3,8 +3,10 @@ package com.threadfit.glucopilot.ai.business.chat.service;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatDtos;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
-import com.threadfit.glucopilot.ai.config.AiModelInfo;
-import com.threadfit.glucopilot.ai.config.SystemPromptProvider;
+import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
@@ -20,14 +22,13 @@ public class ChatSessionService {
 
     /** 会话默认标题 */
     public static final String DEFAULT_TITLE = "新对话";
-    /** 送入模型的默认窗口条数 */
-    private static final int DEFAULT_WINDOW = 20;
     /** 标题截取长度 */
     private static final int TITLE_MAX = 20;
 
     private final ChatSessionMapper chatSessionMapper;
-    private final AiModelInfo aiModelInfo;
-    private final SystemPromptProvider systemPromptProvider;
+    private final AIProperties aiProperties;
+    private final AiChatClientRegistry chatClientRegistry;
+    private final AiPromptTemplateService promptTemplateService;
 
     /** 2.23 取进行中会话；没有就建一个。 */
     public ChatSession getOrCreate(Long userId, Integer sessionType) {
@@ -40,9 +41,10 @@ public class ChatSessionService {
         session.setTitle(DEFAULT_TITLE);
         session.setSessionStatus(CodeEnum.ChatSessionStatus.ACTIVE.getCode());
         session.setSessionType(sessionType == null ? CodeEnum.ChatSessionType.MIXED.getCode() : sessionType);
-        session.setModelCode(aiModelInfo.modelCode());
-        session.setSystemPromptVer(systemPromptProvider.fileName());
-        session.setWindowMsgCount(DEFAULT_WINDOW);
+        session.setModelCode(chatClientRegistry.modelCode(SceneCode.CHAT));
+        // 落提示词版本标签（如 chat@v1），而不是文件名：换提示词内容但版本号不变时，历史消息仍可追溯
+        session.setSystemPromptVer(promptTemplateService.versionTag(SceneCode.CHAT));
+        session.setWindowMsgCount(aiProperties.getMemory().getWindowMessages());
         session.setMsgCount(0);
         session.setIsPinned(CodeEnum.YesNo.NO.getCode());
         chatSessionMapper.insert(session);

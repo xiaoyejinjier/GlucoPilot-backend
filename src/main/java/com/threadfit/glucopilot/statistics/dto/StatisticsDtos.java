@@ -9,7 +9,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * C 端血糖统计。calendar / monthStats 与接口设计文档 2.18 一致，
+ * C 端血糖统计。
  * week / slotStats / trend / checkIn 为端上统计页与「我的」页补充字段。
  */
 public final class StatisticsDtos {

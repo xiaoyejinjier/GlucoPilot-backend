@@ -8,14 +8,16 @@ import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
+import com.threadfit.glucopilot.meal.service.MealRecordService;
+import com.threadfit.glucopilot.profile.health.entity.UserHealth;
+import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
 import com.threadfit.glucopilot.user.entity.UserAccount;
-import com.threadfit.glucopilot.user.entity.UserHealth;
 import com.threadfit.glucopilot.user.entity.UserProfile;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
-import com.threadfit.glucopilot.user.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -41,6 +43,7 @@ public class AdminUserService {
     private final UserProfileMapper userProfileMapper;
     private final UserHealthMapper userHealthMapper;
     private final GlucoseRecordMapper glucoseRecordMapper;
+    private final MealRecordService mealRecordService;
 
     public PageResult<AdminUserDtos.UserItem> page(
             String keyword, Integer accountStatus, PageQuery query) {
@@ -83,19 +86,23 @@ public class AdminUserService {
         Map<Long, UserProfile> profiles = userProfileMapper.selectList(new QueryWrapper<UserProfile>()
                         .in("user_id", userIds)).stream()
                 .collect(Collectors.toMap(UserProfile::getUserId, Function.identity(), (a, b) -> a));
+        // TODO 技术债：user 模块直连 profile.health.mapper.UserHealthMapper，待 profile.health
+        //  提供批量查询接口后改为依赖 service，避免跨模块 Mapper 耦合（与 GlucoseRecordMapper 同类）。
         Map<Long, UserHealth> healthRows = userHealthMapper.selectList(new QueryWrapper<UserHealth>()
                         .in("user_id", userIds)).stream()
                 .collect(Collectors.toMap(UserHealth::getUserId, Function.identity(), (a, b) -> a));
         Map<Long, List<GlucoseRecord>> glucoseRows = glucoseRecordMapper.selectList(
                         new QueryWrapper<GlucoseRecord>().in("user_id", userIds)).stream()
                 .collect(Collectors.groupingBy(GlucoseRecord::getUserId));
+        Map<Long, Long> mealCounts = mealRecordService.countActiveByUserIds(userIds);
 
         List<AdminUserDtos.UserItem> items = rows.getRecords().stream()
                 .map(account -> toItem(
                         account,
                         profiles.get(account.getId()),
                         healthRows.get(account.getId()),
-                        glucoseRows.getOrDefault(account.getId(), Collections.emptyList())))
+                        glucoseRows.getOrDefault(account.getId(), Collections.emptyList()),
+                        mealCounts.getOrDefault(account.getId(), 0L)))
                 .toList();
         return PageResult.of(rows.getCurrent(), rows.getSize(), rows.getTotal(), items);
     }
@@ -117,7 +124,8 @@ public class AdminUserService {
     }
 
     private static AdminUserDtos.UserItem toItem(
-            UserAccount account, UserProfile profile, UserHealth health, List<GlucoseRecord> records) {
+            UserAccount account, UserProfile profile, UserHealth health, List<GlucoseRecord> records,
+            long mealCount) {
         String nickname = profile != null && StringUtils.hasText(profile.getNickname())
                 ? profile.getNickname()
                 : StringUtils.hasText(account.getUsername())
@@ -140,7 +148,7 @@ public class AdminUserService {
                 .username(account.getUsername())
                 .nickname(nickname)
                 .avatarText(avatarText)
-                .phoneMasked(UserAccountService.maskPhone(account.getPhone()))
+                .phoneMasked(PhoneUtils.mask(account.getPhone()))
                 .age(health == null ? null : health.getAge())
                 .diabetesTypeText(health == null || !StringUtils.hasText(health.getDiabetesTypeText())
                         ? "未填写"
@@ -149,7 +157,7 @@ public class AdminUserService {
                 .registeredAt(account.getGmtCreate())
                 .lastActiveAt(account.getLastLoginAt())
                 .recordCount((long) records.size())
-                .mealCount(0L)
+                .mealCount(mealCount)
                 .complianceRate(complianceRate)
                 .build();
     }

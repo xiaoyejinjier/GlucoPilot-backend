@@ -1,5 +1,6 @@
 package com.threadfit.glucopilot.user.dto;
 
+import com.threadfit.glucopilot.profile.health.dto.HealthDtos.HealthView;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -8,10 +9,9 @@ import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
-/** C 端用户资料 / 健康档案 / 偏好设置 DTO。 */
+/** C 端用户资料 / 偏好设置 DTO；健康档案 DTO 见 profile.health.dto.HealthDtos。 */
 public final class UserDtos {
 
     private UserDtos() {
@@ -31,20 +31,6 @@ public final class UserDtos {
         private String avatarText;
         /** 0未知1男2女 */
         private Integer gender;
-    }
-
-    @Data
-    @Builder
-    public static class HealthView {
-        private String id;
-        private Integer diabetesType;
-        private String diabetesTypeText;
-        private String diagnosedYm;
-        private Integer age;
-        private String medication;
-        private String exerciseHabit;
-        private BigDecimal targetFasting;
-        private BigDecimal targetPostprandial;
     }
 
     @Data
@@ -83,28 +69,6 @@ public final class UserDtos {
         @Min(0)
         @Max(2)
         private Integer gender;
-    }
-
-    /** 全量保存健康档案。 */
-    @Data
-    public static class HealthSaveRequest {
-        @Min(0)
-        @Max(4)
-        private Integer diabetesType;
-        @Size(max = 32)
-        private String diabetesTypeText;
-        /** YYYY-MM */
-        @Pattern(regexp = "^\\d{4}-(0[1-9]|1[0-2])$", message = "diagnosedYm 须为 YYYY-MM")
-        private String diagnosedYm;
-        @Min(0)
-        @Max(150)
-        private Integer age;
-        @Size(max = 256)
-        private String medication;
-        @Size(max = 256)
-        private String exerciseHabit;
-        private BigDecimal targetFasting;
-        private BigDecimal targetPostprandial;
     }
 
     /** 部分更新：字段为 null 表示不改。 */

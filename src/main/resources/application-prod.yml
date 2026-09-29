@@ -1,0 +1,10 @@
+# 生产环境：阿里云 OSS（私有桶）。敏感项一律 ${...:} 空默认，来自服务器 .env / 密钥系统。
+# 严禁在本文件或任何文档/示例中写入真实 IP、AK/SK、桶地址。
+glucopilot:
+  storage:
+    provider: ${STORAGE_PROVIDER:aliyun-oss}
+    endpoint: ${OSS_ENDPOINT:}
+    access-key: ${OSS_ACCESS_KEY_ID:}
+    secret-key: ${OSS_ACCESS_KEY_SECRET:}
+    bucket: ${OSS_BUCKET:}
+    region: ${OSS_REGION:}

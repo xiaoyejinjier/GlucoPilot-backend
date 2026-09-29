@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -76,6 +77,16 @@ public class FoodService {
             throw new BizException(ErrorCode.NOT_FOUND, "食物不存在或已下架");
         }
         return toFoodItem(food, categoryNameMap().get(food.getCategoryId()));
+    }
+
+    /** 批量返回上架食物（供 meal 等消费方做存在性校验），已下架/不存在的 ID 不会出现在结果中。 */
+    public List<FoodNutrition> listAvailableByIds(Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return foodNutritionMapper.selectList(new LambdaQueryWrapper<FoodNutrition>()
+                .in(FoodNutrition::getId, ids)
+                .eq(FoodNutrition::getShelfStatus, SHELF_ON));
     }
 
     private Map<Long, String> categoryNameMap() {

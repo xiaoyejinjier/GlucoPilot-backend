@@ -8,7 +8,7 @@ import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
-import com.threadfit.glucopilot.user.account.UserAccountService;
+import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.user.dto.AdminFeedbackDtos;
 import com.threadfit.glucopilot.user.entity.Feedback;
 import com.threadfit.glucopilot.user.entity.UserAccount;
@@ -110,7 +110,7 @@ public class AdminFeedbackService {
                 .id(String.valueOf(row.getId()))
                 .userId(String.valueOf(row.getUserId()))
                 .userName(userName)
-                .contact(account == null ? null : UserAccountService.maskPhone(account.getPhone()))
+                .contact(account == null ? null : PhoneUtils.mask(account.getPhone()))
                 .feedbackType(row.getFeedbackType())
                 .contentText(row.getContentText())
                 .replyStatus(row.getReplyStatus())

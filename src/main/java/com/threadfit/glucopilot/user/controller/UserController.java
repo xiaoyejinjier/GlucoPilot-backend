@@ -2,6 +2,9 @@ package com.threadfit.glucopilot.user.controller;
 
 import com.threadfit.glucopilot.common.api.ApiResponse;
 import com.threadfit.glucopilot.common.context.RequestContext;
+import com.threadfit.glucopilot.profile.health.dto.HealthDtos.HealthSaveRequest;
+import com.threadfit.glucopilot.profile.health.dto.HealthDtos.HealthView;
+import com.threadfit.glucopilot.profile.health.service.HealthProfileService;
 import com.threadfit.glucopilot.user.account.UserAccountService;
 import com.threadfit.glucopilot.user.dto.UserDtos;
 import com.threadfit.glucopilot.user.settings.UserSettingService;
@@ -23,6 +26,7 @@ public class UserController {
 
     private final UserAccountService userAccountService;
     private final UserSettingService userSettingService;
+    private final HealthProfileService healthProfileService;
 
     @GetMapping
     public ApiResponse<UserDtos.MeResponse> me() {
@@ -35,10 +39,11 @@ public class UserController {
         return ApiResponse.ok(userAccountService.patchProfile(RequestContext.requireUserId(), request));
     }
 
+    /** 健康档案全量保存：业务在 profile.health 模块。 */
     @PutMapping("/health-profile")
-    public ApiResponse<UserDtos.HealthView> saveHealth(
-            @Valid @RequestBody UserDtos.HealthSaveRequest request) {
-        return ApiResponse.ok(userAccountService.saveHealth(RequestContext.requireUserId(), request));
+    public ApiResponse<HealthView> saveHealth(
+            @Valid @RequestBody HealthSaveRequest request) {
+        return ApiResponse.ok(healthProfileService.saveHealth(RequestContext.requireUserId(), request));
     }
 
     @PatchMapping("/settings")

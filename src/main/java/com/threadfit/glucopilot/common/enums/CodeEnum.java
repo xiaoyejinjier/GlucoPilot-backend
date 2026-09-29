@@ -70,6 +70,22 @@ public interface CodeEnum {
         private final int code;
     }
 
+    /** 饮食饥饱（meal_record.hunger_level）：1饱腹 2一般 3微饿。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum HungerLevel implements CodeEnum {
+        FULL(1), NORMAL(2), SLIGHT_HUNGRY(3);
+        private final int code;
+    }
+
+    /** 文件存储 provider（media_file.storage_provider）：1=MinIO，2=阿里云OSS。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum StorageProvider implements CodeEnum {
+        MINIO(1), ALIYUN_OSS(2);
+        private final int code;
+    }
+
     @Getter
     @RequiredArgsConstructor
     enum OcrBizType implements CodeEnum {
@@ -145,6 +161,7 @@ public interface CodeEnum {
         private final int code;
     }
 
+    /** 界面字号（user_setting.font_size）。 */
     @Getter
     @RequiredArgsConstructor
     enum FontSize implements CodeEnum {
@@ -152,6 +169,7 @@ public interface CodeEnum {
         private final int code;
     }
 
+    /** 界面主题（user_setting.theme_code）。 */
     @Getter
     @RequiredArgsConstructor
     enum ThemeCode implements CodeEnum {

@@ -62,7 +62,10 @@ public class AiChatClientConfig {
         // ⚠️ 必须从注入的 Builder clone，不能改用静态工厂 ChatClient.builder(model) 手搓：
         // 工具是由 ToolCallingAdvisor 执行的，而该 Advisor 只存在于自动装配的 Builder 上
         // （由 ChatClientAutoConfiguration 注入）。手搓的 client 会静默丢掉全部工具与观测。
-        // 后续接入视觉 provider 时，同样要从注入的 Builder clone 出第二个 client。
+        //
+        // 视觉 provider（{@link AiVisionClientConfig}）相反，是**有意手搓**的：
+        // 它挂在另一个 ChatModel 上、根本无法从本 Builder clone，而且阶段 1「看图出描述」
+        // 不需要也不应该有工具。两处结论相反，判据是「这个 client 要不要工具」，不是「能不能 clone」。
         return autoConfiguredBuilder.clone()
                 .defaultSystem(promptTemplateService.systemPrompt(SceneCode.CHAT))
                 .defaultTemplateRenderer(promptTemplateService.renderer())

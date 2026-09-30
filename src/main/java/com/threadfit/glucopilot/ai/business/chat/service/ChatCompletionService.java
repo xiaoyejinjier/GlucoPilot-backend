@@ -6,10 +6,14 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
+import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.JsonUtils;
+import com.threadfit.glucopilot.file.entity.MediaFile;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -61,6 +65,23 @@ import java.util.Locale;
  * {@code ServerSentEvent} 的纯注释会走到 {@code .data(null)}，实测不可行。因此开流的第一个字节
  * 改为第一个 {@code delta} 到达时（首字约 2~3s）。前端不依赖该注释行（{@code utils/sse.js}
  * 明确跳过注释行，页面另有「正在思考…」占位），故对客户端无影响。
+ * <p>
+ * <b>图片轮次（msg_type=2）走两阶段，纯文本轮次不受影响：</b>
+ * <ol>
+ *   <li><b>阶段 1</b>（{@link VisionAnalyzer}，非流式）：视觉模型看图 → 客观描述。
+ *       提示词要求「只描述、不回答」，因为它的产物是中间产物；</li>
+ *   <li><b>阶段 2</b>（本类，流式）：把该描述作为本轮用户消息交给文本模型组织回答，
+ *       复用 {@link SceneCode#CHAT} 的 client、提示词与全部 Advisor 链。</li>
+ * </ol>
+ * 这么拆的理由是职责不混：视觉模型只管识别，合规红线/会话上下文/人设统一留在文本链路上。
+ * 附带收益是一次视觉调用同时服务两件事——描述既进阶段 2 的上下文，也回填
+ * {@code chat_message.media_caption} 让图片进入会话记忆。
+ * <p>
+ * <b>阶段 1 是同步执行的，代价与取舍：</b>它必须在开流前完成，因此会占用请求线程约 1~3 秒，
+ * 且客户端首个 {@code delta} 的到达时间 = 视觉调用 + 文本首字（合计约 4~6 秒，原先约 2~3 秒）。
+ * 换来的是错误语义更干净：视觉阶段失败会在<b>开流前</b>抛异常，客户端拿到的是统一 JSON 错误响应，
+ * 而不是流到一半再收到 {@code error} 事件。另一个已知代价是：客户端在阶段 1 期间断开时，
+ * 这次视觉调用已经花掉了（但因为没订阅，仍不会落库）。
  */
 @Slf4j
 @Service
@@ -70,33 +91,43 @@ public class ChatCompletionService {
     /** 单条回复落库上限，防异常长文撑爆 TEXT */
     private static final int MAX_REPLY_CHARS = 20_000;
 
+    /** {@code chat_message.media_caption} 是 VARCHAR(1024)，超长在严格模式下会直接抛错，先截断。 */
+    private static final int MAX_CAPTION_CHARS = 1024;
+
     private final AiChatClientRegistry chatClientRegistry;
     private final ChatMessageMapper chatMessageMapper;
     private final ChatSessionService chatSessionService;
     private final ChatMessageService chatMessageService;
+    private final OwnedMediaResolver ownedMediaResolver;
+    private final VisionAnalyzer visionAnalyzer;
     private final JsonUtils jsonUtils;
 
     public Flux<ServerSentEvent<byte[]>> complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
         // 同步校验：这些异常在返回 Flux 之前抛出，客户端拿到的仍是标准 JSON 错误响应
         chatSessionService.requireOwned(userId, sessionId);
         ChatMessage target = resolveTargetMessage(sessionId, request.getReplyToMsgId());
-        String userText = requireUserText(target);
 
-        // 幂等：本轮已生成过回复则重放 done，既避免重复扣费，也避免前端重试拿到两条助手消息
+        // 幂等：本轮已生成过回复则重放 done，既避免重复扣费，也避免前端重试拿到两条助手消息。
+        // ⚠️ 必须排在阶段 1 之前：视觉识别是一次又慢又花钱的外部调用，
+        //    幂等判断放在它前面，才能保证「重复请求/前端重试」不会重复触发一次图片识别。
         ChatMessage generated = chatMessageMapper.selectAssistantReply(sessionId, target.getId());
         if (generated != null) {
             log.debug("本轮已生成过回复，重放 done sessionId={} replyToMsgId={}", sessionId, target.getId());
             return Flux.just(doneEvent(generated));
         }
 
+        // 文本轮次取用户原话；图片轮次先跑阶段 1 拿到客观描述，再交给文本模型组织回答。
+        TurnInput input = resolveTurnInput(userId, target);
+
         StreamState state = new StreamState();
         long startNanos = System.nanoTime();
 
-        // 会话历史由 ChatMemory 注入：这里只传「本轮用户消息 + 会话 ID」
-        ChatClient.ChatClientRequestSpec promptSpec = chatClientRegistry.client(SceneCode.CHAT)
+        // 会话历史由 ChatMemory 注入：这里只传「本轮用户消息 + 会话 ID」。
+        // 图片轮次同样走 textClient()——两阶段里的阶段 2 就是一次普通文本对话。
+        ChatClient.ChatClientRequestSpec promptSpec = chatClientRegistry.textClient()
                 .prompt()
                 .advisors(advisors -> advisors.param(ChatMemory.CONVERSATION_ID, sessionId.toString()))
-                .user(userText);
+                .user(input.promptText());
         if (chatClientRegistry.hasOverrides(SceneCode.CHAT)) {
             promptSpec = promptSpec.options(chatClientRegistry.optionsBuilder(SceneCode.CHAT));
         }
@@ -114,7 +145,7 @@ public class ChatCompletionService {
                     if (finishReason == null) {
                         finishReason = CodeEnum.ChatFinishReason.NORMAL.getCode();
                     }
-                    ChatMessage saved = persist(userId, sessionId, target, state, finishReason, latencyMs);
+                    ChatMessage saved = persist(userId, sessionId, target, input, state, finishReason, latencyMs);
                     log.info("流式补全完成 userId={} sessionId={} assistantMsgId={} latencyMs={} tokens={}/{} finish={}",
                             userId, sessionId, saved.getId(), latencyMs,
                             state.promptTokens, state.completionTokens, finishReason);
@@ -123,7 +154,7 @@ public class ChatCompletionService {
                 .subscribeOn(Schedulers.boundedElastic());
 
         return Flux.concat(deltas, done)
-                .onErrorResume(error -> errorEvents(userId, sessionId, target, state, startNanos, error));
+                .onErrorResume(error -> errorEvents(userId, sessionId, target, input, state, startNanos, error));
     }
 
     // ---------- 事件构造 ----------
@@ -208,28 +239,31 @@ public class ChatCompletionService {
      * <p>
      * 这里的落库<b>不能</b>把 error 事件带崩：落库失败只能记日志，客户端仍需要拿到可重试的信号。
      */
-    private Flux<ServerSentEvent<byte[]>> errorEvents(Long userId, Long sessionId, ChatMessage target,
+    private Flux<ServerSentEvent<byte[]>> errorEvents(Long userId, Long sessionId, ChatMessage target, TurnInput input,
                                                      StreamState state, long startNanos, Throwable error) {
         long latencyMs = elapsedMs(startNanos);
         log.error("流式补全失败 userId={} sessionId={} 已生成 {} 字", userId, sessionId, state.text.length(), error);
         if (!state.persisted && state.text.length() > 0) {
             try {
-                persist(userId, sessionId, target, state, CodeEnum.ChatFinishReason.ERROR.getCode(), latencyMs);
+                persist(userId, sessionId, target, input, state, CodeEnum.ChatFinishReason.ERROR.getCode(), latencyMs);
             } catch (RuntimeException persistError) {
                 log.error("失败轮次的部分内容落库失败 userId={} sessionId={}", userId, sessionId, persistError);
             }
         }
+        // 图片摘要与「回复是否成功」无关：用户确实发过这张图，摘要值得留住，否则下一轮模型又不记得。
+        // 若走的是上面的 persist，摘要已经写过，这里的重复调用会被 SQL 的 media_caption IS NULL 挡掉。
+        writeBackCaption(target, input);
         return Flux.just(event("error", ChatDtos.ErrorEvent.builder()
                 .code(ErrorCode.INTERNAL_ERROR.getCode())
                 .message("AI 服务暂时不可用，请稍后重试")
                 .build()));
     }
 
-    private ChatMessage persist(Long userId, Long sessionId, ChatMessage target, StreamState state,
+    private ChatMessage persist(Long userId, Long sessionId, ChatMessage target, TurnInput input, StreamState state,
                                 Integer finishReason, long latencyMs) {
         // 先置位再写库：若写库自身失败，错误分支不应再写一次（避免同一轮落出两行）
         state.persisted = true;
-        return chatMessageService.appendAssistantMessage(
+        ChatMessage saved = chatMessageService.appendAssistantMessage(
                 userId,
                 sessionId,
                 target.getId(),
@@ -239,6 +273,41 @@ public class ChatCompletionService {
                 state.completionTokens,
                 finishReason,
                 (int) Math.min(latencyMs, Integer.MAX_VALUE));
+        writeBackCaption(target, input);
+        return saved;
+    }
+
+    /**
+     * 把阶段 1 的图片描述回填到图片消息上，供后续轮次的会话记忆回放。
+     * <p>
+     * <b>时序很关键：必须在这一轮结束后写，不能提前。</b>
+     * 若在阶段 2 之前就写进库，记忆装配会在这条图片消息上回放摘要，
+     * 而阶段 2 的当前用户消息里又带着同一份描述，模型会连着看到两遍——
+     * 白花 token，还可能让回答变得啰嗦。
+     * <p>
+     * 写在这里还有个好处：它和助手消息落库处在同一个 {@code Mono} 回调里，
+     * 客户端取消/超时时该回调根本不执行，于是<b>取消的轮次也不会写摘要</b>，
+     * 与既有的「取消轮次不落库」天然一致，不需要额外兜底。
+     * <p>
+     * 回填失败只记日志：摘要写不进去，不该让一次已经成功的回复变成错误。
+     * 真正保证「只写一次」的是 SQL 里的 {@code AND media_caption IS NULL}。
+     */
+    private void writeBackCaption(ChatMessage target, TurnInput input) {
+        if (input.caption() == null) {
+            return;
+        }
+        try {
+            int updated = chatMessageMapper.updateMediaCaption(target.getId(), truncateCaption(input.caption()));
+            if (updated == 0) {
+                log.debug("图片摘要未回填（已存在或消息已删除）msgId={}", target.getId());
+            }
+        } catch (RuntimeException e) {
+            log.warn("图片摘要回填失败 msgId={}，本轮回复不受影响", target.getId(), e);
+        }
+    }
+
+    private static String truncateCaption(String caption) {
+        return caption.length() <= MAX_CAPTION_CHARS ? caption : caption.substring(0, MAX_CAPTION_CHARS);
     }
 
     // ---------- 工具方法 ----------
@@ -259,15 +328,71 @@ public class ChatCompletionService {
     }
 
     /**
-     * 本轮必须有文本才能交给文本模型。
-     * 图片（msgType=2）/语音（msgType=3）消息暂时没有可送模型的文本：前者等视觉 provider 接入
-     * （场景 {@link SceneCode#CHAT_IMAGE}），后者等 ASR。这里明确拒绝，而不是把空串送给模型。
+     * 本轮送入文本模型的输入。
+     *
+     * @param promptText 交给文本模型的用户消息
+     * @param caption    图片轮次下阶段 1 产出的描述；文本轮次为 null（回填时据此判断要不要写库）
+     */
+    private record TurnInput(String promptText, String caption) {
+    }
+
+    /**
+     * 解析本轮输入：图片轮次走两阶段，其余走原有的纯文本路径。
+     */
+    private TurnInput resolveTurnInput(Long userId, ChatMessage target) {
+        Integer msgType = target.getMsgType();
+        if (msgType != null && msgType == CodeEnum.ChatMsgType.IMAGE.getCode()) {
+            return imageTurn(userId, target);
+        }
+        return new TurnInput(requireUserText(target), null);
+    }
+
+    /**
+     * 图片轮次：阶段 1（视觉模型识别）→ 组装阶段 2 的用户消息。
+     */
+    private TurnInput imageTurn(Long userId, ChatMessage target) {
+        Long mediaId = target.getMediaId();
+        if (mediaId == null) {
+            // 与「不是你的」区分开：这是数据完整性问题（正常流程下 2.24 已挡住），
+            // 报它出来是为了排障时一眼看出是脏数据而不是权限问题。
+            throw new BizException(ErrorCode.BIZ_REJECTED, "图片消息缺少 mediaId，无法生成回复");
+        }
+        // 归属校验。2.24 已经校验过，这里是真正读取图片字节的入口，再校验一次：
+        // 越权的代价是「把别人的图片读出来描述给当前用户」，值得多花一条按主键 + userId + bizType 的查询。
+        MediaFile media = ownedMediaResolver.require(mediaId, userId, MediaBizType.CHAT_IMAGE);
+        String caption = visionAnalyzer.describe(media, target.getContentText());
+        return new TurnInput(stageTwoText(caption), caption);
+    }
+
+    /**
+     * 阶段 2 的用户消息：把图片描述交给文本模型组织回答。
+     * <p>
+     * 两点是刻意的：
+     * <ul>
+     *   <li>明确说明「这是摘要、不是原图，看不到的部分不要臆测」——否则模型容易顺着摘要
+     *       把没识别出来的细节编出来；</li>
+     *   <li>用户随图片一起发的文字<b>不在这里重复</b>：它在会话历史里会被回放，
+     *       重复送一遍等于白花 token。纯图片消息（无文字）的历史里没有这一轮，
+     *       所以本段提示语必须自带「请回应」的指令，而不能只丢一段描述过去。</li>
+     * </ul>
+     * 这里用字符串拼接而不是模板变量：用户消息的文本不参与模板渲染
+     * （由 UserTextTemplateRenderingTest 锁定），所以描述里出现花括号也不会抛异常。
+     */
+    private static String stageTwoText(String caption) {
+        return "用户发来了一张图片。下面是你看到的内容摘要（不是原图，摘要里没有的信息不要臆测）：\n"
+                + caption
+                + "\n请基于以上摘要回应用户。";
+    }
+
+    /**
+     * 非图片轮次必须有文本才能交给文本模型。
+     * 语音（msgType=3）暂时没有可送模型的文本，等 ASR 接入；这里明确拒绝，而不是把空串送给模型。
      */
     private static String requireUserText(ChatMessage target) {
         String text = target.getContentText();
         if (text == null || text.isBlank()) {
             throw new BizException(ErrorCode.BIZ_REJECTED,
-                    "本轮消息没有文本内容，暂不支持生成回复（图片/语音消息待多模态与 ASR 接入后开放）");
+                    "本轮消息没有文本内容，暂不支持生成回复（语音消息待 ASR 接入后开放）");
         }
         return text;
     }

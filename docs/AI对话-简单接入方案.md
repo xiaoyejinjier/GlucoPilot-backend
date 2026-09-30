@@ -699,10 +699,10 @@ mvn test                    # Tests run: 22, Failures: 0, Errors: 0
 | # | 问题 | 影响 |
 | --- | --- | --- |
 | 1 | ~~模型名用 `deepseek-flash` 还是 `deepseek-v4-flash`？~~ **已决策（2026-09-23）：改用官方枚举名 `deepseek-v4-flash`** | 待第一次真实调用确认可用性与时延/token 无异常 |
-| 2 | ~~Flyway 的 V4 撞车怎么处理？~~ **已修复（2026-09-28）** | 实测报错 `Found more than one migration with version 4`。数据库 `flyway_schema_history` 显示 `version 4 = V4__widen_user_agent.sql`（success=1，且该库是 baseline 到 3 的），故**保留它不动**，把 `V4__ruoyi_full_system.sql` 改名为 **`V7__ruoyi_full_system.sql`**（V5/V6 当天已被其他改动占用）。⚠️ 改名后必须 `mvn clean compile`——报错指向的 `target/classes/db/migration` 是资源副本，不清旧文件会继续报同样的错。该文件涉及 RuoYi 合并提交，已按需知会 |
+| 2 | ~~Flyway 的 V4 撞车怎么处理？~~ **已修复（2026-09-28）** | 实测报错 `Found more than one migration with version 4`。数据库 `flyway_schema_history` 显示 `version 4 = V4__widen_user_agent.sql`（success=1，且该库是 baseline 到 3 的），故**保留它不动**，把 `V4__ruoyi_full_system.sql` 改名为 **`V7__ruoyi_full_system.sql`**（V5/V6 当天已被其他改动占用）。⚠️ 改名后必须 `mvn clean compile`——报错指向的 `target/classes/db/migration` 是资源副本，不清旧文件会继续报同样的错。该文件涉及 RuoYi 合并提交，已按需知会。<br>⚠️ **后续（2026-09-29）：这个 V7 又撞了车**——两条分叉分支合并后出现 `V7__alter_media_file_storage_provider.sql`，应用再次起不来。已按 `flyway_schema_history` 的证据把未应用的那个改为 `V8`（详见 §19.4）。**同一个问题发生两次，已补 `MigrationFilesTest` 防呆** |
 | 3 | 生产 AI Key 如何注入（`.env.example` 补 `DEEPSEEK_API_KEY` + 新增 `application-prod.yaml`）？ | 决定 AI 链路在生产能否起来 |
 | 4 | 是否现在补进程内限流（`AiCallGuard`）与单用户 token 配额？ | 当前任意登录用户可无限调用大模型 |
-| 5 | 多模态 provider 选型（qwen-vl / 豆包 / glm-4v …）与是否引入 `spring-ai-starter-model-openai:2.0.1` | 决定 MEAL_ANALYSIS / OCR_GLUCOSE / CHAT_IMAGE 三个场景何时可落地 |
+| 5 | ~~多模态 provider 选型（qwen-vl / 豆包 / glm-4v …）与是否引入 `spring-ai-starter-model-openai:2.0.1`~~ **已决策（2026-09-29）：阿里云百炼 qwen-vl；引 `spring-ai-openai` 库而非 starter**（理由见 §19.3 第 2 条） | CHAT_IMAGE 已落地，见 §19；MEAL_ANALYSIS / OCR_GLUCOSE 待排期 |
 | 6 | 血糖仪读数用专用 OCR 还是通用视觉模型？ | 医疗数据准确性优先，建议专用 OCR 优先、VLM 兜底 |
 
 ---
@@ -854,6 +854,249 @@ request.prompt().getContents()          // ← 整个 Prompt 的全部文本
 - **提示词与词表会互相污染**：一份讲用药安全的提示词 + 一份「提到用药就拦」的词表，本身就冲突。
   凡是"对文本做匹配"的功能，都要想清楚它匹配的是哪一段文本。
 - **静默失败最贵**：框架版没有日志，所以只能靠用户反馈发现。现在命中会记 WARN。
+
+## 19.1 本次做了什么：图片消息（接口 2.24 msgType=2）
+
+对话框内发图片从「明确拒绝」变成可用。数据库与接口契约**都没有新增接口**：
+`chat_message` 早就留好了 `msg_type=2` + `media_id`，2.24 也已经校验「图片消息 mediaId 必填」，
+缺的只是「把图片变成模型能读的东西」这条链路。
+
+### P0：先修一个越权读（必须先于多模态上线）
+
+原 `validatePayload` 只校验 `mediaId` **非空**，不校验它**归谁**。
+在只有文本模型的阶段，用户 A 传用户 B 的 `mediaId` 只会得到一条引用不到图的坏消息；
+但接上视觉模型后，服务端会主动把 B 的图片读出来、描述给 A 看——**从坏引用升级为实质性的越权内容泄露**。
+因此这一步排在接模型之前，与餐食模块 `MealRecordServiceImpl#resolveMediaId` 用同一个工具方法
+`findOwnedMedia(mediaId, userId, bizType)`（一条 SQL 同时校验 userId + bizType + 可用状态）。
+`msgType=3`（语音）有同一个洞，一并修掉。2.25 读图前会再校验一次。
+
+## 19.2 两阶段：视觉模型识别 → 文本模型回答
+
+`SceneCode.CHAT_IMAGE` 的定义本来就是「视觉模型先识别，再交给文本模型组织回答」，
+本次按这个语义实现，因此 **`SceneCode`、`AiPromptTemplateService`、`SceneModelResolver` 一行都不用改**：
+
+| 阶段 | 谁做 | client / 提示词 | 产出 |
+| --- | --- | --- | --- |
+| 阶段 1 | `VisionAnalyzer`（非流式） | `visionChatClient` + `prompts/chat-image/analyze.md` | 客观描述 |
+| 阶段 2 | `ChatCompletionService`（流式） | `textChatClient` + `prompts/chat/system.md`（即 CHAT 场景） | 面向用户的回答 |
+
+阶段 2 本质就是一次普通对话，所以复用 `CHAT` 场景的完整链路（医疗红线、会话记忆、Advisor 链）都在。
+
+**为什么不做单阶段**（让视觉模型直接对用户说话）：那样它要同时承担「客观描述」和
+「遵守医疗红线 + 引用会话上下文 + 维持人设」两类职责，而后者在文本链路上已经有完整实现，
+复制一份到视觉链路等于维护两套合规约束。拆开之后职责清晰，而且**一次视觉调用同时服务两件事**——
+描述既进阶段 2 的上下文，也回填进会话记忆。
+
+## 19.3 关键决策（含理由）
+
+1. **视觉 provider 选阿里云百炼 qwen-vl**（OpenAI 兼容协议）。理由：账号体系与 OSS 一致，
+   后续 2.20 饮食分析、2.21 血糖识别可复用同一家。
+2. **引 `spring-ai-openai` 库，不引 `spring-ai-starter-model-openai`**。starter 会带来第二套自动装配，
+   而 `ChatClientAutoConfiguration` 是按**单个** `ChatModel` 注入的，上下文里出现第二个 `ChatModel` Bean
+   会因候选不唯一直接启动失败。只借库里的 `OpenAiChatModel`，在 `AiVisionClientConfig` 里手工构造
+   并立刻包成 `ChatClient`，容器里始终只有一个 `ChatModel`。
+   （连带代价：两个 `ChatClient` Bean 必须补 `@Qualifier`，否则注入点歧义。）
+3. **图片走 base64 而不是 URL**。开发环境的对象存储地址是 `localhost`，模型服务根本回连不到；
+   生产即便公网可达，也等于把用户健康图片的地址暴露给第三方，且与本项目「桶私有」的契约冲突。
+   为此给 `ObjectStorageService` 加了 `getObject`（服务端读取，不产生公开 URL）。
+4. **图片描述落 `chat_message.media_caption`**（新增列，与语音的 `asr_text` 语义对称）。
+   不能复用 `content_text`——那是前端气泡里显示的「用户原话」。
+5. **描述在本轮结束后一次性回填**，不在阶段 2 之前。若提前回填，记忆装配会在图片消息上回放摘要，
+   而阶段 2 的当前消息里又带着同一份描述，模型会连着看到两遍、白花 token。
+   写在与助手消息落库同一个 `Mono` 回调里还带来一个好处：客户端取消/超时时该回调不执行，
+   于是**取消的轮次也不会写摘要**，与既有的「取消轮次不落库」天然一致。
+6. **阶段 1 同步执行**。它必须在开流前完成，代价是占用请求线程约 1~3 秒、首字延迟从约 2~3 秒
+   升到约 4~6 秒。换来的是错误语义更干净：视觉阶段失败在**开流前**抛异常，
+   客户端拿到标准 JSON 错误，而不是流到一半再收 `error` 事件。
+
+## 19.4 踩到的坑（两个都很隐蔽）
+
+### 图片进不了记忆，而且**两处**都会把它丢掉
+
+纯图片消息的 `content_text` 为空，而记忆装配有两道门槛：
+`ChatMessageMapper.selectRecentBySession` 的 **SQL 过滤**（`content_text IS NOT NULL AND <> ''`）
+和 `toMessage` 的 **Java 判空**。
+只改 Java 侧的话，摘要会写进库却依然回放不出来，表现为「明明存了，模型就是不记得这张图」。
+两处都改，并用 `MyBatisChatMemoryRepositoryTest` 锁住。
+
+### 迁移版本号撞车：仓库里同时存在两个 `V7`
+
+`V7__ruoyi_full_system.sql` 与 `V7__alter_media_file_storage_provider.sql`，
+Flyway 会直接报 `Found more than one migration with version 7`，**应用根本起不来**。
+
+归属：两个提交（`729b96b` 媒体模块 / `3cc0a0a` 本次之前的 V4→V7 重命名）**在两条分叉线上**，
+是后来合并到同一个 HEAD 才凑出两个 V7——双方各自都没错。
+
+处理依据是**证据不是猜测**：查 `flyway_schema_history` 显示 `version 7 = V7__ruoyi_full_system.sql`（已应用），
+`media_file.chk_mf_prov` 仍是 V1 的旧定义 `(1,2,3)`（证明媒体那个 V7 从未应用过）。
+**已应用的不能动，未应用的让位** → 媒体那个改成 `V8`，本次新增迁移顺延为 `V9`。
+
+新增 `MigrationFilesTest` 防呆（版本号唯一性）——这已是第二次被同类问题坑到（上次是 V4）。
+另注意：`target/classes/db/migration` 是资源副本，**改完必须 `mvn clean`**，
+否则 IDE 运行时读到的仍是旧副本（§15.6 记过这个坑，这次又验证了一遍）。
+
+### 一个关于模板渲染的结论（省掉一层转义）
+
+`StTemplateRenderer` 用的是 `ValidationMode.THROW`（缺变量立刻报错），
+于是必须确认「用户自己打的文本」「视觉模型产出的描述」里出现花括号会不会被当成未声明变量。
+`UserTextTemplateRenderingTest` 实测结论：**不会**——系统提示词走模板渲染，而 `.user(...)` 的文本原样透传。
+所以阶段 2 可以直接拼接描述，不需要转义、也不需要绕 `param()` 传值。
+（写这组用例时还踩了个小坑：`CallResponseSpec.call()` 只是返回规格对象、**不触发模型调用**，
+真正发起调用的是 `.content()`，漏了它断言只能拿到 null。）
+
+## 19.5 文件级改动清单
+
+新增：`ai/vision/VisionAnalyzer.java`、`ai/config/AiVisionClientConfig.java`、
+`resources/prompts/chat-image/analyze.md`、`db/migration/V9__add_chat_message_media_caption.sql`；
+测试 `AiChatClientRegistryTest`、`ChatMessageServiceTest`、`MigrationFilesTest`、
+`UserTextTemplateRenderingTest`、`MyBatisChatMemoryRepositoryTest`。
+
+改动：`pom.xml`（+`spring-ai-openai`）、`AIProperties`（+`ai.vision.*`）、`AiChatClientRegistry`（分流 +
+`@Qualifier`）、`AiChatClientConfig`（修正一句已过时的注释）、`ChatMessageService`（归属校验）、
+`ChatCompletionService`（两阶段 + 摘要回填）、`ChatMessageMapper`（记忆 SQL + `updateMediaCaption`）、
+`MyBatisChatMemoryRepository`（摘要兜底）、`ChatMessage`（+`mediaCaption`）、
+`ObjectStorageService` 及 MinIO/OSS 两实现（+`getObject`）、`application.yaml`（`chat-image` 提示词指针 + `ai.vision.*`）。
+
+## 19.6 验证方式与结果
+
+- **单测 124 个全绿**（本次新增 11 个）。
+- **`getObject` 对真实 MinIO 验证过**：直接 `new` 编译产物里的 `MinioObjectStorageService`，
+  跑「凭证 → 直传 → 读回」，53 字节字节完全一致、中文原样。
+- **装配验证**：`AiChatClientRegistryTest` 覆盖「有/无视觉 client」两种装配，
+  漏 `@Qualifier` 会在启动期炸。
+- ⚠️ **未做真实视觉调用联调**：需要百炼 API Key（只放 `application-local.yaml`，已 gitignore）。
+
+## 19.7 已知代价与遗留
+
+1. **图片轮次绕过文本硬拦截**。`MedicalGuardAdvisor` 只扫最后一条 `UserMessage` 的文本，
+   纯图片消息文本为空 → 直接放行。风险具体：一张血糖仪显示 2.1 mmol/L 的照片不会被硬拦。
+   当前依赖阶段 2 的 CHAT 提示词（含医疗红线）做软约束。**这是已知缺口，需要时再加输出后置检查。**
+2. **首字延迟约 4~6 秒**（原约 2~3 秒），见 §19.3 第 6 条。
+3. **客户端在阶段 1 期间断开时，这次视觉调用已经花掉**（但不会落库）。
+4. **前端未做**：`frontend/pages/voice/voice` 还只有文本输入，图片选择 → 2.14 → 直传 → 2.15 → 2.24 的链路待接。
+5. **视觉 client 没有工具能力**（有意为之，见 `AiVisionClientConfig` 类注释）；图片场景当前不需要工具。
+
+---
+
+# 20. 多模态收尾：后端语义对齐 + 前端接入（2026-09-29）
+
+§19 落地后发现**代码结构与「两阶段」这个事实不一致**，本节记录对齐过程。根因是同一个：
+`SceneCode` 的抽象前提是「一个场景 = 一个 client、一套参数、一个模型」，
+而两阶段打破了这个前提（`CHAT_IMAGE` 需要两个 client、两个模型）。
+
+## 20.1 四处真实的冲突（不是洁癖，是三类会出事的形态）
+
+| # | 问题 | 后果 |
+| --- | --- | --- |
+| 1 | `client(SceneCode)` 语义被两阶段搞混 | 传 `CHAT_IMAGE` 得到视觉 client，但该场景最终对用户说的话出自文本 client——读代码时必然误判 |
+| 2 | `modelCode(视觉场景)` 回落成 `spring.ai.deepseek.chat.model` | 「落库的模型 = 实际调用的模型」这条承诺对视觉场景失效，成本核算会算到从没被调用过的模型上 |
+| 3 | `optionsBuilder(视觉场景)` 返回 `DeepSeekChatOptions` | 视觉 client 是 OpenAI 协议，把 DeepSeek 的 options 交给它是**类型层面的错误**——三个里唯一真会炸的 |
+| 4 | 媒体归属校验写了两遍（2.24 与 2.25） | 文案已不一致；更危险的是将来越权规则只改一处，会留下「发消息被拒、但直接调补全却读得到他人图」的半修状态 |
+
+## 20.2 修法
+
+1. **`AiChatClientRegistry` 按「能力」而不是「场景」暴露**：`textClient()` / `visionClient(SceneCode)`。
+   场景参数在 `visionClient` 里只作**断言**（传纯文本场景进来立刻 `IllegalArgumentException`），
+   而不是用来选 client——静默返回一个 client 会让「图片被送给纯文本模型」这种事无声无息。
+2. **`SceneModelResolver` 三个方法对视觉场景区别对待**：`modelCode` 返回 `ai.vision.model`；
+   `hasOverrides` 恒为 `false`；`optionsBuilder` 直接拒绝并说明去改 `ai.vision.*`。
+3. **新增 `ai/support/OwnedMediaResolver`**：媒体归属规则的唯一实现（查询 + 文案），
+   2.24 与 2.25 共用。拒绝行为的断言集中到 `OwnedMediaResolverTest`，
+   `ChatMessageServiceTest` 只负责「业务类型传对了没、校验失败有没有阻止落库」。
+   这样将来改规则只需改一处、测一处。
+
+## 20.3 前端接入（`frontend/`）
+
+`pages/voice/voice` 原本只是把 `onChooseImage` 弹一个「暂未开放」，但 WXML 里的图片气泡
+（`item.type === 'image'` + `imagePath`）和 `onPreviewImage` 早就留好了——属于"留了口子没实现"。
+
+- 新增 `utils/media.js`：三步上传（凭证 → 直传 → 登记）的编排，两个必须绕开的坑写在文件头注释里：
+  1. **直传不能复用 `utils/request`**——那一步打的是对象存储的预签名 URL，返回裸 2xx（空 body）、
+     没有 `ApiResponse` 信封，而 `request()` 要求 `body.code === 0`，会把成功判成失败；
+  2. **不能用 `wx.uploadFile`**——它只支持 POST + multipart，而后端签出的是 **PUT**，
+     因此用 `wx.request` 直接发 ArrayBuffer。
+- `services/api.js` 补 2.14 / 2.15 两个接口，保持 endpoint 集中在一处。
+- `pages/voice/voice.js`：`onChooseImage` 改用 `wx.chooseMedia`（压缩后取图），
+  并把「文本轮次」和「图片轮次」统一到 `appendRound` + `startRound(payload, ...)` 一条链路，
+  因此 SSE、幂等、重试语义完全共用；重试会区分「消息已入库」与「没写成功」，
+  后者对图片还会**从本地临时路径重走上传**，不要求用户重新选图。
+- 选图时输入框里已有的文字会作为 `contentText` 一起发送（后端支持「图 + 文字」），
+  这正是阶段 1 的识别线索来源。
+
+### 两个刻意的选择
+
+- **按文件魔数判断真实 MIME，而不是信扩展名**：小程序临时文件后缀由拍摄/相册来源决定，
+  可能与真实格式不符；这个 MIME 会随 2.15 落库、再作为 data URI 类型送给视觉模型，传错会让模型按错误格式解析。
+- **直传时不设置 `Content-Type`**：预签名 URL 的签名范围只含 host（实测 `X-Amz-SignedHeaders=host`），
+  但阿里云 OSS 的 V1 签名会把 `Content-Type` 计入待签串，签名时为空、上传时非空就会 `SignatureDoesNotMatch`。
+  真正对业务有用的 MIME 是登记进 `media_file.mime_type` 的那个，与对象自身的 Content-Type 无关。
+
+### ⚠️ 待验证 / 待办
+
+1. **OSS 预签名 PUT 的 Content-Type 签名问题**（上一条）只在 MinIO 上验证过；
+   切到 OSS 测试桶时需要实测一次直传，若报 `SignatureDoesNotMatch` 则需让后端签名时带上 Content-Type。
+2. **真机/小程序隐私声明**：`wx.chooseMedia` 读取相册与相机，需在小程序后台
+   《用户隐私保护指引》中声明，否则真机上会被拦截。
+3. 客户端 5MB 上限与后端 `ai.vision.max-image-bytes` 手动对齐，两处改一处会不一致。
+
+## 20.4 踩坑：手工构造 OpenAIClient 会让应用直接起不来
+
+**现象**：把 `ai.vision.enabled` 打开后，应用启动失败：
+
+```
+Error creating bean with name 'visionChatClient' ...
+Factory method 'visionChatClient' threw exception with message:
+At least one credential source must be specified: credential (apiKey), workloadIdentity, or adminApiKey
+```
+
+**第一反应（错的）**：以为 `ai.vision.api-key` 没读到，于是去查配置绑定。实际上配置**完全正常**——
+`AiVisionClientConfig` 里的 fail-fast 检查没有触发，恰恰证明 `apiKey` 是非空的。
+
+**真实原因**（堆栈里写着，但要看到最底层 `Caused by` 那一层）：
+
+```
+at OpenAiSetup.buildClientOptions(OpenAiSetup.java:207)
+at OpenAiSetup.setupAsyncClient(OpenAiSetup.java:145)
+at OpenAiChatModel$Builder.build(OpenAiChatModel.java:1619)      ← 抛在这里
+at AiVisionClientConfig.visionChatClient(AiVisionClientConfig.java:82)
+```
+
+- `OpenAiChatModel.Builder.openAiClient(...)` **只设置同步 client**；
+- `build()` 里对**异步 client** 走的是
+  `Objects.requireNonNullElseGet(asyncClient, () -> setupAsyncClient(...))` 兜底构造；
+- 而 `setupAsyncClient` → `buildClientOptions` **只从 `OpenAiChatOptions` 的 `baseUrl` / `apiKey` 取凭据**，
+  它并不看我们塞进去的那个同步 client。
+
+于是「自己 new 了带 key 的同步 client、但 options 里没写 key」这个组合，必然在 `build()` 处炸，
+而报错位置指向框架内部，极易被误判成配置问题。
+
+**正确做法**：**根本不碰 `OpenAIClient`**，把 `baseUrl` / `apiKey` / `timeout` 写进 `OpenAiChatOptions`，
+由 Spring AI 自己构造同步与异步两个 client：
+
+```java
+OpenAiChatModel.builder()
+        .options(OpenAiChatOptions.builder()
+                .baseUrl(vision.getBaseUrl())
+                .apiKey(vision.getApiKey())
+                .model(vision.getModel())
+                .timeout(Duration.ofSeconds(vision.getTimeoutSeconds()))
+                .build())
+        .build();
+```
+
+顺带的好处：用上框架自带的 okhttp 传输层与观测，`AiVisionClientConfig` 少了 4 个 import。
+
+**教训**：一句 `javap` 看清方法签名**不足以**推断出运行期行为——
+`Builder` 上那些「可选」的 setter，往往是**成对**的（同步/异步、client/options），
+只设一个就会触发另一条你没读过的兜底路径。这类装配必须**真的把应用跑起来**验证，
+而不是靠读签名 + 写单测（`AiChatClientRegistryTest` 用 mock 的 `ChatClient`，根本覆盖不到这一层）。
+
+**另外**：`ai.vision.model` 必须填**视觉语言模型**，不能填图像生成/编辑模型。
+`qwen-image-edit-*`、`qwen-image-*`、`wan*-image-*` 都是生成类，无法用于看图理解；
+可用的是 `qwen3-vl-plus` / `qwen3-vl-flash` / `qwen-vl-max` / `qwen-vl-plus`（OCR 场景另有 `qwen-vl-ocr`）。
+
+
+
 
 
 

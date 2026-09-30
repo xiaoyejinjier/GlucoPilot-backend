@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
+import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
@@ -29,12 +30,14 @@ public class ChatMessageService {
     private final ChatMessageMapper chatMessageMapper;
     private final ChatSessionMapper chatSessionMapper;
     private final ChatSessionService chatSessionService;
+    private final OwnedMediaResolver ownedMediaResolver;
 
     @Transactional
     public ChatDtos.SendMessageResponse appendUserMessage(Long userId, Long sessionId, ChatDtos.SendMessageRequest request) {
         // 归属校验：不属于当前用户按 404 处理
         chatSessionService.requireOwned(userId, sessionId);
         validatePayload(request);
+        requireOwnedMedia(userId, request);
 
         ChatMessage message = new ChatMessage();
         message.setSessionId(sessionId);
@@ -82,6 +85,28 @@ public class ChatMessageService {
         if (msgType == CodeEnum.ChatMsgType.VOICE.getCode() && request.getVoiceMediaId() == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "语音消息 voiceMediaId 不能为空");
         }
+    }
+
+    /**
+     * 媒体归属强校验：图片 / 语音消息引用的 mediaId 必须是<b>当前用户的、且业务类型匹配的、可用的</b>。
+     * <p>
+     * 为什么必须有这一步：{@link #validatePayload} 只校验了「图片消息 mediaId 不能为空」，
+     * 没有校验这个 mediaId 归谁。缺了归属校验时，用户 A 可以传用户 B 的 mediaId——
+     * 在只有文本的今天，后果仅仅是一条引用不到图的坏消息；但**接上视觉模型之后**，
+     * 服务端会主动把 B 的图片读出来、描述给 A 看，从「坏引用」升级为实质性的越权内容泄露。
+     * 所以这个校验必须在多模态能力上线之前就位，而不是跟着一起上。
+     * <p>
+     * 查询与文案统一由 {@link OwnedMediaResolver} 负责：2.25 在读图之前也要做同一件事，
+     * 两处各写一份的话，将来只改一处就会留下「发消息被拒、但直接调补全却读得到」的半修状态。
+     */
+    private void requireOwnedMedia(Long userId, ChatDtos.SendMessageRequest request) {
+        int msgType = request.getMsgType();
+        if (msgType == CodeEnum.ChatMsgType.IMAGE.getCode()) {
+            ownedMediaResolver.require(request.getMediaId(), userId, CodeEnum.MediaBizType.CHAT_IMAGE);
+        } else if (msgType == CodeEnum.ChatMsgType.VOICE.getCode()) {
+            ownedMediaResolver.require(request.getVoiceMediaId(), userId, CodeEnum.MediaBizType.CHAT_VOICE);
+        }
+        // 文本消息没有媒体引用，一次查询都不该发
     }
 
     private static ChatDtos.SendMessageResponse toResponse(ChatMessage message) {

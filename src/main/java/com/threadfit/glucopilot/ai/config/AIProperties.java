@@ -38,6 +38,8 @@ public class AIProperties {
 
     private ToolProperties tools = new ToolProperties();
 
+    private VisionProperties vision = new VisionProperties();
+
     /** 取场景配置；未配置视为部署错误（提示词/参数没有来源，跑了也是错的）。 */
     public SceneProperties scene(SceneCode sceneCode) {
         SceneProperties scene = scenes.get(sceneCode.getConfigKey());
@@ -117,5 +119,50 @@ public class AIProperties {
 
         /** 允许送给模型的工具名（{@code ToolDefinition.name()}）；为空表示不注册任何工具。 */
         private List<String> allowList = new ArrayList<>();
+    }
+
+    /**
+     * 视觉（多模态）provider 配置：阿里云百炼 qwen-vl，走 OpenAI 兼容协议。
+     * <p>
+     * <b>为什么放在 {@code ai.*} 而不是 {@code spring.ai.openai.*}</b>：本模块刻意不引
+     * {@code spring-ai-starter-model-openai}（理由见 pom），因此
+     * {@code spring-ai-autoconfigure-model-openai} 不在类路径上，没有任何自动装配会去读
+     * {@code spring.ai.openai.*} —— 写在那里会变成一份「看起来生效、实则无人消费」的配置。
+     * 放在这里，由 {@code AiVisionClientConfig} 显式读取并构造客户端，来源一眼可查。
+     * <p>
+     * <b>为什么视觉参数不放进 {@code ai.scenes.*}</b>：{@code SceneProperties} 里的
+     * model-code/temperature/max-tokens 是「同一个文本 provider 的场景级覆盖」，
+     * 而视觉是**另一个 provider、另一条调用链**（两阶段里的阶段 1）。两者语义不同，
+     * 混在一起会让 {@code SceneModelResolver} 不得不同时理解两套 options 类型。
+     */
+    @Data
+    public static class VisionProperties {
+
+        /**
+         * 是否装配视觉客户端。关闭时视觉场景继续抛业务异常，
+         * <b>绝不回落到文本模型</b>——让文本模型「假装」看懂了图片，比明确报错危险得多。
+         */
+        private boolean enabled = false;
+
+        /** OpenAI 兼容端点。百炼为 https://dashscope.aliyuncs.com/compatible-mode/v1 */
+        private String baseUrl;
+
+        /** 凭据；只放 application-local.yaml 或环境变量，禁止入库。 */
+        private String apiKey;
+
+        /** 视觉模型编码，如 qwen-vl-max。 */
+        private String model;
+
+        /** 图片描述的输出上限：描述要短，限死以避免视觉模型长篇发挥。 */
+        private Integer maxTokens = 512;
+
+        /** 采样温度。图片理解要稳定复现，默认取低。 */
+        private Double temperature = 0.2;
+
+        /** 单张图片的原始字节上限；超出直接拒绝，避免把超大图塞进 base64 请求。 */
+        private long maxImageBytes = 5L * 1024 * 1024;
+
+        /** 视觉调用超时（秒）：非流式调用必须有自己的超时，否则会拖住整轮 SSE。 */
+        private int timeoutSeconds = 60;
     }
 }

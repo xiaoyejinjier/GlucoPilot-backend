@@ -42,6 +42,12 @@ public class MyBatisChatMemoryRepository implements ChatMemoryRepository {
             "会话记忆的写入由 ChatCompletionService 显式完成（需等流结束拿全正文与 token 计量）；"
                     + "请勿挂载会自动写记忆的 Advisor，否则会与落库时序冲突。";
 
+    /**
+     * 图片消息回放时的前缀：告诉模型这段文字是「图片的内容摘要」，不是用户的原话。
+     * 缺了它，模型会把摘要当成用户说的话去回应，语义直接错位。
+     */
+    private static final String IMAGE_CAPTION_PREFIX = "[用户发来的图片，内容摘要] ";
+
     private final ChatMessageMapper chatMessageMapper;
     private final AIProperties aiProperties;
 
@@ -104,10 +110,22 @@ public class MyBatisChatMemoryRepository implements ChatMemoryRepository {
         }
     }
 
-    /** 只回放用户与助手的文本消息：系统提示词由 ChatClient 的 defaultSystem 提供，不参与历史回放。 */
+    /**
+     * 只回放用户与助手的文本消息：系统提示词由 ChatClient 的 defaultSystem 提供，不参与历史回放。
+     * <p>
+     * 图片消息（msg_type=2）的 content_text 为空，若只认 content_text 就永远进不了记忆，
+     * 于是这里对「原话为空但有图片摘要」的行用摘要兜底。
+     * <p>
+     * 注意兜底文本会带一个前缀，明确告诉模型这是「图片的内容摘要」而不是用户的原话——
+     * 否则模型会把摘要当成用户说的话去回应，语义就错了。
+     * 写库侧只写 {@code media_caption}，用户原话字段始终不受影响。
+     */
     private static Message toMessage(ChatMessage row) {
-        String text = row.getContentText();
-        if (text == null || text.isBlank() || row.getMsgRole() == null) {
+        if (row.getMsgRole() == null) {
+            return null;
+        }
+        String text = replayText(row);
+        if (text == null) {
             return null;
         }
         int role = row.getMsgRole();
@@ -118,5 +136,18 @@ public class MyBatisChatMemoryRepository implements ChatMemoryRepository {
             return new AssistantMessage(text);
         }
         return null;
+    }
+
+    /** 回放文本：优先用户原话；原话为空时用图片摘要兜底，并显式标注这是图片而非用户说的话。 */
+    private static String replayText(ChatMessage row) {
+        String text = row.getContentText();
+        if (text != null && !text.isBlank()) {
+            return text;
+        }
+        String caption = row.getMediaCaption();
+        if (caption == null || caption.isBlank()) {
+            return null;
+        }
+        return IMAGE_CAPTION_PREFIX + caption;
     }
 }

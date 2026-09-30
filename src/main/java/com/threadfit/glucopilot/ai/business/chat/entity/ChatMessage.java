@@ -26,6 +26,14 @@ public class ChatMessage extends BaseEntity {
     private Long mediaId;
     private Long voiceMediaId;
     private String asrText;
+    /**
+     * 图片内容摘要（多模态阶段 1 的产物，见 V9 迁移）。
+     * <p>
+     * 纯图片消息的 {@code contentText} 为空，而记忆回放会丢弃文本为空的行，
+     * 因此必须单独有一列承载「这张图大概是什么」，否则图片永远进不了会话记忆。
+     * 与语音的 {@link #asrText} 语义对称，不可复用 {@code contentText}（那是用户原话）。
+     */
+    private String mediaCaption;
     private Integer voiceDurationMs;
     /** 被回复的用户消息 ID */
     private Long replyToMsgId;

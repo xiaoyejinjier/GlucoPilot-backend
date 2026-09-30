@@ -6,8 +6,12 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
+import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.util.JsonUtils;
+import com.threadfit.glucopilot.file.entity.MediaFile;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
@@ -23,6 +27,7 @@ import reactor.core.publisher.Flux;
 import tools.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -32,10 +37,13 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import org.mockito.InOrder;
 
 /**
  * 流式补全的收尾语义。
@@ -58,18 +66,24 @@ class ChatCompletionServiceTest {
     private static final long USER_ID = 2L;
     private static final long SESSION_ID = 9L;
     private static final long TARGET_MSG_ID = 1L;
+    private static final long IMAGE_MEDIA_ID = 123L;
+
+    /** 记录送进模型的 Prompt，用于断言两阶段拼装结果。 */
+    private final List<Prompt> capturedPrompts = new ArrayList<>();
 
     private final AiChatClientRegistry registry = mock(AiChatClientRegistry.class);
     private final ChatMessageMapper chatMessageMapper = mock(ChatMessageMapper.class);
     private final ChatSessionService chatSessionService = mock(ChatSessionService.class);
     private final ChatMessageService chatMessageService = mock(ChatMessageService.class);
+    private final OwnedMediaResolver ownedMediaResolver = mock(OwnedMediaResolver.class);
+    private final VisionAnalyzer visionAnalyzer = mock(VisionAnalyzer.class);
 
     private ChatCompletionService service;
 
     @BeforeEach
     void setUp() {
         service = new ChatCompletionService(registry, chatMessageMapper, chatSessionService,
-                chatMessageService, new JsonUtils(new ObjectMapper()));
+                chatMessageService, ownedMediaResolver, visionAnalyzer, new JsonUtils(new ObjectMapper()));
 
         when(chatSessionService.requireOwned(anyLong(), anyLong())).thenReturn(new ChatSession());
         when(registry.hasOverrides(SceneCode.CHAT)).thenReturn(false);
@@ -180,7 +194,7 @@ class ChatCompletionServiceTest {
         assertEquals(1, events.size());
         assertEquals("done", events.get(0).event());
         assertTrue(payload(events.get(0)).contains("上一次的完整回答"), payload(events.get(0)));
-        verify(registry, never()).client(any());
+        verify(registry, never()).textClient();
     }
 
     @Test
@@ -200,7 +214,86 @@ class ChatCompletionServiceTest {
                 any(), any(), any(), anyInt());
     }
 
+    // ---------- 图片轮次（两阶段）----------
+
+    @Test
+    void 图片轮次应先识别再回答且描述回填在助手消息落库之后() {
+        useImageTarget(IMAGE_MEDIA_ID);
+        when(ownedMediaResolver.require(IMAGE_MEDIA_ID, USER_ID, MediaBizType.CHAT_IMAGE))
+                .thenReturn(imageMedia(IMAGE_MEDIA_ID));
+        when(visionAnalyzer.describe(any(MediaFile.class), any())).thenReturn("一碗牛肉面，汤面，份量约一碗");
+        useModelCapturing(Flux.just(textChunk("碳水偏高")));
+
+        List<ServerSentEvent<byte[]>> events = collect();
+
+        // 阶段 1 按「本轮那条图片消息」识别
+        verify(visionAnalyzer).describe(any(MediaFile.class), any());
+        // 阶段 2 拿到的用户消息里带着描述（文本模型不会直接看到图片）
+        assertEquals(1, capturedPrompts.size());
+        assertTrue(capturedPrompts.get(0).getContents().contains("一碗牛肉面"),
+                "阶段 2 的用户消息应包含图片描述：" + capturedPrompts.get(0).getContents());
+        // 描述回填到图片消息那一行本身
+        verify(chatMessageMapper).updateMediaCaption(TARGET_MSG_ID, "一碗牛肉面，汤面，份量约一碗");
+        assertEquals("done", events.get(events.size() - 1).event());
+
+        // 时序：回填必须发生在助手消息落库之后。
+        // 若提前回填，记忆装配会在图片消息上回放摘要，而阶段 2 的当前消息里又带着同一份描述，
+        // 模型会连着看到两遍、白花 token——这条断言就是防这个。
+        InOrder inOrder = inOrder(chatMessageService, chatMessageMapper);
+        inOrder.verify(chatMessageService).appendAssistantMessage(anyLong(), anyLong(), anyLong(),
+                anyString(), anyString(), any(), any(), any(), anyInt());
+        inOrder.verify(chatMessageMapper).updateMediaCaption(eq(TARGET_MSG_ID), anyString());
+    }
+
+    @Test
+    void 本轮已生成过回复时不应再调用视觉模型() {
+        useImageTarget(IMAGE_MEDIA_ID);
+        ChatMessage generated = new ChatMessage();
+        generated.setId(99L);
+        generated.setReplyToMsgId(TARGET_MSG_ID);
+        generated.setContentText("上一次的完整回答");
+        when(chatMessageMapper.selectAssistantReply(SESSION_ID, TARGET_MSG_ID)).thenReturn(generated);
+
+        List<ServerSentEvent<byte[]>> events = collect();
+
+        assertEquals(1, events.size());
+        assertEquals("done", events.get(0).event());
+        // 关键：视觉识别又慢又花钱，幂等判断必须挡在它前面，否则前端每重试一次就重识别一次
+        verifyNoInteractions(visionAnalyzer);
+        verifyNoInteractions(ownedMediaResolver);
+    }
+
+    @Test
+    void 文本轮次不应触碰视觉模型也不回填描述() {
+        useModel(Flux.just(textChunk("你好")));
+
+        collect();
+
+        verifyNoInteractions(visionAnalyzer);
+        verifyNoInteractions(ownedMediaResolver);
+        verify(chatMessageMapper, never()).updateMediaCaption(anyLong(), anyString());
+    }
+
     // ---------- 辅助 ----------
+
+    private void useImageTarget(Long mediaId) {
+        ChatMessage target = new ChatMessage();
+        target.setId(TARGET_MSG_ID);
+        target.setSessionId(SESSION_ID);
+        target.setMsgRole(CodeEnum.ChatMsgRole.USER.getCode());
+        target.setMsgType(CodeEnum.ChatMsgType.IMAGE.getCode());
+        target.setMediaId(mediaId);
+        when(chatMessageMapper.selectById(TARGET_MSG_ID)).thenReturn(target);
+    }
+
+    private static MediaFile imageMedia(Long id) {
+        MediaFile media = new MediaFile();
+        media.setId(id);
+        media.setStorageKey("4/2026/09/1/abc.jpg");
+        media.setMimeType("image/jpeg");
+        media.setSizeBytes(2048L);
+        return media;
+    }
 
     private List<ServerSentEvent<byte[]>> collect() {
         return service.complete(USER_ID, SESSION_ID, request()).collectList().block();
@@ -224,13 +317,33 @@ class ChatCompletionServiceTest {
             public ChatResponse call(Prompt prompt) {
                 throw new UnsupportedOperationException("本用例只走流式");
             }
-
             @Override
             public Flux<ChatResponse> stream(Prompt prompt) {
                 return stream;
             }
         };
-        when(registry.client(SceneCode.CHAT)).thenReturn(ChatClient.builder(fakeModel).build());
+        when(registry.textClient()).thenReturn(ChatClient.builder(fakeModel).build());
+    }
+
+    /**
+     * 与 {@link #useModel} 相同，但把送进模型的 Prompt 记下来。
+     * 两阶段的关键断言是「阶段 2 的用户消息里到底有没有那段图片描述」，
+     * 而这件事只能从 Prompt 上看到——助手消息落的是模型输出，不是输入。
+     */
+    private void useModelCapturing(Flux<ChatResponse> stream) {
+        ChatModel fakeModel = new ChatModel() {
+            @Override
+            public ChatResponse call(Prompt prompt) {
+                throw new UnsupportedOperationException("本用例只走流式");
+            }
+
+            @Override
+            public Flux<ChatResponse> stream(Prompt prompt) {
+                capturedPrompts.add(prompt);
+                return stream;
+            }
+        };
+        when(registry.textClient()).thenReturn(ChatClient.builder(fakeModel).build());
     }
 
     private static ChatResponse textChunk(String text) {

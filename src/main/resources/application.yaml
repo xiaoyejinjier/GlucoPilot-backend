@@ -142,15 +142,42 @@ ai:
   tools:
     allow-list: []
 
+  # ---------------------------------------------------------------------------
+  # 视觉（多模态）provider：阿里云百炼 qwen-vl，走 OpenAI 兼容协议（接口 2.24 msgType=2）。
+  # enabled=false 时视觉场景继续抛业务异常，**绝不回落到文本模型**。
+  # 凭据只放 application-local.yaml（已 gitignore）或环境变量，禁止写进本文件。
+  # 注意：这里不是 spring.ai.openai.* —— 本模块刻意不引该 starter，
+  # 写在那里不会有任何自动装配去读（详见 AIProperties.VisionProperties 注释）。
+  # ---------------------------------------------------------------------------
+  vision:
+    # 刻意写字面量 false，不写成 ${AI_VISION_ENABLED:false}：
+    # 类型化属性（boolean / int）拿到未解析的 ${...} 字面量会直接绑定失败，
+    # 而 AiPropertiesBindingTest 用的正是「不解析占位符」的原始 YAML 加载器。
+    # 需要开启时用环境变量 AI_VISION_ENABLED=true —— 环境变量优先级高于本文件，
+    # 由 relaxed binding 映射到 ai.vision.enabled，@ConditionalOnProperty 也读得到。
+    enabled: false
+    base-url: ${AI_VISION_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    api-key: ${AI_VISION_API_KEY:}
+    model: ${AI_VISION_MODEL:qwen-vl-max}
+    max-tokens: 512
+    temperature: 0.2
+    # 单张图片原始字节上限（5MB）：超限直接拒绝，避免把超大图塞进 base64 请求
+    max-image-bytes: 5242880
+    timeout-seconds: 60
+
   scenes:
     # 纯文本对话（接口 2.23 / 2.24 / 2.25）：当前唯一已实现的场景
     chat:
       prompt: prompts/chat/system.md
       version: v1
 
-    # 对话内发图片（接口 2.24 msgType=2）：视觉模型识别后交给文本模型组织回答
+    # 对话内发图片（接口 2.24 msgType=2）的**阶段 1**：视觉模型看图，产出一段客观描述。
+    # 阶段 2（组织回答）复用下面的 chat 场景——它本质就是一次普通对话，因此本场景
+    # 只持有「看图描述」这一份提示词，不需要第二阶段的提示词，SceneCode 也无须新增场景。
+    # 提示词刻意要求「只描述、不回答」：它的产物是中间产物，既进阶段 2 的上下文，
+    # 也会回填 chat_message.media_caption 进入会话记忆。
     chat-image:
-      prompt: prompts/chat/system.md
+      prompt: prompts/chat-image/analyze.md
       version: v1
 
     # 饮食分析 / 拍照估糖（接口 2.20）：需要视觉模型；估算营养与血糖影响属于推理任务，单独开思维链

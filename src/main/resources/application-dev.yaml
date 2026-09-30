@@ -16,3 +16,18 @@ logging:
     # 单独压掉 Mapper 日志：MyBatis 的 DEBUG 会把 SQL 参数（含用户对话原文、健康数据）整条打进日志。
     # 排查 SQL 时临时调到 DEBUG 即可，不要长期打开。
     com.threadfit.glucopilot.ai.business.chat.mapper: INFO
+
+# ---------------------------------------------------------------------------
+# 对象存储（dev = 本地 MinIO mock）。完整入库流程必须走完：凭证 → 直传 → 登记 → 去重。
+# 前置：本机需先起 MinIO 并**手工创建桶**（代码不会自动建桶）。
+# ⚠️ MinioObjectStorageService.resolvePublicUrl 返回不带签名的直链
+#    （endpoint/bucket/storageKey），所以 dev 桶必须允许匿名读，否则小程序加载图片会 401/403。
+# prod 走阿里云 OSS，见 application-prod.yaml。
+# ---------------------------------------------------------------------------
+glucopilot:
+  storage:
+    provider: minio
+    endpoint: http://localhost:9000
+    access-key: minioadmin
+    secret-key: minioadmin
+    bucket: glucopilot-dev

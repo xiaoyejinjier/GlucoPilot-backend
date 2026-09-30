@@ -54,6 +54,19 @@
             <artifactId>spring-ai-starter-model-deepseek</artifactId>
         </dependency>
 
+        <!-- 视觉 provider（阿里云百炼 qwen-vl，走 OpenAI 兼容协议）。
+             ⚠️ 刻意引**库**而不是 spring-ai-starter-model-openai，两个原因：
+             1) starter 会带来第二套自动装配，而 ChatClientAutoConfiguration 是按「单个 ChatModel」
+                注入的，上下文里一旦出现第二个 ChatModel Bean 就会因候选不唯一启动失败；
+             2) 2.0.1 已不再提供 OpenAiApi，客户端要用官方 SDK 的 ClientOptions + SpringAiOpenAiHttpClient
+                手工构造（见 AiVisionClientConfig），starter 那套属性绑定反而用不上。
+             只借它的 OpenAiChatModel 实现，容器里始终只有一个 ChatModel。
+             同时必须给两个 ChatClient Bean 补 @Qualifier，否则注入点歧义。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai</artifactId>
+        </dependency>
+
         <!-- ==================== Spring 基础 ==================== -->
 
         <!-- REST API / Spring MVC -->

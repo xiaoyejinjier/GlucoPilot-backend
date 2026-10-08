@@ -136,11 +136,12 @@ ai:
       - 调整用药
     # failure-response 留空则使用代码内置话术（引导就医 + 免责声明）
 
-  # 工具白名单：只注册显式登记的工具，绝不做包扫描。
-  # 当前为空 —— 领域模块（血糖/饮食/档案）尚未实现，没有可查的数据源，
-  # 因此模型不会收到任何工具（见 AiToolRegistry）。
+  # 工具白名单：只注册显式登记的工具，绝不做包扫描（见 AiToolRegistry / AiToolConfig）。
+  # 名字必须与 @Tool(name=...) 完全一致；配了名字却没有对应 Bean 会在启动时 WARN。
+  # 需要临时关闭全部工具时把 allow-list 置空即可（allow-list: []）。
   tools:
-    allow-list: []
+    allow-list:
+      - query_glucose_range
 
   # ---------------------------------------------------------------------------
   # 视觉（多模态）provider：阿里云百炼 qwen-vl，走 OpenAI 兼容协议（接口 2.24 msgType=2）。

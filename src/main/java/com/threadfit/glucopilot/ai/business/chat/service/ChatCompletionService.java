@@ -7,6 +7,7 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.tool.AiToolContext;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
@@ -31,6 +32,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * AI 流式补全（对应接口 2.25）。
@@ -127,6 +129,9 @@ public class ChatCompletionService {
         ChatClient.ChatClientRequestSpec promptSpec = chatClientRegistry.textClient()
                 .prompt()
                 .advisors(advisors -> advisors.param(ChatMemory.CONVERSATION_ID, sessionId.toString()))
+                // 工具上下文：当前用户身份由服务端注入，模型看不到也伪造不了。
+                // 缺了这一步，工具一旦被调用就会因取不到 userId 而失败（见 AiToolContext）。
+                .toolContext(Map.of(AiToolContext.USER_ID, userId))
                 .user(input.promptText());
         if (chatClientRegistry.hasOverrides(SceneCode.CHAT)) {
             promptSpec = promptSpec.options(chatClientRegistry.optionsBuilder(SceneCode.CHAT));

@@ -10,6 +10,7 @@ import io.minio.GetObjectArgs;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.StatObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -53,6 +54,11 @@ public class MinioObjectStorageService implements ObjectStorageService {
                     .expireIn((long) EXPIRE_SECONDS)
                     .build();
         } catch (Exception e) {
+            // 必须留痕：这里失败的真实原因通常是「MinIO 容器没起 / 端口不通 / 桶不存在」，
+            // 而对外只能给一句「生成上传凭证失败」。若没有日志，现场就只剩那句话，
+            // 排查会直接往错的方向找（本项目真实发生过：容器没启动，却被当成存储代码有问题）。
+            log.warn("MinIO 生成上传凭证失败 bucket={} endpoint={} key={}",
+                    props.getBucket(), props.getEndpoint(), storageKey, e);
             throw new BizException(ErrorCode.INTERNAL_ERROR, "生成上传凭证失败");
         }
     }
@@ -70,7 +76,16 @@ public class MinioObjectStorageService implements ObjectStorageService {
                     .object(storageKey)
                     .build());
             return true;
+        } catch (ErrorResponseException e) {
+            // 「对象不存在」是正常业务结果（2.15 登记校验时经常命中），压到 DEBUG 免得刷屏
+            log.debug("MinIO statObject 未命中 bucket={} key={}", props.getBucket(), storageKey, e);
+            return false;
         } catch (Exception e) {
+            // 连不上 MinIO 也会走到这里，而本方法只能返回 false。
+            // 于是「存储不可达」在上层会被解释成「你传的文件不存在」——方向完全错，
+            // 所以这一类必须留下 WARN，否则真实原因不可见。
+            log.warn("MinIO statObject 异常（存储不可达？）bucket={} endpoint={} key={}",
+                    props.getBucket(), props.getEndpoint(), storageKey, e);
             return false;
         }
     }

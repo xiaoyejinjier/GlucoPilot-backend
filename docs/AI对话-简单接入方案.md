@@ -1095,6 +1095,78 @@ OpenAiChatModel.builder()
 `qwen-image-edit-*`、`qwen-image-*`、`wan*-image-*` 都是生成类，无法用于看图理解；
 可用的是 `qwen3-vl-plus` / `qwen3-vl-flash` / `qwen-vl-max` / `qwen-vl-plus`（OCR 场景另有 `qwen-vl-ocr`）。
 
+---
+
+# 21. 工具层（Function Calling）落地：骨架 + 第一个工具（2026-10-08）
+
+工具层从「只有白名单机制、一个工具都没有」变成「骨架 + 第一个可用工具」。§15 里那句
+「实现第一个真实工具时，必须先用『假 ChatModel 返回 tool_calls 回合』的测试确认工具确实被调用」
+已经兑现——而且**那个测试当场就抓出了三个问题**，见 21.3。
+
+## 21.1 交付内容
+
+| 文件 | 作用 |
+| --- | --- |
+| `ai/tool/AiToolContext.java` | `toolContext` 的键与取值约定：当前用户身份**由服务端注入**，模型看不到也伪造不了 |
+| `ai/tool/GlucoseQueryTools.java` | 第一个工具 `query_glucose_range`（血糖区间查询） |
+| `ai/config/AiToolConfig.java` | 每个工具类注册成一个 `ToolCallbackProvider` Bean |
+| `ai/tool/AiToolRegistry.java` | 汇总两条来源（Provider + 单个 Callback）后按 `ai.tools.allow-list` 过滤 |
+| `ChatCompletionService` | 每轮请求注入 `.toolContext(Map.of(AiToolContext.USER_ID, userId))` |
+| `application.yaml` | `ai.tools.allow-list: [query_glucose_range]` |
+| `prompts/chat/system.md` | 「工具调用规范」补上具体的调用时机与参数口径 |
+
+## 21.2 三条工具设计约束
+
+1. **用户身份绝不作为模型可见参数**。所有可作工具的领域方法第一个参数都是 `userId`，
+   暴露给模型就等于把越权入口交出去。正确做法是服务端注入 + 工具从 `ToolContext` 取。
+2. **返回值是裁剪后的 JSON，不是实体/DTO**。直接回传 `GlucoseRecord` 会带上 userId、
+   逻辑删除标记等无关字段——既费 token 又是不必要的信息暴露。
+3. **输入类错误走返回值（`{"error": ...}`），运行期异常不吞**。前者让模型能自行修正参数后重试；
+   后者（如数据源异常）记 ERROR 并回一句可读错误，避免把整轮对话打成 500。
+
+## 21.3 只有实测才能得到的四个事实（都很贵）
+
+**① 工具能否生效取决于模型的 `getDefaultOptions()` / `getOptions()` 是否返回 tool-calling 类型。**
+工具回调是经由 `ToolCallingChatOptions` 进入请求的，而 options 的基类来自 ChatModel。
+假模型若不覆写这两个方法，prompt 的 options 会退化成 `DefaultChatOptions`，于是
+`ToolCallingManager` 拿不到任何工具回调——**模型只被调用一次、答复为空、不报任何错**。
+    - 覆写 `getDefaultOptions()` **不够**，还要覆写 `getOptions()`（实测：只覆写前者仍然不生效）。
+    - 真实 provider 没这个问题：`DeepSeekChatOptions implements ToolCallingChatOptions`（已核实）。
+
+**② 缺 `toolContext` 时框架会明确报错，不会静默。**
+`IllegalArgumentException: ToolContext is required by the method as an argument`。
+这说明 `ChatCompletionService` 里那行 `.toolContext(...)` 是**承重的**——少了它，凡是触发工具的问题
+都会把整轮请求打成异常。相比"静默返回空答复"，明确抛错显然更好，所以保留框架行为、用测试守住。
+
+**③ 不能用 `Prompt.getContents()` 断言"工具结果被回喂"。**
+它只拼接消息的**文本**，而工具结果是 `ToolResponseMessage`，内容不在其中——会误判成"没回喂"。
+要断言就遍历 `getInstructions()`。
+
+**④ 模型不知道今天是几号。**
+实测：用户问"我这周血糖怎么样"，模型回答"请问您方便告诉我「这周」的具体日期范围吗"——
+它无法把"这周"换算成日期，于是**不调用工具**，反过来问用户。这在真实使用里体验很差。
+解法是让**知道日期的服务端**承担换算：工具增加可选的 `days` 参数（「这周」=7），
+并在提示词里明确"不要反问日期范围，直接用 days 调用"。
+改完后实测模型正确调用：`工具 query_glucose_range 执行 userId=16 2026-10-02~2026-10-08 命中 0 条`，
+且命中 0 条时如实回答"没有任何记录"、没有编造数值。
+
+## 21.4 新增工具的步骤
+
+1. 写带 `@Tool(name=..., description=...)` 的组件，方法参数用 `@ToolParam` 描述；用户身份从 `ToolContext` 取；
+2. 在 `AiToolConfig` 里加一个 `ToolCallbackProvider` Bean；
+3. 在 `ai.tools.allow-list` 登记方法名（必须与 `@Tool(name=...)` 完全一致，否则启动时会 WARN）。
+
+## 21.5 本轮顺带发现的问题（未处理，待决策）
+
+1. **Spring MVC 异步执行器告警**：日志出现
+   `Performing asynchronous handling through the default Spring MVC SimpleAsyncTaskExecutor.
+   This executor is not suitable for production use under load. Please, configure an AsyncTaskExecutor`。
+   即接口 2.25 的 SSE 路径在生产负载下会用"每请求新建线程"的默认执行器，**需要配置 AsyncTaskExecutor**。
+   这是 SSE 改为返回 `Flux` 之后才引入的（§17），与工具无关但影响生产可用性。
+2. **回复里偶发英文开头**：实测某次回复以 `I'll check your blood glucose records for the past week.`
+   起头再转中文。属于模型行为，可通过提示词「始终使用中文回答」缓解。
+
+
 
 
 

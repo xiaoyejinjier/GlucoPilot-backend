@@ -65,8 +65,15 @@ public final class RequestContext {
         return holder == null ? null : holder.clientIp;
     }
 
+    /**
+     * 与 user_session.user_agent / ops_session.user_agent 的列长度保持一致。
+     * User-Agent 是不可信输入，且微信开发者工具等环境可能非常长，入口即截断，
+     * 避免「登录写 session 时 Data too long」这类与业务无关的 500。
+     */
+    public static final int USER_AGENT_MAX_LENGTH = 512;
+
     public static void setUserAgent(String userAgent) {
-        current().userAgent = userAgent;
+        current().userAgent = truncate(userAgent, USER_AGENT_MAX_LENGTH);
     }
 
     public static String getUserAgent() {
@@ -106,6 +113,13 @@ public final class RequestContext {
             HOLDER.set(holder);
         }
         return holder;
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max);
     }
 
     private static final class Holder {

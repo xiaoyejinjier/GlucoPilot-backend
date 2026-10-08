@@ -31,6 +31,28 @@ public interface ObjectStorageService {
     /** 对象是否已存在（HEAD）。 */
     boolean objectExists(String storageKey);
 
+    /**
+     * 读取对象的完整字节（<b>服务端读取</b>，不产生也不依赖公开 URL）。
+     * <p>
+     * 用途：需要把对象内容本身交给下游处理的场景——当前是「把聊天图片送给视觉模型」。
+     * 之所以要有这个方法，是因为另外两条路都走不通：
+     * <ul>
+     *   <li>把 {@link #resolvePublicUrl} 的结果交给模型服务：开发环境的 endpoint 是
+     *       {@code http://localhost:9000}，第三方服务器根本回连不到这台机器；</li>
+     *   <li>生产即便是公网可达的 OSS 地址：那也等于把用户健康图片的地址暴露给第三方，
+     *       且与本接口「桶私有，禁止匿名下载」的契约相冲突。</li>
+     * </ul>
+     * 因此图片以 base64 随请求体发送，走服务端读取这条路。
+     * <p>
+     * <b>本方法不做大小限制</b>：调用方应先用 {@code media_file.size_bytes} 判断再调用，
+     * 不要无脑把一个 20MB 的对象读进内存。
+     *
+     * @param storageKey {@link #buildStorageKey} 生成的对象 Key
+     * @return 对象字节
+     * @throws com.threadfit.glucopilot.common.exception.BizException 对象不存在或读取失败
+     */
+    byte[] getObject(String storageKey);
+
     /** 当前实现对应的 provider 落库值。 */
     StorageProvider provider();
 

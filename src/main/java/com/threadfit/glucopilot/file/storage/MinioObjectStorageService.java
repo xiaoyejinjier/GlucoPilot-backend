@@ -6,16 +6,21 @@ import com.threadfit.glucopilot.common.enums.CodeEnum.StorageProvider;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.file.config.StorageProperties;
 import com.threadfit.glucopilot.file.vo.FileVos.UploadCredential;
+import io.minio.GetObjectArgs;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.StatObjectArgs;
 import io.minio.http.Method;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+
+import java.io.InputStream;
 
 /**
  * 开发 MinIO mock（provider=minio）。完整入库流程，不跳过。
  */
+@Slf4j
 @Service
 @ConditionalOnProperty(prefix = "glucopilot.storage", name = "provider", havingValue = "minio")
 public class MinioObjectStorageService implements ObjectStorageService {
@@ -73,5 +78,19 @@ public class MinioObjectStorageService implements ObjectStorageService {
     @Override
     public StorageProvider provider() {
         return StorageProvider.MINIO;
+    }
+
+    @Override
+    public byte[] getObject(String storageKey) {
+        try (InputStream in = minioClient.getObject(GetObjectArgs.builder()
+                .bucket(props.getBucket())
+                .object(storageKey)
+                .build())) {
+            return in.readAllBytes();
+        } catch (Exception e) {
+            // 读失败必须留下痕迹：这是「图片送模型」链路里最难定位的一环（成功路径无日志）
+            log.warn("MinIO 读取对象失败 bucket={} key={}", props.getBucket(), storageKey, e);
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+        }
     }
 }

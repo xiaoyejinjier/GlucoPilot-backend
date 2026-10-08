@@ -1,8 +1,0 @@
-# 开发环境：本地 MinIO mock（完整入库流程：凭证→直传→登记→去重，不得跳过）。
-glucopilot:
-  storage:
-    provider: minio
-    endpoint: http://localhost:9000
-    access-key: minioadmin
-    secret-key: minioadmin
-    bucket: glucopilot-dev

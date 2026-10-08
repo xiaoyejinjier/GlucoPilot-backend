@@ -1,8 +1,15 @@
+# 通用配置（任意 profile 都生效）。
+# profile 约定：
+#   application.yaml        公共配置 + 本机默认可跑通的默认值
+#   application-dev.yaml    开发环境差异（profile=dev）
+#   application-local.yaml  个人密钥/口令，已 gitignore，禁止入库（profile=local）
+# 没显式指定 profile 时（IDE 直接 Run、java -jar 不带参数）默认激活 dev,local，
+# 保证开箱即用；生产用 --spring.profiles.active=prod 显式覆盖即可。
 spring:
   application:
     name: GlucoPilot Backend
   profiles:
-    default: dev
+    default: dev,local
 
   datasource:
     # 开发、测试和生产均连接团队统一部署的 MySQL；禁止在代码中写入服务器地址或密码。
@@ -28,6 +35,46 @@ spring:
     # 空库：执行 V1→V3；已有表且无 flyway_schema_history：自动 baseline 到 3，避免重复建表/插种子
     baseline-on-migrate: true
     baseline-version: 3
+  mvc:
+    async:
+      # SSE 流式补全（接口 2.25）的异步请求超时。
+      # 2.25 改为返回 Flux 之后，超时不再由代码里的 new SseEmitter(timeout) 决定，而是走这个属性；
+      # 不配置则落到容器默认值（Tomcat 通常 30s），等于把原来的 60s 悄悄改小。
+      request-timeout: 60s
+  ai:
+    # 显式声明生效的聊天 provider。
+    # 原因：各 provider 的自动装配条件都是
+    # @ConditionalOnProperty(name="spring.ai.model.chat", havingValue="<provider>", matchIfMissing=true)，
+    # 引入第二个 provider（如接入多模态）后若不显式指定，两者会争抢同一个 ChatModel Bean。
+    model:
+      chat: deepseek
+    deepseek:
+      api-key: ${deepseek.apiKey}
+      chat:
+        # 官方枚举名（DeepSeekApi.ChatModel.DEEPSEEK_V4_FLASH = "deepseek-v4-flash"）。
+        # 此前用的是不在枚举内的 "deepseek-flash"，实测可通但不规范，2026-09-23 统一为官方名。
+        model: deepseek-v4-flash
+        # deepseek-v4-flash 是推理模型：默认会先输出一大段思维链。
+        # 实测同一问题：默认 7737ms / 426 tokens，关掉后 2293ms / 51 tokens，正文质量无肉眼差异。
+        # 需要推理能力的场景（饮食分析、血糖识别）由 ai.scenes.<scene>.thinking 按场景单独开启。
+        thinking:
+          type: disabled
+        # 兜底：思维链会吃光 max_tokens，设太小会出现 content 为空 + finish_reason=length
+        max-tokens: 2048
+    # 模型调用的自动重试（DeepSeekChatModel 内部持有 RetryTemplate，真的会重试）。
+    # 默认值 max-attempts=10、backoff 初始 2s × 5 倍，与本模块 60s 的 SSE 超时叠加后，
+    # 上游 5xx 时用户会长时间「正在思考」然后一次性拿到 error。这里显式收紧。
+    retry:
+      max-attempts: 3
+      on-client-errors: false
+      backoff:
+        initial-interval: 1s
+        multiplier: 2
+    tools:
+      limits:
+        # 工具调用护栏：超过上限直接抛异常，避免模型陷入反复调用的死循环（当前未注册工具，先立好规矩）
+        max-total-tool-calls: 8
+        on-limit-exceeded: throw
 
 server:
   port: 8080
@@ -54,3 +101,98 @@ management:
     web:
       exposure:
         include: health,info
+
+
+# ---------------------------------------------------------------------------
+# AI 模块业务编排（前缀 ai）
+# 与 spring.ai.* 的分工：spring.ai.* 管 provider 与框架行为；ai.* 管本项目的
+# 场景 → 提示词/参数、记忆窗口、医疗安全词、工具白名单。
+#
+# 场景是 AI 模块的组织单位（见 SceneCode）：对话 / 对话内图片 / 饮食分析 / 血糖识别。
+# 场景里 model-code、temperature、max-tokens、thinking 都是**可选覆盖**，
+# 不写就继承上面的 spring.ai.deepseek.chat.* ，避免同一份参数维护两处。
+# ---------------------------------------------------------------------------
+ai:
+  # 会话记忆窗口：送入模型的最近原文消息条数（与 chat_session.window_msg_count 语义一致）
+  memory:
+    window-messages: 20
+    max-fetch: 200
+
+  # 医疗安全硬拦截：命中敏感词的请求不会发给模型，直接返回固定话术。
+  # 提示词里的合规约束是软约束（模型可能不遵守），这里是硬约束。
+  # 词表保持聚焦：不要放单字「药」，否则「二甲双胍能吃吗」这类正常科普问题也会被拦掉。
+  guard:
+    enabled: true
+    sensitive-words:
+      - 吃几片
+      - 吃几粒
+      - 剂量
+      - 加量
+      - 减量
+      - 停药
+      - 换药
+      - 开药
+      - 胰岛素用量
+      - 调整用药
+    # failure-response 留空则使用代码内置话术（引导就医 + 免责声明）
+
+  # 工具白名单：只注册显式登记的工具，绝不做包扫描。
+  # 当前为空 —— 领域模块（血糖/饮食/档案）尚未实现，没有可查的数据源，
+  # 因此模型不会收到任何工具（见 AiToolRegistry）。
+  tools:
+    allow-list: []
+
+  # ---------------------------------------------------------------------------
+  # 视觉（多模态）provider：阿里云百炼 qwen-vl，走 OpenAI 兼容协议（接口 2.24 msgType=2）。
+  # enabled=false 时视觉场景继续抛业务异常，**绝不回落到文本模型**。
+  # 凭据只放 application-local.yaml（已 gitignore）或环境变量，禁止写进本文件。
+  # 注意：这里不是 spring.ai.openai.* —— 本模块刻意不引该 starter，
+  # 写在那里不会有任何自动装配去读（详见 AIProperties.VisionProperties 注释）。
+  # ---------------------------------------------------------------------------
+  vision:
+    # 刻意写字面量 false，不写成 ${AI_VISION_ENABLED:false}：
+    # 类型化属性（boolean / int）拿到未解析的 ${...} 字面量会直接绑定失败，
+    # 而 AiPropertiesBindingTest 用的正是「不解析占位符」的原始 YAML 加载器。
+    # 需要开启时用环境变量 AI_VISION_ENABLED=true —— 环境变量优先级高于本文件，
+    # 由 relaxed binding 映射到 ai.vision.enabled，@ConditionalOnProperty 也读得到。
+    enabled: false
+    base-url: ${AI_VISION_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    api-key: ${AI_VISION_API_KEY:}
+    model: ${AI_VISION_MODEL:qwen-vl-max}
+    max-tokens: 512
+    temperature: 0.2
+    # 单张图片原始字节上限（5MB）：超限直接拒绝，避免把超大图塞进 base64 请求
+    max-image-bytes: 5242880
+    timeout-seconds: 60
+
+  scenes:
+    # 纯文本对话（接口 2.23 / 2.24 / 2.25）：当前唯一已实现的场景
+    chat:
+      prompt: prompts/chat/system.md
+      version: v1
+
+    # 对话内发图片（接口 2.24 msgType=2）的**阶段 1**：视觉模型看图，产出一段客观描述。
+    # 阶段 2（组织回答）复用下面的 chat 场景——它本质就是一次普通对话，因此本场景
+    # 只持有「看图描述」这一份提示词，不需要第二阶段的提示词，SceneCode 也无须新增场景。
+    # 提示词刻意要求「只描述、不回答」：它的产物是中间产物，既进阶段 2 的上下文，
+    # 也会回填 chat_message.media_caption 进入会话记忆。
+    chat-image:
+      prompt: prompts/chat-image/analyze.md
+      version: v1
+
+    # 饮食分析 / 拍照估糖（接口 2.20）：需要视觉模型；估算营养与血糖影响属于推理任务，单独开思维链
+    meal-analysis:
+      prompt: prompts/meal-analysis/system.md
+      version: v1
+      variables:
+        - foodText
+      temperature: 0.2
+      thinking: true
+
+    # 血糖仪读数识别（接口 2.21 / 2.22）：需要视觉模型；要求稳定不发挥，温度取低
+    ocr-glucose:
+      prompt: prompts/ocr-glucose/system.md
+      version: v1
+      temperature: 0
+      thinking: false
+

@@ -20,6 +20,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
                 "com.threadfit.glucopilot.auth.mapper",
                 "com.threadfit.glucopilot.ruoyi.mapper",
                 "com.threadfit.glucopilot.content.mapper",
+//                "com.threadfit.glucopilot.device.mapper",
+                "com.threadfit.glucopilot.ai.business.chat.mapper",
                 "com.threadfit.glucopilot.food.mapper",
                 "com.threadfit.glucopilot.glucose.mapper",
                 "com.threadfit.glucopilot.user.mapper",

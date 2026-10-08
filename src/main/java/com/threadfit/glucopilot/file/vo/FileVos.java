@@ -1,7 +1,9 @@
 package com.threadfit.glucopilot.file.vo;
 
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 public final class FileVos {
 
@@ -21,6 +23,8 @@ public final class FileVos {
     /** 登记接口出参：{ id, fileUrl }。 */
     @Data
     @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class MediaFileRegisterResult {
         private String id;
         private String fileUrl;

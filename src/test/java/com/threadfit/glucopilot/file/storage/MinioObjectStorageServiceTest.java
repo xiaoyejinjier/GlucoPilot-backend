@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * MinIO 集成测试（dev mock，完整入库流程不跳过）。
  *
- * <p>前置条件：本地 MinIO 运行在 {@code http://localhost:9000}（minioadmin/minioadmin），
+ * 前置条件：本地 MinIO 运行在 {@code http://localhost:9000}（admin/admin123456），
  * 桶 {@code glucopilot-dev}。未运行时测试自动跳过，不阻塞本地单元测试 / CI。
  */
 class MinioObjectStorageServiceTest {
@@ -43,13 +43,13 @@ class MinioObjectStorageServiceTest {
         StorageProperties props = new StorageProperties();
         props.setProvider("minio");
         props.setEndpoint(ENDPOINT);
-        props.setAccessKey("minioadmin");
-        props.setSecretKey("minioadmin");
+        props.setAccessKey("admin");
+        props.setSecretKey("admin123456");
         props.setBucket(BUCKET);
 
         MinioClient client = MinioClient.builder()
                 .endpoint(ENDPOINT)
-                .credentials("minioadmin", "minioadmin")
+                .credentials("admin", "admin123456")
                 .build();
 
         boolean reachable;

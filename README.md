@@ -1,22 +1,40 @@
 # GlucoPilot Backend
 
-Spring Boot 4 / Java 21 服务端。提供用户端 `/api/v1/**`、管理端 `/admin/v1/**` 与设备血糖同步接口，统一返回 `ApiResponse`。
+官方若依多模块后端，Spring Boot 4.1.1 / Java 21。现有用户端 /api/v1 与管理端 /admin/v1 路径、界面和 ApiResponse 契约保持。
 
-## 配置
+## 构建与启动
 
-MySQL 和 Redis 由远程环境统一部署。运行前在仓库根目录复制 `.env.example` 为 `.env`，将环境变量注入 IDE、Shell 或容器；不要把真实连接信息写入 `application.yaml`。
+在本目录执行（需 Maven 3.9+）：
 
 ```bash
-./mvnw test
-./mvnw spring-boot:run
+mvn test
+mvn package
+java -jar ruoyi-admin/target/ruoyi-admin.jar --spring.profiles.active=dev,local
 ```
 
-## 容器
+IDE 运行入口为 com.ruoyi.RuoYiApplication。公共配置和 Flyway 文件在 glucopilot-business/src/main/resources；个人配置放该目录的 application-local.yaml（Git 忽略），或注入环境变量。Shell/IDE 不会自动读取仓库根 .env；Docker Compose 会读取。必须配置 MySQL、Redis、至少 64 字节的 OPS_TOKEN_SECRET、DeepSeek API Key 和需要使用的对象存储。
 
-Docker 构建上下文必须是本目录：
+官方配置类的 upstream-standalone profile 仅用于标记保留的上游实现，不能与本项目运行 profile 一起启用。
+
+## 迁移集成测试
+
+默认 mvn test 运行不依赖数据库的业务回归。完整集成测试单独启用，需要一个允许创建测试库的 MySQL 8 测试实例：
+
+```bash
+export MIGRATION_MYSQL_URL='jdbc:mysql://127.0.0.1:13306/'
+export MIGRATION_MYSQL_USERNAME=root
+# 可通过 MIGRATION_MYSQL_PASSWORD 注入测试实例密码，禁止提交。
+mvn verify -Pmigration-it
+```
+
+测试只在随机 gp_ruoyi_it_* 新库执行 V1–V9、写入测试数据、再执行 V10，结束删除此测试库。Redis 使用 test scope 的 embedded-redis 在随机端口启动并关闭；不会连接部署 Redis。未设置 MIGRATION_MYSQL_URL 时集成测试跳过，不能据此认定迁移已验证。
+
+本机 JDK 25 在中文用户临时目录可能出现 Mockito agent 加载失败，可用 -DargLine=-Djava.io.tmpdir=C:/Windows/Temp 指向有写权限的英文临时目录。生产运行基线仍为 Java 21。
+
+## 容器
 
 ```bash
 docker build -t glucopilot-api:local .
 ```
 
-完整的 Nginx 入口和组合部署请从仓库根目录使用 `compose.server.yaml`，说明见 [`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md)。
+构建上下文固定为 backend/。唯一可执行产物是 ruoyi-admin/target/ruoyi-admin.jar。远程服务与 Nginx 部署见 [部署手册](../docs/DEPLOYMENT.md)，数据库切换见 [迁移手册](../docs/RUOYI-DATABASE-MIGRATION.md)。

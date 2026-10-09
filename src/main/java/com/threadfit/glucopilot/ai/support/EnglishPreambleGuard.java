@@ -64,33 +64,80 @@ public class EnglishPreambleGuard {
             return reply;
         }
         String prefix = reply.substring(0, cjkIndex);
-        // 条件 2/5：前缀为空或长度不在范围内 → 不管
-        if (prefix.length() < MIN_PREFIX_CHARS || prefix.length() > MAX_PREFIX_CHARS) {
+        int start = firstNonWhitespace(prefix);
+        // 条件 2：正文直接以中文开头（前缀里只有空白）→ 不管
+        if (start < 0) {
             return reply;
         }
-        String trimmed = prefix.strip();
+        // 英文部分：从第一个非空白字符到中文之前（末尾可能还带排版字符，见 englishSentenceEnd）
+        String head = prefix.substring(start);
+        // 条件 5：长度不在范围内 → 不管
+        if (head.length() < MIN_PREFIX_CHARS || head.length() > MAX_PREFIX_CHARS) {
+            return reply;
+        }
         // 条件 4：至少两个词且含英文字母
-        if (!hasAsciiLetter(trimmed) || countWords(trimmed) < 2) {
+        if (!hasAsciiLetter(head) || countWords(head) < 2) {
             return reply;
         }
-        if (endsWithEnglishTerminator(trimmed)) {
-            return reply.substring(cjkIndex).stripLeading();
+        int end = englishSentenceEnd(head);
+        if (end > 0) {
+            // 只切掉英文句子本身，保留夹在英文与中文之间的排版字符——
+            // 那两个星号是中文加粗的**开始**标记，一起删掉会让后面成对的 ** 失去配对
+            String decoration = prefix.substring(start + end);
+            return (decoration + reply.substring(cjkIndex)).stripLeading();
         }
-        if (followedByChineseTerminator(reply, cjkIndex, trimmed)) {
+        if (followedByChineseTerminator(reply, cjkIndex, head)) {
             // 英文句子是用中文句号收的尾，那个标点也要一起去掉，否则正文会以孤零零的"。"开头
             return reply.substring(cjkIndex + 1).stripLeading();
         }
         return reply;
     }
 
-    /** 条件 3（主）：前缀本身以英文句末标点收尾，且该标点不是小数点。 */
-    private static boolean endsWithEnglishTerminator(String trimmed) {
-        char last = trimmed.charAt(trimmed.length() - 1);
-        if (last != '.' && last != '?' && last != '!') {
-            return false;
+    /** 前缀里第一个非空白字符的下标；全是空白返回 -1。 */
+    private static int firstNonWhitespace(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (!Character.isWhitespace(text.charAt(i))) {
+                return i;
+            }
         }
-        // "7.7 mmol/L." 这类：末位句号前是数字，视为小数点，不当作句子结尾
-        return trimmed.length() < 2 || !Character.isDigit(trimmed.charAt(trimmed.length() - 2));
+        return -1;
+    }
+
+    /**
+     * 条件 3（主）：英文句子的结束位置（下标+1），找不到返回 -1。
+     * <p>
+     * <b>为什么不能只看最后一个字符</b>：模型的英文铺垫后面经常紧跟排版标记，实测出现过
+     * {@code "I'll check your records.**你这周（10月3日–10月9日）的血糖概况**"}——
+     * 若要求前缀以 {@code .} 结尾，这两个星号会让判定失败，英文就漏进正文了。
+     * 因此这里找的是「最后一个句末标点，且它后面只剩排版字符」。
+     * <p>
+     * 小数点仍然要排除：{@code "7.7 mmol/L"} 里的点后面是数字（不是排版字符），自然不满足条件。
+     */
+    private static int englishSentenceEnd(String head) {
+        for (int i = head.length() - 1; i >= 0; i--) {
+            char c = head.charAt(i);
+            if (c != '.' && c != '?' && c != '!') {
+                continue;
+            }
+            if (c == '.' && i > 0 && Character.isDigit(head.charAt(i - 1))) {
+                continue;
+            }
+            if (onlyDecorationAfter(head, i + 1)) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    /** 句末标点与中文之间允许出现的字符：仅排版/标点，不含字母数字。 */
+    private static boolean onlyDecorationAfter(String head, int from) {
+        for (int i = from; i < head.length(); i++) {
+            char c = head.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

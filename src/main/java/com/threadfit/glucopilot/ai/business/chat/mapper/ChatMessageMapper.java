@@ -10,8 +10,20 @@ import java.util.List;
 
 public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
 
-    /** 会话内下一个顺序号。 */
-    @Select("SELECT COALESCE(MAX(seq_no), 0) + 1 FROM chat_message WHERE session_id = #{sessionId} AND is_deleted = 0")
+    /** 客户端幂等唯一键：同会话内一个 clientMsgId 只能有一条消息。 */
+    String UK_SESSION_CLIENT = "uk_session_client_active";
+
+    /** 会话内顺序号唯一键（V10 新增）：并发插入撞号时靠它暴露冲突，应用侧重算重试。 */
+    String UK_SESSION_SEQ = "uk_session_seq";
+
+    /**
+     * 会话内下一个顺序号。
+     * <p>
+     * <b>刻意不过滤 {@code is_deleted}</b>：顺序号一旦分配就不再复用，软删除的行也占着号。
+     * 若按「未删除的行」取 MAX，删掉最大号那条之后 MAX 会回落，重算出的号会撞上已删除的行——
+     * 配合 {@code uk_session_seq} 会变成"重试永远失败"（每次重算都得到同一个号）。
+     */
+    @Select("SELECT COALESCE(MAX(seq_no), 0) + 1 FROM chat_message WHERE session_id = #{sessionId}")
     Integer selectNextSeqNo(@Param("sessionId") Long sessionId);
 
     /** 幂等回查：同会话同 clientMsgId 的用户消息。 */

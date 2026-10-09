@@ -6,11 +6,14 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
+import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
+import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import com.threadfit.glucopilot.file.entity.MediaFile;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +35,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -41,6 +46,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -88,7 +94,7 @@ class ChatCompletionServiceTest {
     void setUp() {
         service = new ChatCompletionService(registry, chatMessageMapper, chatSessionService,
                 chatMessageService, ownedMediaResolver, visionAnalyzer, new EnglishPreambleGuard(),
-                new JsonUtils(new ObjectMapper()));
+                new ChatRoundGuard(), new JsonUtils(new ObjectMapper()));
 
         when(chatSessionService.requireOwned(anyLong(), anyLong())).thenReturn(new ChatSession());
         when(registry.hasOverrides(SceneCode.CHAT)).thenReturn(false);
@@ -275,6 +281,57 @@ class ChatCompletionServiceTest {
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
                 eq("你的记录如下"), anyString(), any(), any(),
                 eq(CodeEnum.ChatFinishReason.ERROR.getCode()), anyInt());
+    }
+
+    // ---------- 并发：同一轮不能被生成两次 ----------
+
+    /**
+     * 同一条用户消息在途时，第二次请求必须被挡在<b>调模型之前</b>。
+     * <p>
+     * 实测背景：两个并发 /completions 都通过了幂等回查（那是普通快照读），各自调了一次模型
+     * （prompt_tokens 5855 + 5940），最后靠唯一键才把第二条回复挡回去——钱已经花了。
+     * 所以这里断言"连模型 client 都没取过"，而不是只看有没有落库。
+     */
+    @Test
+    void 同一轮在途时第二次请求应被拒绝且不触发模型调用() {
+        useModel(Flux.never());
+
+        assertNotNull(service.complete(USER_ID, SESSION_ID, request()));
+
+        BizException ex = assertThrows(BizException.class,
+                () -> service.complete(USER_ID, SESSION_ID, request()));
+
+        assertEquals(ErrorCode.BIZ_REJECTED, ex.getErrorCode());
+        assertEquals("这一轮正在生成中，请稍后再试", ex.getMessage());
+        verify(registry, times(1)).textClient();
+    }
+
+    /** 一轮正常结束后必须释放执行权，否则同一轮永远无法重试（比不加保护更糟）。 */
+    @Test
+    void 上一轮结束后应允许重新发起() {
+        useModel(Flux.just(textChunk("第一轮")));
+
+        service.complete(USER_ID, SESSION_ID, request()).collectList().block();
+
+        // 第二轮不应再抛"正在生成中"（此时会因为 mock 的幂等回查返回 null 而正常开流）
+        assertNotNull(service.complete(USER_ID, SESSION_ID, request()));
+    }
+
+    /** 同步阶段抛错时 Flux 还没返回、doFinally 还没挂上，必须在原地释放。 */
+    @Test
+    void 同步阶段抛错也必须释放执行权() {
+        useImageTarget(IMAGE_MEDIA_ID);
+        when(ownedMediaResolver.require(IMAGE_MEDIA_ID, USER_ID, MediaBizType.CHAT_IMAGE))
+                .thenThrow(new BizException(ErrorCode.BIZ_REJECTED, "图片文件不存在或不可用"));
+
+        BizException first = assertThrows(BizException.class,
+                () -> service.complete(USER_ID, SESSION_ID, request()));
+        assertEquals("图片文件不存在或不可用", first.getMessage());
+
+        // 关键：第二次仍然报"图片不可用"，而不是"正在生成中"——说明第一次确实释放了
+        BizException second = assertThrows(BizException.class,
+                () -> service.complete(USER_ID, SESSION_ID, request()));
+        assertEquals("图片文件不存在或不可用", second.getMessage());
     }
 
     // ---------- 图片轮次（两阶段）----------

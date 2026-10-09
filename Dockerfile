@@ -3,17 +3,14 @@
 FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 
-COPY pom.xml .
-RUN mvn -B -q dependency:go-offline
-
-COPY src ./src
-RUN mvn -B -q -DskipTests package
+COPY . .
+RUN mvn -B -q -pl ruoyi-admin -am -DskipTests package
 
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
 RUN addgroup -S glucopilot && adduser -S glucopilot -G glucopilot
-COPY --from=build /workspace/target/glucopilot-backend-*.jar /app/app.jar
+COPY --from=build /workspace/ruoyi-admin/target/ruoyi-admin.jar /app/app.jar
 
 USER glucopilot
 EXPOSE 8080

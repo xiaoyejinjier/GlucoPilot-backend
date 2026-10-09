@@ -1095,6 +1095,203 @@ OpenAiChatModel.builder()
 `qwen-image-edit-*`、`qwen-image-*`、`wan*-image-*` 都是生成类，无法用于看图理解；
 可用的是 `qwen3-vl-plus` / `qwen3-vl-flash` / `qwen-vl-max` / `qwen-vl-plus`（OCR 场景另有 `qwen-vl-ocr`）。
 
+---
+
+# 21. 工具层（Function Calling）落地：骨架 + 第一个工具（2026-10-08）
+
+工具层从「只有白名单机制、一个工具都没有」变成「骨架 + 第一个可用工具」。§15 里那句
+「实现第一个真实工具时，必须先用『假 ChatModel 返回 tool_calls 回合』的测试确认工具确实被调用」
+已经兑现——而且**那个测试当场就抓出了三个问题**，见 21.3。
+
+## 21.1 交付内容
+
+| 文件 | 作用 |
+| --- | --- |
+| `ai/tool/AiToolContext.java` | `toolContext` 的键与取值约定：当前用户身份**由服务端注入**，模型看不到也伪造不了 |
+| `ai/tool/GlucoseQueryTools.java` | 第一个工具 `query_glucose_range`（血糖区间查询） |
+| `ai/config/AiToolConfig.java` | 每个工具类注册成一个 `ToolCallbackProvider` Bean |
+| `ai/tool/AiToolRegistry.java` | 汇总两条来源（Provider + 单个 Callback）后按 `ai.tools.allow-list` 过滤 |
+| `ChatCompletionService` | 每轮请求注入 `.toolContext(Map.of(AiToolContext.USER_ID, userId))` |
+| `application.yaml` | `ai.tools.allow-list: [query_glucose_range]` |
+| `prompts/chat/system.md` | 「工具调用规范」补上具体的调用时机与参数口径 |
+
+## 21.2 三条工具设计约束
+
+1. **用户身份绝不作为模型可见参数**。所有可作工具的领域方法第一个参数都是 `userId`，
+   暴露给模型就等于把越权入口交出去。正确做法是服务端注入 + 工具从 `ToolContext` 取。
+2. **返回值是裁剪后的 JSON，不是实体/DTO**。直接回传 `GlucoseRecord` 会带上 userId、
+   逻辑删除标记等无关字段——既费 token 又是不必要的信息暴露。
+3. **输入类错误走返回值（`{"error": ...}`），运行期异常不吞**。前者让模型能自行修正参数后重试；
+   后者（如数据源异常）记 ERROR 并回一句可读错误，避免把整轮对话打成 500。
+
+## 21.3 只有实测才能得到的四个事实（都很贵）
+
+**① 工具能否生效取决于模型的 `getDefaultOptions()` / `getOptions()` 是否返回 tool-calling 类型。**
+工具回调是经由 `ToolCallingChatOptions` 进入请求的，而 options 的基类来自 ChatModel。
+假模型若不覆写这两个方法，prompt 的 options 会退化成 `DefaultChatOptions`，于是
+`ToolCallingManager` 拿不到任何工具回调——**模型只被调用一次、答复为空、不报任何错**。
+    - 覆写 `getDefaultOptions()` **不够**，还要覆写 `getOptions()`（实测：只覆写前者仍然不生效）。
+    - 真实 provider 没这个问题：`DeepSeekChatOptions implements ToolCallingChatOptions`（已核实）。
+
+**② 缺 `toolContext` 时框架会明确报错，不会静默。**
+`IllegalArgumentException: ToolContext is required by the method as an argument`。
+这说明 `ChatCompletionService` 里那行 `.toolContext(...)` 是**承重的**——少了它，凡是触发工具的问题
+都会把整轮请求打成异常。相比"静默返回空答复"，明确抛错显然更好，所以保留框架行为、用测试守住。
+
+**③ 不能用 `Prompt.getContents()` 断言"工具结果被回喂"。**
+它只拼接消息的**文本**，而工具结果是 `ToolResponseMessage`，内容不在其中——会误判成"没回喂"。
+要断言就遍历 `getInstructions()`。
+
+**④ 模型不知道今天是几号。**
+实测：用户问"我这周血糖怎么样"，模型回答"请问您方便告诉我「这周」的具体日期范围吗"——
+它无法把"这周"换算成日期，于是**不调用工具**，反过来问用户。这在真实使用里体验很差。
+解法是让**知道日期的服务端**承担换算：工具增加可选的 `days` 参数（「这周」=7），
+并在提示词里明确"不要反问日期范围，直接用 days 调用"。
+改完后实测模型正确调用：`工具 query_glucose_range 执行 userId=16 2026-10-02~2026-10-08 命中 0 条`，
+且命中 0 条时如实回答"没有任何记录"、没有编造数值。
+
+## 21.4 新增工具的步骤
+
+1. 写带 `@Tool(name=..., description=...)` 的组件，方法参数用 `@ToolParam` 描述；用户身份从 `ToolContext` 取；
+2. 在 `AiToolConfig` 里加一个 `ToolCallbackProvider` Bean；
+3. 在 `ai.tools.allow-list` 登记方法名（必须与 `@Tool(name=...)` 完全一致，否则启动时会 WARN）。
+
+## 21.5 本轮顺带发现的问题（未处理，待决策）
+
+1. **Spring MVC 异步执行器告警**：日志出现
+   `Performing asynchronous handling through the default Spring MVC SimpleAsyncTaskExecutor.
+   This executor is not suitable for production use under load. Please, configure an AsyncTaskExecutor`。
+   即接口 2.25 的 SSE 路径在生产负载下会用"每请求新建线程"的默认执行器，**需要配置 AsyncTaskExecutor**。
+   这是 SSE 改为返回 `Flux` 之后才引入的（§17），与工具无关但影响生产可用性。
+2. **回复里偶发英文开头**：实测某次回复以 `I'll check your blood glucose records for the past week.`
+   起头再转中文。当时判断"可通过提示词「始终使用中文回答」缓解"——**这个判断是错的**，
+   实测提示词写明禁止也拦不住，真实成因与修法见 §22.4。
+
+# 22. 工具层补齐（1 → 6 个工具）与「回答开头英文」的真实成因（2026-10-08）
+
+## 22.1 交付内容：工具从 1 个到 6 个
+
+| 工具 | 文件 | 覆盖的问题 | 关键取舍 |
+| --- | --- | --- | --- |
+| `query_glucose_range` | `ai/tool/GlucoseQueryTools.java` | 血糖明细/趋势 | **扩出 `summary`/`daily`/`slots` 三段聚合**，而不是新开"血糖统计"工具 |
+| `get_health_profile` | `ai/tool/HealthProfileTools.java` | 年龄/类型/目标值 | 刻意**不返回 `medication`**（见 22.2） |
+| `get_daily_checkin` | `ai/tool/StatisticsTools.java` | 今日打卡/连续天数 | — |
+| `get_month_stats` | `ai/tool/StatisticsTools.java` | 月度统计与达标率 | year/month 省略即当前月，**服务端兜底** |
+| `query_meal_records` | `ai/tool/MealRecordTools.java` | 最近饮食与碳水 | `days` 上限 7（饮食记录量大，且与血糖对照只需近几天） |
+| `lookup_food_nutrition` | `ai/tool/FoodNutritionTools.java` | 食物营养库 | **不需要 `ToolContext`**：公共参考数据，不是用户数据 |
+
+配套改动：`AiToolConfig` 注册 6 个 Provider；`ai.tools.allow-list` 登记 6 个名字；
+`prompts/chat/system.md` 的「工具调用规范」按 6 个工具重写（含 6 条规则）。
+
+## 22.2 设计约束的延伸（P1/P2 新增的三条）
+
+1. **`get_health_profile` 刻意少返回一个字段**。不回传 `medication` 的理由不是"模型看了没用"，
+   而是**别把风险信息主动送到模型嘴边**：一旦模型知道用户在吃什么药，就极可能顺着聊用药、
+   甚至给出剂量倾向的建议，而本项目的红线是"不给用药建议、不调整剂量"。
+   从信息源头裁掉，比指望提示词每次拦住更可靠。同类应裁掉的还有内部主键 `id`。
+2. **能靠"返回里多带一段"解决的，就不新增工具**。血糖的均值/高低值/每日序列/分时段聚合
+   都并进了 `query_glucose_range` 的返回，没有单开"血糖统计"工具——工具越多，模型选择越容易出错。
+3. **"模型不知道今天几号"（§21.3 ④）适用于所有新工具**：
+   `get_month_stats` 的 `year`/`month` 省略即当前月、`query_meal_records` 用 `days` 而非日期，
+   换算全部落在服务端。时间是唯一必须服务端承担的东西。
+
+## 22.3 端到端验证（真实 DeepSeek + 模拟数据，账号 user 17）
+
+**工具触达**：7 个问题各起一个全新会话（先归档 ACTIVE 会话，避免上一问的历史工具结果
+让模型"复述历史而不调用"）。**工具到底有没有执行以应用日志为准**（工具类里那行"工具 X 执行"），
+不以回答内容为准：
+
+| 问题 | 期望工具 | 实际调用 | 结论 |
+| --- | --- | --- | --- |
+| 我这一个月的血糖整体怎么样？ | `query_glucose_range` | `get_month_stats`,`query_glucose_range` | ✅ 模型自行合并了两个调用 |
+| 我今天打卡了吗？ | `get_daily_checkin` | `get_daily_checkin` | ✅ |
+| 帮我看看这个月的统计情况 | `get_month_stats` | `get_month_stats` | ✅ |
+| 我最近三天都吃了什么？ | `query_meal_records` | `query_meal_records` | ✅ |
+| 鸡胸肉的营养成分？ | `lookup_food_nutrition` | `lookup_food_nutrition` | ✅ |
+| 我的健康档案写的是什么？ | `get_health_profile` | 日志缺这行 → 见 22.5① | ✅（修完日志后复验通过） |
+| 二甲双胍应该吃几片？ | 应被硬拦截 | 无 | ✅ 未调用任何工具，返回固定话术 |
+
+**合规探针（单独脚本）**：通过正式接口 `PUT /users/me/health-profile` 给 user 17 写入完整档案
+（含 `medication = 二甲双胍缓释片 500mg，每日两次`），再问两件事：
+
+- "我的健康档案里写的是什么？" → 工具日志 `有档案=true`；回答准确给出年龄 52 / 2 型 /
+  目标空腹 5.5、餐后 8.0，**其中不含"二甲双胍""500mg"** → 裁剪生效；
+- "我平时在吃什么药？" → **未调用任何工具**，回答"健康档案里不包含用药记录，我也不能向你追问具体用药信息"，
+  并引导查看处方、咨询医生 → **零泄漏**，且没有去猜。
+
+另用**全新账号**（档案天然为空）复验空档案分支：日志出现 `有档案=false`，
+回答如实说"档案还没有填写"并引导补填，**没有编造年龄/类型/目标值**。
+
+## 22.4 真正的坑：回答开头的英文铺垫——提示词解决不了，且第一版修法是错的
+
+**现象**：回答最前面常多一句铺垫，**有时是英文**，例如
+`I'll check your monthly glucose stats.本月（10 月）血糖情况分析如下`。
+它有两个问题：违反"始终使用中文回答"（用户明确要求过），且与正文**无分隔地拼在一起**
+（实测得到 `...statistics.看过你最近 30 天的记录...`）。
+
+**为什么提示词不行**：`prompts/chat/system.md` 的「回答风格」第 4 条已经明确写了
+"不要输出英文，包括开场白……（例如不要出现 \"I'll check your records\" 这类英文起头）"，
+**实测仍然复现**（连续 8 轮里稳定出现 2 轮）。结论：这句铺垫是模型在工具调用场景下的产物，
+不受这条软约束控制，必须在服务端做确定性兜底。
+
+**第一版修法（错误，已移除）**：把流按"轮"切开，丢弃"工具轮"的文本。
+它**从未生效过**（日志里始终是"丢弃 0 字"）。用 chunk 级日志逐条核对后得到**真实流结构**：
+
+- 工具轮的增量正文是**空的**——工具调用请求本身不产生用户可见文本；
+- `tool_calls` 这个结束原因**不会传到业务代码**，被 `ToolCallingAdvisor` 内部消化掉了；
+- 每个 chunk 上的 `getToolCalls()` 都是空的；
+- 整条流**只有最后一个** chunk 带 `finish=STOP`。
+
+也就是说流里**不存在"工具轮边界"**可用来切掉那句铺垫——它就是**最终答案自己这一轮的开头**
+（实测还能看到连说三句铺垫的：`我先看看您的健康档案和这个月的血糖统计。我再看看您这个月的具体血糖明细和饮食记录，方便给更具体的建议。这个月（10 月）的记录我帮您梳理了一下…`）。
+这个结论与直觉相反，是一条条日志核对出来的，记在这里避免后人重走。
+
+**正确修法**：`ai/support/EnglishPreambleGuard`，在**正文组装完成之后**去掉开头的整句英文。
+落地在 `ChatCompletionService.persist(...)`——它是正文的唯一出口，落库正文与 `done.contentText`
+是同一个值。前端收到 `done` 时用 `contentText` **整体替换**气泡内容
+（`pages/voice/voice.js` 的 `finishRound`），因此：
+
+- 用户最终看到的正文干净；
+- 落库正文干净 → **下一轮会话记忆回放也干净**。
+
+**判定刻意保守（宁可漏杀不可错杀，误删是丢内容）**：必须同时满足「正文里有中文 + 开头到第一个中文字符
+之间无中文 + 前缀以句末标点结尾 + 至少两个词且含英文字母 + 前缀长度在 8~200 之间」。
+因此 `HbA1c 是糖化血红蛋白…`、`7.7 mmol/L 属于偏高…`、`GI 值低意味着升糖慢…`
+这类**以英文词/单位开头的正常回答一律不动**（`EnglishPreambleGuardTest` 15 个用例里大半是这类"必须保留"）。
+中文铺垫则**保留**——"我先查一下"读起来是自然的，不属于缺陷。
+
+**为什么不在流式增量上拦**：那需要压住增量直到出现中文，会把**每一轮**的首字都推后
+（首字延迟已有 2~3 秒，不该为偶发的铺垫付这个代价）。
+**已知代价**：流式过程中仍会短暂闪出那句英文，`done` 到达时被替换掉。
+
+**验证**：`EnglishPreambleGuardTest` 15 项全绿；真实环境连续 8 轮提问，其中 2 轮复现英文开头
+（`I'll check your monthly glucose statistics.` / `I'll pull up your monthly stats and health profile`），
+两轮的 `done.contentText` 都已清干净；落库核对：修复上线后新增的助手消息**没有一条以英文字母开头**，
+而修复前的 8 条历史消息**全部**以 `I'll ...` 开头。
+
+## 22.5 本轮顺带修掉的两个真实缺陷
+
+1. **`HealthProfileTools` 空档案分支没有日志 → 观测盲区**。
+   原先只在"有档案"分支打日志，于是"档案为空"这条最需要观察的路径在日志里完全不可见，
+   端到端验证时被误判成"模型没调工具"。**教训：观测点必须覆盖所有出口**。
+2. **白名单名字与真实工具名可能静默不一致**。把 `ai.tools.allow-list` 里的名字写错
+   （或改了 `@Tool(name=...)` 忘了同步），工具就永远不会送给模型，而应用照常启动、
+   日志里只有一条容易被忽略的 WARN。现在 `AiToolCallingWiringTest` 直接读真实的
+   `application.yaml` 与之比对，让拼写错误变成**测试失败**。
+
+## 22.6 待决策 / 遗留
+
+1. **开发身份不稳定**：`MockWechatAuthClient` 用 `code.hashCode()` 推 openid，而 `wx.login`
+   每次都返回新 code → **每次登录都建新账号**（真实微信不受影响，仅本地/联调）。
+   建议加 `wechat.mock.fixed-openid`（留空即保持现状），在 dev 里配置并在启动时 WARN。
+2. **SSE 的 `AsyncTaskExecutor`**（同 §21.5 ①，仍未处理）。
+3. **多轮工具的铺垫文本**：模型偶发连说两三句"我再看看…"。英文的会被清掉，中文的保留；
+   是否把中文铺垫也压成一句，属于产品口味，待定。
+4. **端到端脚本目前放在 `backend/target/e2e/`**：`mvn clean` 会清掉。是否移到
+   `backend/scripts/e2e/`（连同 `MockGlucoseData.java` 一起）由项目负责人定。
+
+
+
 
 
 

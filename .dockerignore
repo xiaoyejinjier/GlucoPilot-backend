@@ -1,6 +1,9 @@
 .git
 .mvn
 target
+**/target
+**/application-local.yaml
+**/application-local.yml
 *.log
 .env
 README.md

@@ -39,7 +39,11 @@ public class UserController {
         return ApiResponse.ok(userAccountService.patchProfile(RequestContext.requireUserId(), request));
     }
 
-    /** 健康档案全量保存：业务在 profile.health 模块。 */
+    /**
+     * 健康档案全量保存（PUT，幂等覆盖）。见接口 Javadoc：null/空白字段 = 清空回未填写，
+     * diabetesTypeText 服务端按 diabetesType 派生、忽略客户端传值，diagnosedYm 不得晚于当前月。
+     * 业务实现委托 profile.health 模块的 HealthProfileService，本控制器只做路由聚合。
+     */
     @PutMapping("/health-profile")
     public ApiResponse<HealthView> saveHealth(
             @Valid @RequestBody HealthSaveRequest request) {

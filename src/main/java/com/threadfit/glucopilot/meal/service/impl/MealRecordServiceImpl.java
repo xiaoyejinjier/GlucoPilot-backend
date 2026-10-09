@@ -38,8 +38,17 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 饮食记录：按 (recordDate, nodeCode) 覆盖写入、按日查询、逻辑删除。
- * 营养快照保存时点固化、不可变；预测三列仅落库不重算（prediction 客户端串联）。
+ * 饮食记录业务实现。
+ * <p>核心语义：
+ * <ul>
+ *   <li><b>覆盖保存</b>：按 (userId, recordDate, nodeCode) 唯一键定位当天该餐点的活跃记录，命中则 update，否则 insert；
+ *       明细采用「旧记录整体逻辑删除 + 重新插入」的重建方式，天然丢弃历史版本；</li>
+ *   <li><b>快照固化</b>：入库的 carbsG / 明细营养值均按请求原样落库，不反向 join 营养库重算（禁用字段级 PATCH，
+ *       要改就整体重新保存覆盖）；</li>
+ *   <li><b>预测三列</b>（predictNow / predictSuggest / suggestText）只校验范围、不改写，由 prediction 客户端串联携带，
+ *       即使该模块未上线也可存 null，两模块保持解耦；</li>
+ *   <li><b>recordedAt 一律取服务端当前时间</b>，防止客户端伪造记录时点。</li>
+ * </ul>
  */
 @Service
 @RequiredArgsConstructor
@@ -55,24 +64,31 @@ public class MealRecordServiceImpl implements MealRecordService {
     @Override
     @Transactional
     public MealVos.SaveResult save(Long userId, MealDtos.SaveRequest request) {
+        // 餐点节点必须在三餐范围内，否则业务拒绝（40001）
         if (!GlucoseNodes.isMealNode(request.getNodeCode())) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "nodeCode 必须是餐点节点");
         }
+        // hungerLevel 若传入则必须是 (1饱和 2一般 3微饿) 之一，可空不校验
         if (request.getHungerLevel() != null) {
             CodeEnum.of(CodeEnum.HungerLevel.class, request.getHungerLevel());
         }
+        // 照片归属经 file 侧校验（meid 类型）+ 当前用户具有访问权
         Long mediaId = resolveMediaId(userId, request.getMediaId());
         List<MealDtos.Item> items = request.getItems() == null ? List.of() : request.getItems();
+        // 明细中的 foodId 需存在于营养库（手输项 foodId 为空，跳过）
         validateFoodIds(items);
+        // foodsText / carbsG 若缺省则用 items 汇总兜底
         String foodsText = resolveFoodsText(request.getFoodsText(), items);
         BigDecimal carbsG = resolveCarbsG(request.getCarbsG(), items);
 
+        // 按 (user_id, record_date, node_code) 查当天该餐点的活跃主记录：命中即覆盖更新，否则新建
         MealRecord existing = mealRecordMapper.selectOne(new LambdaQueryWrapper<MealRecord>()
                 .eq(MealRecord::getUserId, userId)
                 .eq(MealRecord::getRecordDate, request.getRecordDate())
                 .eq(MealRecord::getNodeCode, request.getNodeCode())
                 .last("LIMIT 1"));
 
+        // recordedAt 统一取服务端当前时间，防客户端伪造；prediction 三列原样落库不校验范围之外的值
         LocalDateTime at = LocalDateTime.now();
         Long mealId;
         boolean created;
@@ -108,6 +124,7 @@ public class MealRecordServiceImpl implements MealRecordService {
             created = false;
         }
 
+        // 明细整体重建：先逻辑删除旧项再逐条插入快照
         replaceItems(mealId, items);
         return MealVos.SaveResult.builder()
                 .id(String.valueOf(mealId))
@@ -117,6 +134,7 @@ public class MealRecordServiceImpl implements MealRecordService {
 
     @Override
     public MealVos.DayMeals listDay(Long userId, LocalDate recordDate) {
+        // 查询用户当天全部活跃餐点记录，按 nodeCode（餐次先后）排序
         List<MealRecord> records = mealRecordMapper.selectList(new LambdaQueryWrapper<MealRecord>()
                 .eq(MealRecord::getUserId, userId)
                 .eq(MealRecord::getRecordDate, recordDate)
@@ -125,6 +143,7 @@ public class MealRecordServiceImpl implements MealRecordService {
         if (records.isEmpty()) {
             return MealVos.DayMeals.builder().recordDate(recordDate).meals(List.of()).build();
         }
+        // 一次性批量取出当天所有餐点的活跃明细，按 mealId 分组，避免 N+1 查询
         List<Long> mealIds = records.stream().map(MealRecord::getId).toList();
         Map<Long, List<MealFoodItem>> itemsByMeal = mealFoodItemMapper.selectList(
                         new LambdaQueryWrapper<MealFoodItem>()
@@ -143,6 +162,7 @@ public class MealRecordServiceImpl implements MealRecordService {
     @Override
     @Transactional
     public void remove(Long userId, Long id) {
+        // 先校验记录归属当前用户，再主记录+明细一并逻辑删除（is_deleted=1）
         MealRecord row = requireOwned(userId, id);
         SoftDeletes.mark(mealRecordMapper, MealRecord::getId, row.getId(),
                 MealRecord::getIsDeleted, MealRecord::getDeletedAt, MealRecord::getDeletedBy);
@@ -161,6 +181,7 @@ public class MealRecordServiceImpl implements MealRecordService {
                 .collect(Collectors.groupingBy(MealRecord::getUserId, Collectors.counting()));
     }
 
+    /** 校验照片归属：mediaId 可空；非空时须是本用户、餐食业务类型的可用照片。 */
     private Long resolveMediaId(Long userId, Long mediaId) {
         if (mediaId == null) {
             return null;
@@ -172,6 +193,7 @@ public class MealRecordServiceImpl implements MealRecordService {
         return media.getId();
     }
 
+    /** 校验明细 foodId 存在性：去重后批量查询，任一 foodId 不存在/已下架即拒绝；全部为空（手输）则跳过。 */
     private void validateFoodIds(List<MealDtos.Item> items) {
         List<Long> foodIds = items.stream()
                 .map(MealDtos.Item::getFoodId)
@@ -190,6 +212,7 @@ public class MealRecordServiceImpl implements MealRecordService {
         }
     }
 
+    /** 食物简述：优先用入参 foodsText；否则用明细 foodName 拼接兜底；都没有则 null。 */
     private String resolveFoodsText(String foodsText, List<MealDtos.Item> items) {
         if (StringUtils.hasText(foodsText)) {
             return trimToMax(foodsText);
@@ -200,6 +223,7 @@ public class MealRecordServiceImpl implements MealRecordService {
         return trimToMax(items.stream().map(MealDtos.Item::getFoodName).collect(Collectors.joining("、")));
     }
 
+    /** 碳水化合物：优先用入参 carbsG；否则把明细 carbsG 求和兜底；明细也没有则 null。 */
     private BigDecimal resolveCarbsG(BigDecimal carbsG, List<MealDtos.Item> items) {
         if (carbsG != null) {
             return carbsG;
@@ -214,6 +238,7 @@ public class MealRecordServiceImpl implements MealRecordService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
+    /** 明细重建：先把旧项全部逻辑删除，再按请求顺序逐条插入新快照并赋予递增 sortNo。 */
     private void replaceItems(Long mealId, List<MealDtos.Item> items) {
         markItemsDeleted(mealId);
         int sortNo = 0;
@@ -230,6 +255,7 @@ public class MealRecordServiceImpl implements MealRecordService {
         }
     }
 
+    /** 将 mealId 下所有明细统一标记为逻辑删除，保留审计（删除时间/操作人）。 */
     private void markItemsDeleted(Long mealId) {
         LocalDateTime now = LocalDateTime.now();
         long operator = RequestContext.operatorIdOrZero();
@@ -240,6 +266,7 @@ public class MealRecordServiceImpl implements MealRecordService {
                 .set(MealFoodItem::getDeletedBy, operator));
     }
 
+    /** 归属校验：记录必须存在且属于当前用户，否则按未找到处理。 */
     private MealRecord requireOwned(Long userId, Long id) {
         MealRecord row = mealRecordMapper.selectById(id);
         if (row == null || !row.getUserId().equals(userId)) {
@@ -248,6 +275,7 @@ public class MealRecordServiceImpl implements MealRecordService {
         return row;
     }
 
+    /** 组装单条餐点详情；媒体文件一并按当前用户鉴权后返回其可访问 URL。 */
     private MealVos.MealDetail toDetail(MealRecord r, Long userId, List<MealFoodItem> items) {
         String mediaUrl = null;
         if (r.getMediaId() != null) {
@@ -272,6 +300,7 @@ public class MealRecordServiceImpl implements MealRecordService {
                 .build();
     }
 
+    /** 组装单条明细 VO（id 导出为字符串以兼容前端 id 类型）。 */
     private MealVos.MealItemDetail toItemDetail(MealFoodItem i) {
         return MealVos.MealItemDetail.builder()
                 .foodId(i.getFoodId() == null ? null : String.valueOf(i.getFoodId()))
@@ -282,6 +311,7 @@ public class MealRecordServiceImpl implements MealRecordService {
                 .build();
     }
 
+    /** 文本裁剪到最大长度：去首尾空白、空串归一为 null，超长截断。 */
     private static String trimToMax(String value) {
         if (value == null) {
             return null;

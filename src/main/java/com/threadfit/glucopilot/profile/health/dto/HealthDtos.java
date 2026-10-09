@@ -18,10 +18,15 @@ public final class HealthDtos {
     private HealthDtos() {
     }
 
-    /** 全量保存：字段为 null 表示清空（回到未填写）。 */
+    /**
+     * 全量保存请求（PUT /health-profile）。
+     * null 语义：字段不传或传 null/空白，表示"清空该项恢复未填写"（服务端会显式置空）。
+     * 校验：diabetesType ∈ [0,4]；diagnosedYm 须为 YYYY-MM 且不得晚于当前月(应用层 40001)；
+     * targetFasting / targetPostprandial ∈ [1.0, 33.3] mmol/L；文本类字段带长度上限。
+     */
     @Data
     public static class HealthSaveRequest {
-        /** 糖尿病类型（CodeEnum.DiabetesType）；不传按未填写(0)处理。 */
+        /** 糖尿病类型（CodeEnum.DiabetesType）：0未填/1一型/2二型/3妊娠/4其他；不传按未填写(0)处理。 */
         @Min(0)
         @Max(4)
         private Integer diabetesType;
@@ -53,6 +58,7 @@ public final class HealthDtos {
         private BigDecimal targetPostprandial;
     }
 
+    /** 健康档案聚合视图，供 /users/me 幂等返回保存/读取结果。 */
     @Data
     @Builder
     public static class HealthView {

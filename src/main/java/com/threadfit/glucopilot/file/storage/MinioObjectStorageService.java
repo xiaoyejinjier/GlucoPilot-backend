@@ -18,7 +18,12 @@ import org.springframework.stereotype.Service;
 import java.io.InputStream;
 
 /**
- * 开发 MinIO mock（provider=minio）。完整入库流程，不跳过。
+ * MinIO 开发实现（provider=minio，本地 mock 对象存储）。
+ * <p>完整走「凭证 → 直传 → 登记 → 读取」全链路，不因是 mock 就跳过任何校验环节，
+ * 保证开发环境与生产 OSS 行为一致。直传使用预签名 PUT URL（有效 {@link ObjectStorageService#EXPIRE_SECONDS} 秒）。
+ * <p><b>注意</b>：签发预签名 URL 时刻意不携带 Content-Type——
+ * 真正的 MIME 校验推迟到登记接口 {@code MediaFileService#register} 进行，
+ * 避免前端在「预签名阶段」通过 Content-Type 绕过白名单。
  */
 @Slf4j
 @Service
@@ -30,16 +35,20 @@ public class MinioObjectStorageService implements ObjectStorageService {
 
     public MinioObjectStorageService(StorageProperties props) {
         this.props = props;
+        // 按配置初始化 MinIO 客户端（endpoint / AK / SK）
         this.minioClient = MinioClient.builder()
                 .endpoint(props.getEndpoint())
                 .credentials(props.getAccessKey(), props.getSecretKey())
                 .build();
     }
 
+    /** 生成 storageKey 并签发预签名 PUT URL 供客户端直传；客户端直传后凭同一 storageKey 走登记。 */
     @Override
     public UploadCredential createUploadCredential(MediaBizType bizType, String ext, long sizeBytes, Long userId) {
+        // storageKey = {bizType}/{yyyy}/{MM}/{userId}/{uuid}.{ext}，第 3 段 userId 供登记时防伪
         String storageKey = buildStorageKey(bizType, ext, userId);
         try {
+            // 签发 PUT 直传 URL，有效期 EXPIRE_SECONDS(300s)
             String uploadUrl = minioClient.getPresignedObjectUrl(
                     GetPresignedObjectUrlArgs.builder()
                             .method(Method.PUT)
@@ -57,11 +66,13 @@ public class MinioObjectStorageService implements ObjectStorageService {
         }
     }
 
+    /** 由 storageKey 拼出公开访问 URL；桶默认私有，这里仅为 C 端展示用。 */
     @Override
     public String resolvePublicUrl(String storageKey) {
         return props.getEndpoint() + "/" + props.getBucket() + "/" + storageKey;
     }
 
+    /** HEAD 探活：登记接口据此确认真实上传。异常一律视为「不存在」，转入拒绝分支。 */
     @Override
     public boolean objectExists(String storageKey) {
         try {
@@ -80,6 +91,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
         return StorageProvider.MINIO;
     }
 
+    /** 服务端读取对象完整字节（用于「图片送模型」场景，不产生公开 URL）。读失败必须留痕。 */
     @Override
     public byte[] getObject(String storageKey) {
         try (InputStream in = minioClient.getObject(GetObjectArgs.builder()

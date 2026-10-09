@@ -44,6 +44,7 @@ public class PredictionService {
     private final PredictionProperties props;
     private final HealthProfileService healthProfileService;
 
+    /** 入口：先校验 nodeCode 必须为餐点节点；唯一服务端依赖 = 读健康档案。未建档时 HealthView 为空对象，分类参数取默认，不会报错。 */
     public PredictionDtos.PredictResult predict(Long userId, PredictionDtos.PredictRequest request) {
         if (!GlucoseNodes.isMealNode(request.getNodeCode())) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "nodeCode 必须为餐点节点");
@@ -52,6 +53,7 @@ public class PredictionService {
         return compute(request, health);
     }
 
+    /** 两段式核心：①按当前量预测 predictNow；②反推目标所需碳水并给出建议文案 + 按建议量再预测 predictSuggest。 */
     private PredictionDtos.PredictResult compute(PredictionDtos.PredictRequest req, HealthView health) {
         BigDecimal cur = req.getCurrentGlucose();
         BigDecimal carbs = req.getCarbsG();
@@ -59,13 +61,16 @@ public class PredictionService {
         boolean med = Boolean.TRUE.equals(req.getMedicationTaken());
         boolean ex = Boolean.TRUE.equals(req.getExerciseDone());
 
+        // 升幅 = 碳水(总量×份量)×响应系数 R + 服药/运动修正；R 按糖尿病类型取
         BigDecimal r = rFor(health.getDiabetesType());
         BigDecimal dMed = med ? props.getMedEffect() : ZERO;
         BigDecimal dEx = ex ? props.getExerciseEffect() : ZERO;
         BigDecimal dCarb = carbs.multiply(portion).multiply(r);
 
+        // 现状预测 = 当前血糖 + 升幅，再做 clamp+舍入边界处理
         BigDecimal predictNow = roundGlucose(cur.add(dCarb).add(dMed).add(dEx));
 
+        // 反推建议碳水：危险血糖直接 0；否则用「目标 − 当前 − 修正」倒算碳水，并 clamp 到 [0, 上限]
         BigDecimal target = targetOf(health);
         BigDecimal suggestCarbs;
         if (cur.compareTo(props.getDangerHigh()) >= 0) {
@@ -76,6 +81,7 @@ public class PredictionService {
             suggestCarbs = clamp(raw, ZERO, props.getCarbsSuggestMax());
         }
 
+        // 建议量预测 = 当前血糖 + 建议碳水升幅 + 修正，同样 clamp+舍入
         BigDecimal predictSuggest = roundGlucose(cur.add(suggestCarbs.multiply(r)).add(dMed).add(dEx));
 
         return PredictionDtos.PredictResult.builder()
@@ -97,6 +103,7 @@ public class PredictionService {
         };
     }
 
+    /** 目标血糖取值优先级：餐后目标 → 空腹目标 → 配置默认值（均未配置时兜底）。 */
     private BigDecimal targetOf(HealthView health) {
         if (health.getTargetPostprandial() != null) {
             return health.getTargetPostprandial();
@@ -158,6 +165,7 @@ public class PredictionService {
         BigDecimal mainCut = delta.min(mainCarbs);
         BigDecimal remain = delta.subtract(mainCut);
 
+        // 主缩档（饮料/零食）的三段式语气：待削量小→减半；中等→替换无糖；超过其全部碳水→不建议食用
         String tone;
         BigDecimal halfMain = mainCarbs.divide(TWO, DIVIDE_SCALE, RoundingMode.HALF_UP);
         if (delta.compareTo(halfMain) <= 0) {
@@ -204,6 +212,7 @@ public class PredictionService {
             carbs[i] = orZero(balance.get(i).getCarbsG());
             weight[i] = orZero(balance.get(i).getWeightG());
         }
+        // 分别计算每项可削减上限 maxCut：主食按保底克重折算（超下限部分才有余量），其余均衡档可整体削减到 0
         for (int i = 0; i < n; i++) {
             int c = balance.get(i).getCategoryCode();
             if (c == STAPLE) {
@@ -218,11 +227,13 @@ public class PredictionService {
             }
         }
 
+        // 各档可削减总量不足以覆盖待削量 → 返回 null 触发整体降级文案
         BigDecimal totalCuttable = sumArray(maxCut);
         if (totalCuttable.compareTo(ZERO) <= 0 || totalCuttable.compareTo(remain) < 0) {
             return null;
         }
 
+        // 多轮按原 carbsG 占比分摊待削量：某档占比份额先触及 maxCut 则置为饱和并扣减剩余，未饱和档再按剩余继续分摊
         BigDecimal[] cut = new BigDecimal[n];
         boolean[] saturated = new boolean[n];
         BigDecimal rem = remain;
@@ -312,6 +323,10 @@ public class PredictionService {
         return v.setScale(0, RoundingMode.HALF_UP).intValue();
     }
 
+    /**
+     * 预测值边界处理：先 clamp 到 [0.1, 39.9]，再 setScale(1,HALF_UP) 四舍五入。
+     * 顺序必须「先夹取再舍入」——若先舍入，如 39.96 会 HALF_UP 进位成 40.0，突破 39.9 上限。
+     */
     private static BigDecimal roundGlucose(BigDecimal v) {
         return clamp(v, GLUCOSE_MIN, GLUCOSE_MAX).setScale(1, RoundingMode.HALF_UP);
     }

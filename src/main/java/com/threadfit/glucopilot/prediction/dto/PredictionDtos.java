@@ -14,7 +14,10 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.util.List;
 
-/** C 端餐后血糖预测 DTO。DTO 层只挡明显非法值，「餐点节点校验」等业务规则在 Service 校验。 */
+/**
+ * C 端餐后血糖预测 DTO。DTO 层只挡明显非法值（校验注解），「餐点节点校验、未建档兜底」等
+ * 业务规则在 Service 层处理；DTO 不承载任何持久化或落库逻辑。
+ */
 public final class PredictionDtos {
 
     private PredictionDtos() {
@@ -76,9 +79,13 @@ public final class PredictionDtos {
     @Data
     @Builder
     public static class PredictResult {
+        /** 现状预测（当前摄入下的预测血糖）。 */
         private BigDecimal predictNow;
+        /** 建议文案：分食物三档削减建议或整体降级提示。 */
         private String suggestText;
+        /** 按建议碳水摄入的预测血糖。 */
         private BigDecimal predictSuggest;
+        /** 算法版本号（当前 v1 参数）。 */
         private String algorithmVersion;
     }
 }

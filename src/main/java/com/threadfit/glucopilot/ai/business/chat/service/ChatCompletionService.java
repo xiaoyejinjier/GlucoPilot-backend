@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.tool.AiToolContext;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
@@ -84,6 +85,31 @@ import java.util.Map;
  * 换来的是错误语义更干净：视觉阶段失败会在<b>开流前</b>抛异常，客户端拿到的是统一 JSON 错误响应，
  * 而不是流到一半再收到 {@code error} 事件。另一个已知代价是：客户端在阶段 1 期间断开时，
  * 这次视觉调用已经花掉了（但因为没订阅，仍不会落库）。
+ * <p>
+ * <b>回答开头的英文铺垫：靠 {@link EnglishPreambleGuard} 清理，不靠"丢弃工具轮的文本"。</b>
+ * <p>
+ * 现象：开启工具调用后，回答最前面常多一句"我先查一下……"式的说明句，<b>有时是英文</b>
+ * （实测 {@code "I'll check your monthly glucose stats.本月（10 月）血糖情况分析如下"}），
+ * 而系统提示词里已经明确禁止英文开头却拦不住。
+ * <p>
+ * <b>真实流结构（chunk 级日志实测，与直觉不同，值得记住）：</b>
+ * <ul>
+ *   <li>工具轮的增量正文是<b>空的</b>——工具调用请求本身不产生用户可见文本；</li>
+ *   <li>{@code tool_calls} 这个结束原因<b>不会传到业务代码</b>，被 {@code ToolCallingAdvisor}
+ *       内部消化掉了；每个 chunk 的 {@code getToolCalls()} 也都是空的；</li>
+ *   <li>整条流<b>只有最后一个</b> chunk 带 {@code finish=STOP}。</li>
+ * </ul>
+ * 也就是说流里<b>不存在</b>"工具轮边界"可用来切掉那句铺垫——它属于最终答案自己这一轮的开头。
+ * （曾按"丢弃工具轮文本"实现过一版，因为建立在错误的流模型上而从未生效，已移除。）
+ * <p>
+ * 所以处理点在<b>正文组装完成后</b>：{@code done.contentText} 与落库正文都经过
+ * {@link EnglishPreambleGuard}。前端收到 {@code done} 时用 {@code contentText} 整体替换气泡内容
+ * （{@code pages/voice/voice.js} 的 {@code finishRound}），因此最终呈现与下一轮会话记忆都是干净的；
+ * 代价是流式过程中仍会短暂闪出那句英文。中文铺垫则保留——"我先查一下"读起来是自然的。
+ * <p>
+ * 顺带记下另一个被实测否定的设想：曾考虑"缓冲增量、发现是铺垫就不下发"，
+ * 但那需要压住增量直到出现中文，会把<b>每一轮</b>的首字延迟都推后（首字已有 2~3 秒），
+ * 不值得为偶发的铺垫付这个代价。
  */
 @Slf4j
 @Service
@@ -102,6 +128,7 @@ public class ChatCompletionService {
     private final ChatMessageService chatMessageService;
     private final OwnedMediaResolver ownedMediaResolver;
     private final VisionAnalyzer visionAnalyzer;
+    private final EnglishPreambleGuard englishPreambleGuard;
     private final JsonUtils jsonUtils;
 
     public Flux<ServerSentEvent<byte[]>> complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
@@ -201,7 +228,13 @@ public class ChatCompletionService {
 
     // ---------- 流式处理 ----------
 
-    /** 聚合计量与结束原因。只记状态，不触碰下游——发送由框架负责。 */
+    /**
+     * 聚合计量、结束原因与正文。只记状态，不触碰下游——发送由框架负责。
+     * <p>
+     * 正文<b>逐 chunk 累加</b>，不做轮次划分：实测确认工具轮的增量正文是空的，
+     * 切分轮次拿不到任何好处（见类注释里记的真实流结构）。
+     * 开头英文铺垫的清理放在正文组装完成之后，由 {@link EnglishPreambleGuard} 负责。
+     */
     private static void aggregate(StreamState state, ChatResponse chunk) {
         if (chunk == null) {
             return;
@@ -272,7 +305,7 @@ public class ChatCompletionService {
                 userId,
                 sessionId,
                 target.getId(),
-                truncate(state.text.toString()),
+                truncate(englishPreambleGuard.apply(state.text.toString())),
                 StringUtils.hasText(state.modelCode) ? state.modelCode : chatClientRegistry.modelCode(SceneCode.CHAT),
                 state.promptTokens,
                 state.completionTokens,

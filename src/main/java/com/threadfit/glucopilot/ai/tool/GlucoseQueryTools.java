@@ -1,10 +1,12 @@
 package com.threadfit.glucopilot.ai.tool;
 
 import com.threadfit.glucopilot.common.util.JsonUtils;
+import com.threadfit.glucopilot.glucose.dto.GlucoseDtos;
 import com.threadfit.glucopilot.glucose.entity.GlucoseNode;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.period.GlucosePeriodService;
 import com.threadfit.glucopilot.glucose.record.GlucoseRecordService;
+import com.threadfit.glucopilot.glucose.trend.GlucoseTrendService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
@@ -12,6 +14,7 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -19,6 +22,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 血糖查询工具（AI 模块的第一个 Function Calling 工具）。
@@ -57,6 +61,8 @@ public class GlucoseQueryTools {
 
     private final GlucoseRecordService glucoseRecordService;
     private final GlucosePeriodService glucosePeriodService;
+    /** 聚合计算（按天趋势、平均值）：它收的是"已查出的记录列表"，不是 userId，因此只能在工具内部复用。 */
+    private final GlucoseTrendService glucoseTrendService;
     private final JsonUtils jsonUtils;
 
     @Tool(name = "query_glucose_range",
@@ -153,10 +159,75 @@ public class GlucoseQueryTools {
         }
         result.put("count", rows.size());
         result.put("truncated", truncated);
+
+        // 聚合段：让「这段时间怎么样」这类问题不必靠 60 条明细去心算。
+        // 这里复用的都是收「记录列表」的内部计算函数——模型给不出这种参数，
+        // 但工具内部可以组合它们，这就是"工具是组合层、不是门面转发层"的具体做法。
+        //
+        // 单独兜一层：明细已经查到了，聚合只是锦上添花，它出问题不应让整轮对话变成错误。
+        try {
+            result.put("summary", summaryOf(rows));
+            result.put("daily", dailyOf(rows, from, to));
+            result.put("slots", slotsOf(rows));
+        } catch (RuntimeException e) {
+            log.warn("血糖聚合摘要计算失败，本次仅返回明细 userId={} {}~{}", userId, from, to, e);
+        }
         result.put("items", items);
         log.info("工具 query_glucose_range 执行 userId={} {}~{} 命中 {} 条 trunc={}",
                 userId, from, to, rows.size(), truncated);
         return jsonUtils.toJson(result);
+    }
+
+    /** 整体概览：平均值、最高/最低、覆盖天数。 */
+    private static Map<String, Object> summaryOf(List<GlucoseRecord> rows) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("avg", GlucoseTrendService.average(rows));
+        summary.put("recordedDays", rows.stream().map(GlucoseRecord::getRecordDate).distinct().count());
+        rows.stream().map(GlucoseRecord::getGlucoseValue).filter(Objects::nonNull)
+                .max(BigDecimal::compareTo).ifPresent(v -> summary.put("highest", v));
+        rows.stream().map(GlucoseRecord::getGlucoseValue).filter(Objects::nonNull)
+                .min(BigDecimal::compareTo).ifPresent(v -> summary.put("lowest", v));
+        return summary;
+    }
+
+    /** 按天趋势。无记录的天会以 count=0 出现，便于模型判断"哪几天没测"。 */
+    private List<Map<String, Object>> dailyOf(List<GlucoseRecord> rows, LocalDate from, LocalDate to) {
+        List<GlucoseDtos.TrendPoint> points = glucoseTrendService.dailySeries(rows, from, to);
+        if (points == null) {
+            return List.of();
+        }
+        return points.stream()
+                .map(point -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("date", String.valueOf(point.getDate()));
+                    item.put("avg", point.getAvg());
+                    item.put("count", point.getCount());
+                    return item;
+                })
+                .toList();
+    }
+
+    /**
+     * 分时段聚合。
+     * <p>
+     * 刻意<b>不返回 {@code SlotStat.pct}</b>：它的定义是「相对记录最多时段的百分比，用于端上进度条」，
+     * 与"达标率"无关。回给模型会被误读成达标率，进而给出错误结论——宁可不给，
+     * 也不能给一个会被误解的数字。
+     */
+    private List<Map<String, Object>> slotsOf(List<GlucoseRecord> rows) {
+        List<GlucoseDtos.SlotStat> stats = glucosePeriodService.slotStats(rows);
+        if (stats == null) {
+            return List.of();
+        }
+        return stats.stream()
+                .map(stat -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("slot", stat.getName());
+                    item.put("avg", stat.getAvg());
+                    item.put("count", stat.getCount());
+                    return item;
+                })
+                .toList();
     }
 
     private static boolean hasText(String value) {

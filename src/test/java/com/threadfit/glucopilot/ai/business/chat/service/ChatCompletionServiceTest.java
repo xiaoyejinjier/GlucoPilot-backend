@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
@@ -55,7 +56,10 @@ import org.mockito.InOrder;
  *   <li>上游报错且已有内容 → 落库并标 4（错误），再发 {@code error}；</li>
  *   <li><b>取消</b>（客户端断开，或容器超时后取消订阅）→ <b>不落库</b>、不发事件；</li>
  *   <li>末尾只带 usage 的空正文 chunk → 计量仍要聚合；</li>
- *   <li>落库自身失败 → 只尝试一次，不重复落库。</li>
+ *   <li>落库自身失败 → 只尝试一次，不重复落库；</li>
+ *   <li>回答开头的英文句子 → 落库与 {@code done.contentText} 里都不留（见
+ *       {@link com.threadfit.glucopilot.ai.support.EnglishPreambleGuard}），
+ *       而 {@code delta} 流保持原样。</li>
  * </ol>
  * <p>
  * 注：用 {@code new ChatResponse(List.of(Generation))} 造的假响应，其元数据由框架给出默认值
@@ -83,7 +87,8 @@ class ChatCompletionServiceTest {
     @BeforeEach
     void setUp() {
         service = new ChatCompletionService(registry, chatMessageMapper, chatSessionService,
-                chatMessageService, ownedMediaResolver, visionAnalyzer, new JsonUtils(new ObjectMapper()));
+                chatMessageService, ownedMediaResolver, visionAnalyzer, new EnglishPreambleGuard(),
+                new JsonUtils(new ObjectMapper()));
 
         when(chatSessionService.requireOwned(anyLong(), anyLong())).thenReturn(new ChatSession());
         when(registry.hasOverrides(SceneCode.CHAT)).thenReturn(false);
@@ -212,6 +217,64 @@ class ChatCompletionServiceTest {
         // 只尝试过一次落库：既没有因失败重试，也没有重复插入
         verify(chatMessageService).appendAssistantMessage(anyLong(), anyLong(), anyLong(), anyString(), anyString(),
                 any(), any(), any(), anyInt());
+    }
+
+    // ---------- 回答开头的英文铺垫 ----------
+
+    /**
+     * 模型在回答开头说了一句英文时，<b>落库正文与 {@code done.contentText} 都必须不含这句英文</b>。
+     * <p>
+     * 实测背景：这句话是<b>最终答案自己这一轮的开头</b>（不是工具轮），提示词明确禁止英文也拦不住
+     * （见 {@code EnglishPreambleGuard} 类注释里记的真实流结构与样例）。
+     * 前端在 {@code done} 时用 {@code contentText} 整体替换气泡内容，所以这条断言同时决定了
+     * 「用户最终看到什么」和「下一轮会话记忆里回放什么」。
+     */
+    @Test
+    void 回答开头的英文句子不应进入正文与落库内容() {
+        useModel(Flux.just(
+                textChunk("I'll check your monthly glucose stats."),
+                textChunk("本月（10 月）血糖情况分析如下："),
+                textChunk("平均 8.0 mmol/L。")));
+
+        List<ServerSentEvent<byte[]>> events = collect();
+
+        // delta 流保持原样：流式过程中仍会闪出这句英文（不在增量上拦，是为了不推后首字）
+        assertTrue(payload(events.get(0)).contains("I'll check"), payload(events.get(0)));
+
+        ServerSentEvent<byte[]> done = events.get(events.size() - 1);
+        assertTrue(payload(done).contains("\"contentText\":\"本月（10 月）血糖情况分析如下：平均 8.0 mmol/L。\""),
+                payload(done));
+        assertTrue(!payload(done).contains("I'll check"), "done 正文里不应有英文铺垫：" + payload(done));
+
+        verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
+                eq("本月（10 月）血糖情况分析如下：平均 8.0 mmol/L。"), anyString(), any(), any(),
+                eq(CodeEnum.ChatFinishReason.NORMAL.getCode()), anyInt());
+    }
+
+    /** 以英文词/单位开头、但后面是中文的正常回答不能被误删（前缀不是一个完整英文句子）。 */
+    @Test
+    void 以英文缩写或单位开头的回答不应被清理() {
+        useModel(Flux.just(textChunk("HbA1c 是糖化血红蛋白，反映近 3 个月的平均血糖。")));
+
+        collect();
+
+        verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
+                eq("HbA1c 是糖化血红蛋白，反映近 3 个月的平均血糖。"), anyString(), any(), any(),
+                eq(CodeEnum.ChatFinishReason.NORMAL.getCode()), anyInt());
+    }
+
+    /** 中途报错时，落库的半截内容同样要经过清理（否则错误轮次又会把英文写进记忆）。 */
+    @Test
+    void 报错落库的半截回答也不应含英文铺垫() {
+        useModel(Flux.concat(
+                Flux.just(textChunk("Let me check that for you."), textChunk("你的记录如下")),
+                Flux.error(new IllegalStateException("上游 500"))));
+
+        collect();
+
+        verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
+                eq("你的记录如下"), anyString(), any(), any(),
+                eq(CodeEnum.ChatFinishReason.ERROR.getCode()), anyInt());
     }
 
     // ---------- 图片轮次（两阶段）----------

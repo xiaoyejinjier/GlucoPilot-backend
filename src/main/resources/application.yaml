@@ -139,9 +139,15 @@ ai:
   # 工具白名单：只注册显式登记的工具，绝不做包扫描（见 AiToolRegistry / AiToolConfig）。
   # 名字必须与 @Tool(name=...) 完全一致；配了名字却没有对应 Bean 会在启动时 WARN。
   # 需要临时关闭全部工具时把 allow-list 置空即可（allow-list: []）。
+  # ⚠️ 工具越多，模型选择越容易出错：新增前先想清楚能不能并进已有工具的返回里。
   tools:
     allow-list:
       - query_glucose_range
+      - get_health_profile
+      - get_daily_checkin
+      - get_month_stats
+      - query_meal_records
+      - lookup_food_nutrition
 
   # ---------------------------------------------------------------------------
   # 视觉（多模态）provider：阿里云百炼 qwen-vl，走 OpenAI 兼容协议（接口 2.24 msgType=2）。

@@ -1,11 +1,18 @@
 package com.threadfit.glucopilot.ai.tool;
 
+import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiToolConfig;
 import com.threadfit.glucopilot.common.util.JsonUtils;
+import com.threadfit.glucopilot.food.service.FoodService;
 import com.threadfit.glucopilot.glucose.entity.GlucoseNode;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.period.GlucosePeriodService;
 import com.threadfit.glucopilot.glucose.record.GlucoseRecordService;
+import com.threadfit.glucopilot.glucose.trend.GlucoseTrendService;
+import com.threadfit.glucopilot.meal.service.MealRecordService;
+import com.threadfit.glucopilot.profile.health.service.HealthProfileService;
+import com.threadfit.glucopilot.statistics.daily.DailyStatisticsService;
+import com.threadfit.glucopilot.statistics.monthly.MonthlyStatisticsService;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -21,10 +28,18 @@ import org.springframework.ai.model.tool.autoconfigure.ToolCallingAutoConfigurat
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
+import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.env.MutablePropertySources;
+import org.springframework.core.env.PropertySource;
+import org.springframework.core.io.FileSystemResource;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,36 +56,30 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * <b>工具调用装配路径的端到端验证</b>——这是 {@code AiChatClientConfig} 里长期标注的「未验证项」。
+ * <b>工具装配路径的端到端验证</b>——这是 {@code AiChatClientConfig} 里长期标注的「未验证项」。
  * <p>
  * 为什么必须单独测这一层：工具由 {@code ToolCallingAdvisor} 执行，而该 Advisor 只挂在
  * {@code ChatClientAutoConfiguration} 提供的 Builder 上（本项目正是从注入的 Builder clone 的）。
- * 用 {@code ChatClient.builder(model)} 手搓的 client <b>会静默丢掉全部工具</b>：
- * 表现为模型永不产生 tool_calls，从返回值与日志上都看不出来。所以这里跑真实的自动装配。
+ * 用 mock 的 ChatClient 或手搓 {@code ChatClient.builder(model)} 都覆盖不到——
+ * 手搓的 client <b>会静默丢掉全部工具</b>：模型永不产生 tool_calls，从返回值与日志上都看不出来。
  * <p>
- * <b>另一个实测踩到的坑（假模型必须实现 {@code getDefaultOptions()}）</b>：
- * 工具回调是经由 {@code ToolCallingChatOptions} 进入请求的，而这些 options 的基类来自
- * {@code ChatModel.getDefaultOptions()}。假模型若不覆写它，prompt 的 options 会退化成
- * {@code DefaultChatOptions}，于是 {@code ToolCallingManager} 拿不到任何工具回调——
- * <b>模型只被调用一次、答复为空、不报任何错</b>。真实 provider 没这个问题
+ * <b>另一个实测踩到的坑（假模型必须覆写 {@code getOptions()}）</b>：
+ * 工具回调经由 {@code ToolCallingChatOptions} 进入请求，而 options 基类来自
+ * {@code ChatModel.getOptions()}/{@code getDefaultOptions()}。假模型若不覆写（两个都要覆写），
+ * prompt 的 options 会退化成 {@code DefaultChatOptions}，{@code ToolCallingManager} 便拿不到工具回调——
+ * <b>模型只被调用一次、答复为空、不报任何错</b>。真实 provider 无此问题
  * （{@code DeepSeekChatOptions implements ToolCallingChatOptions}，已核实）。
  */
 class AiToolCallingWiringTest {
 
     private static final Long USER_ID = 7L;
+    private static final Path CONFIG = Path.of("src/main/resources/application.yaml");
 
     /** 第一次调用返回 tool_calls 回合，第二次返回最终答复；记录每次送进来的 Prompt。 */
     private static final class ToolCallingStub implements ChatModel {
 
         final List<Prompt> prompts = new ArrayList<>();
 
-        /**
-         * 关键：必须返回 tool-calling 类型的 options，否则工具回调进不了请求，
-         * 工具会静默不执行（见类注释）。真实 provider 的 options 天然满足这一点。
-         * <p>
-         * 两个方法都覆写：{@code ChatModel} 上 {@code getOptions()} 与 {@code getDefaultOptions()}
-         * 都是 default 方法，实测只覆写后者不足以让工具生效。
-         */
         @Override
         public ChatOptions getOptions() {
             return ToolCallingChatOptions.builder().build();
@@ -99,25 +108,42 @@ class AiToolCallingWiringTest {
         }
     }
 
-    private ApplicationContextRunner runner(GlucoseQueryTools tools, ToolCallingStub model) {
+    /**
+     * 起一个只含"工具装配 + ChatClient 自动装配"的切片。
+     * 五个工具类都提供（{@code AiToolConfig} 会为它们各建一个 Provider），
+     * 这样顺带验证"所有工具都能被装配出来"，而不是只验一个。
+     */
+    private ApplicationContextRunner runner(GlucoseQueryTools glucoseTools, ToolCallingStub model) {
+        JsonUtils jsonUtils = new JsonUtils(new ObjectMapper());
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(
                         ChatClientAutoConfiguration.class, ToolCallingAutoConfiguration.class))
                 .withBean(ChatModel.class, () -> model)
-                .withBean(GlucoseQueryTools.class, () -> tools)
+                .withBean(GlucoseQueryTools.class, () -> glucoseTools)
+                .withBean(HealthProfileTools.class,
+                        () -> new HealthProfileTools(mock(HealthProfileService.class), jsonUtils))
+                .withBean(StatisticsTools.class,
+                        () -> new StatisticsTools(mock(DailyStatisticsService.class),
+                                mock(MonthlyStatisticsService.class), jsonUtils))
+                .withBean(MealRecordTools.class,
+                        () -> new MealRecordTools(mock(MealRecordService.class),
+                                mock(GlucosePeriodService.class), jsonUtils))
+                .withBean(FoodNutritionTools.class,
+                        () -> new FoodNutritionTools(mock(FoodService.class), jsonUtils))
                 .withUserConfiguration(AiToolConfig.class);
     }
 
-    private static GlucoseQueryTools tools(GlucoseRecordService recordService,
-                                           GlucosePeriodService periodService) {
-        return new GlucoseQueryTools(recordService, periodService, new JsonUtils(new ObjectMapper()));
+    private static List<ToolCallback> allCallbacks(
+            org.springframework.context.ApplicationContext context) {
+        return context.getBeansOfType(ToolCallbackProvider.class).values().stream()
+                .flatMap(provider -> java.util.Arrays.stream(provider.getToolCallbacks()))
+                .toList();
     }
 
-    /** 把第 n 次请求的全部消息串起来（含工具结果），用于断言"结果被回喂给模型"。 */
-    private static String instructionsOf(ToolCallingStub model, int index) {
-        return model.prompts.get(index).getInstructions().stream()
-                .map(Object::toString)
-                .collect(Collectors.joining("\n"));
+    private static GlucoseQueryTools glucoseTools(GlucoseRecordService recordService,
+                                                 GlucosePeriodService periodService) {
+        return new GlucoseQueryTools(recordService, periodService,
+                mock(GlucoseTrendService.class), new JsonUtils(new ObjectMapper()));
     }
 
     @Test
@@ -138,15 +164,12 @@ class AiToolCallingWiringTest {
         node.setIsMeal(0);
         when(periodService.nodeMap()).thenReturn(Map.of("before_breakfast", node));
 
-        runner(tools(recordService, periodService), model).run(context -> {
+        runner(glucoseTools(recordService, periodService), model).run(context -> {
             assertThat(context).hasNotFailed();
 
-            ToolCallback[] callbacks = context.getBean(ToolCallbackProvider.class).getToolCallbacks();
-            assertThat(callbacks).hasSize(1);
-            assertThat(callbacks[0].getToolDefinition().name()).isEqualTo("query_glucose_range");
-
+            List<ToolCallback> callbacks = allCallbacks(context);
             ChatClient client = context.getBean(ChatClient.Builder.class)
-                    .defaultTools((Object[]) callbacks)
+                    .defaultTools(callbacks.toArray())
                     .build();
 
             String answer = client.prompt()
@@ -163,8 +186,8 @@ class AiToolCallingWiringTest {
                     eq(USER_ID), eq(LocalDate.of(2026, 9, 22)), eq(LocalDate.of(2026, 9, 29)));
 
             // ③ 工具结果被回喂给模型：只有工具返回里才会出现 nodeCode 与数值。
-            //    注意不能用 Prompt.getContents()——它只拼接消息的"文本"，而工具结果是
-            //    ToolResponseMessage，其内容不在 getContents() 里（实测踩过，会误判成"没回喂"）。
+            //    注意不能用 Prompt.getContents()——它只拼接消息的"文本"，工具结果是
+            //    ToolResponseMessage，其内容不在其中（实测踩过，会误判成"没回喂"）。
             assertThat(model.prompts).hasSize(2);
             assertThat(instructionsOf(model, 1))
                     .contains("before_breakfast")
@@ -176,9 +199,9 @@ class AiToolCallingWiringTest {
      * 缺 toolContext 时的真实行为：<b>框架直接抛异常</b>，而不是静默失败。
      * <p>
      * 实测信息：{@code IllegalArgumentException: ToolContext is required by the method as an argument}。
-     * 这条断言的价值在于钉住「{@code ChatCompletionService} 里那行 {@code .toolContext(...)} 是承重的」——
-     * 少了它，凡是触发工具的问题都会把整轮请求打成异常。
-     * 相比"静默返回空答复"，明确抛错显然更好，所以这里保留框架行为、不做防御性兜底，而是用测试守住它。
+     * 这条断言钉住「{@code ChatCompletionService} 里那行 {@code .toolContext(...)} 是承重的」——
+     * 少了它，凡是触发工具的问题都会把整轮请求打成异常。相比"静默返回空答复"，
+     * 明确抛错显然更好，所以保留框架行为、用测试守住。
      */
     @Test
     void 缺toolContext时框架应明确报错而不是静默失败() {
@@ -186,16 +209,66 @@ class AiToolCallingWiringTest {
         GlucosePeriodService periodService = mock(GlucosePeriodService.class);
         ToolCallingStub model = new ToolCallingStub();
 
-        runner(tools(recordService, periodService), model).run(context -> {
+        runner(glucoseTools(recordService, periodService), model).run(context -> {
             assertThat(context).hasNotFailed();
             ChatClient client = context.getBean(ChatClient.Builder.class)
-                    .defaultTools((Object[]) context.getBean(ToolCallbackProvider.class).getToolCallbacks())
+                    .defaultTools(allCallbacks(context).toArray())
                     .build();
 
-            // 刻意不传 toolContext
             assertThatThrownBy(() -> client.prompt().user("我这周血糖怎么样").call().content())
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("ToolContext");
         });
+    }
+
+    /**
+     * <b>白名单名字必须与真实注册的工具名完全一致。</b>
+     * <p>
+     * 这是最危险的一类静默失效：把 {@code ai.tools.allow-list} 里的名字写错（或改了
+     * {@code @Tool(name=...)} 忘了同步），工具就永远不会被送给模型，
+     * 而应用照常启动、日志里只有一条容易被忽略的 WARN。
+     * 这里直接读真实的 {@code application.yaml} 与之比对，让拼写错误变成测试失败。
+     */
+    @Test
+    void 白名单里的每个名字都应能对应到真实注册的工具() throws Exception {
+        GlucoseRecordService recordService = mock(GlucoseRecordService.class);
+        GlucosePeriodService periodService = mock(GlucosePeriodService.class);
+        ToolCallingStub model = new ToolCallingStub();
+
+        AIProperties properties = bindAiProperties();
+        List<String> allowList = properties.getTools().getAllowList();
+        assertThat(allowList)
+                .as("application.yaml 的 ai.tools.allow-list 不应为空（否则工具全部不会被注册）")
+                .isNotEmpty();
+
+        runner(glucoseTools(recordService, periodService), model).run(context -> {
+            assertThat(context).hasNotFailed();
+            List<String> registered = allCallbacks(context).stream()
+                    .map(callback -> callback.getToolDefinition().name())
+                    .collect(Collectors.toList());
+
+            assertThat(registered)
+                    .as("白名单里出现了容器中不存在的工具名（多半是拼写错误或与 @Tool(name=...) 不一致）")
+                    .containsAll(allowList);
+            // 反向也钉一下：注册了但没登记的不会生效，属于"白写"，同样应当被发现
+            assertThat(registered).contains("query_glucose_range");
+        });
+    }
+
+    private static String instructionsOf(ToolCallingStub model, int index) {
+        return model.prompts.get(index).getInstructions().stream()
+                .map(Object::toString)
+                .collect(Collectors.joining("\n"));
+    }
+
+    /** 从真实的 application.yaml 绑定 AIProperties（与 Spring 的加载范围一致：只读基础文件）。 */
+    private static AIProperties bindAiProperties() throws Exception {
+        List<PropertySource<?>> sources = new YamlPropertySourceLoader()
+                .load("application.yaml", new FileSystemResource(CONFIG));
+        MutablePropertySources propertySources = new MutablePropertySources();
+        sources.forEach(propertySources::addLast);
+        return new Binder(ConfigurationPropertySources.from(propertySources))
+                .bind("ai", Bindable.of(AIProperties.class))
+                .orElseThrow(() -> new AssertionError("application.yaml 中缺少 ai 配置"));
     }
 }

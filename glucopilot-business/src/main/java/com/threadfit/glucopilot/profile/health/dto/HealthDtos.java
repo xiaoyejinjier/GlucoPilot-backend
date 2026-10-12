@@ -36,25 +36,25 @@ public final class HealthDtos {
         private String diabetesTypeText;
 
         /** YYYY-MM，不得晚于当前月。 */
-        @Pattern(regexp = ProfileHealthConstant.DIAGNOSED_YM_PATTERN, message = "diagnosedYm 须为 YYYY-MM")
+        @Pattern(regexp = ProfileHealthConstant.DIAGNOSED_YM_PATTERN, message = "确诊时间须为 YYYY-MM 格式（如 2021-06）")
         private String diagnosedYm;
 
-        @Min(ProfileHealthConstant.AGE_MIN)
-        @Max(ProfileHealthConstant.AGE_MAX)
+        @Min(value = ProfileHealthConstant.AGE_MIN, message = "年龄不能小于 1 岁")
+        @Max(value = ProfileHealthConstant.AGE_MAX, message = "年龄不能大于 150 岁")
         private Integer age;
 
-        @Size(max = 256)
+        @Size(max = 256, message = "用药信息不能超过 256 个字符")
         private String medication;
 
-        @Size(max = 256)
+        @Size(max = 256, message = "运动习惯不能超过 256 个字符")
         private String exerciseHabit;
 
-        @DecimalMin(ProfileHealthConstant.TARGET_MIN)
-        @DecimalMax(ProfileHealthConstant.TARGET_MAX)
+        @DecimalMin(value = ProfileHealthConstant.TARGET_MIN, message = "空腹目标血糖不能低于 1.0 mmol/L")
+        @DecimalMax(value = ProfileHealthConstant.TARGET_MAX, message = "空腹目标血糖不能高于 33.3 mmol/L")
         private BigDecimal targetFasting;
 
-        @DecimalMin(ProfileHealthConstant.TARGET_MIN)
-        @DecimalMax(ProfileHealthConstant.TARGET_MAX)
+        @DecimalMin(value = ProfileHealthConstant.TARGET_MIN, message = "餐后目标血糖不能低于 1.0 mmol/L")
+        @DecimalMax(value = ProfileHealthConstant.TARGET_MAX, message = "餐后目标血糖不能高于 33.3 mmol/L")
         private BigDecimal targetPostprandial;
     }
 

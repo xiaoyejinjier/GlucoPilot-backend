@@ -71,9 +71,8 @@ public class AiChatClientConfig {
                 .defaultTemplateRenderer(promptTemplateService.renderer())
                 .defaultAdvisors(advisors)
                 // 用 defaultTools 而不是 defaultToolCallbacks：后者三个重载在 2.0.1 已全部过时。
-                // ⚠️ 未验证项：这条装配路径尚无端到端测试（当前 ai.tools.allow-list 为空，无工具可验）。
-                // 实现第一个真实工具时，必须先用「假 ChatModel 返回 tool_calls 回合」的测试
-                // 确认工具确实被调用，再上生产。
+                // 这条装配路径已由 AiToolCallingWiringTest 端到端验证（假 ChatModel 返回 tool_calls
+                // 回合 → 断言工具真的执行、结果真的回喂），并顺带钉住「白名单名字 ↔ 真实工具名」一致。
                 .defaultTools(toolRegistry.callbacks().toArray())
                 .build();
     }

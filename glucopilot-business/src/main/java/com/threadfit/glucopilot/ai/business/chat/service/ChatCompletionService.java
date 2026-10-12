@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.tool.AiToolContext;
@@ -119,8 +120,11 @@ public class ChatCompletionService {
     /** 单条回复落库上限，防异常长文撑爆 TEXT */
     private static final int MAX_REPLY_CHARS = 20_000;
 
-    /** {@code chat_message.media_caption} 是 VARCHAR(1024)，超长在严格模式下会直接抛错，先截断。 */
+    /** {@code chat_session.media_caption} 是 VARCHAR(1024)，超长在严格模式下会直接抛错，先截断。 */
     private static final int MAX_CAPTION_CHARS = 1024;
+
+    /** 单飞 key 前缀；key 用用户消息 id（全局唯一），因此不需要再拼 sessionId。 */
+    private static final String ROUND_KEY_PREFIX = "chat-round:";
 
     private final AiChatClientRegistry chatClientRegistry;
     private final ChatMessageMapper chatMessageMapper;
@@ -129,6 +133,7 @@ public class ChatCompletionService {
     private final OwnedMediaResolver ownedMediaResolver;
     private final VisionAnalyzer visionAnalyzer;
     private final EnglishPreambleGuard englishPreambleGuard;
+    private final ChatRoundGuard roundGuard;
     private final JsonUtils jsonUtils;
 
     public Flux<ServerSentEvent<byte[]>> complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
@@ -145,6 +150,33 @@ public class ChatCompletionService {
             return Flux.just(doneEvent(generated));
         }
 
+        // 单飞：同一条用户消息同时只允许一次生成。
+        // 位置很关键——必须在**调用模型之前**：助手消息的客户端幂等键要到 INSERT 时才暴露冲突，
+        // 而 INSERT 在模型调用之后，那时钱已经花了（实测两个并发请求 prompt_tokens 5855 + 5940）。
+        String roundKey = ROUND_KEY_PREFIX + target.getId();
+        if (!roundGuard.tryAcquire(roundKey)) {
+            throw new BizException(ErrorCode.BIZ_REJECTED, "这一轮正在生成中，请稍后再试");
+        }
+        Flux<ServerSentEvent<byte[]>> stream;
+        try {
+            stream = startStream(userId, sessionId, target);
+        } catch (RuntimeException e) {
+            // 同步阶段（图片轮次的视觉识别、请求组装）抛错时 Flux 还没返回，
+            // doFinally 还没挂上——不在这里释放就会永久占位
+            roundGuard.release(roundKey);
+            throw e;
+        }
+        // 正常结束、上游报错、客户端取消（框架取消订阅）都会走到这里，保证释放
+        return stream.doFinally(signal -> roundGuard.release(roundKey));
+    }
+
+    /**
+     * 真正开流：组装请求、发起流式调用、接上收尾落库。
+     * <p>
+     * 与 {@link #complete} 拆开，是为了让"获得执行权 → 可能同步失败的准备工作 → 挂释放回调"
+     * 这段控制流写得清楚：同步阶段失败要就地释放，异步阶段失败由 {@code doFinally} 释放。
+     */
+    private Flux<ServerSentEvent<byte[]>> startStream(Long userId, Long sessionId, ChatMessage target) {
         // 文本轮次取用户原话；图片轮次先跑阶段 1 拿到客观描述，再交给文本模型组织回答。
         TurnInput input = resolveTurnInput(userId, target);
 

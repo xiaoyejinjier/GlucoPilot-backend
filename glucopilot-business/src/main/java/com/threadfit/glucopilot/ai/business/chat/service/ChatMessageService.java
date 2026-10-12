@@ -27,6 +27,25 @@ import java.time.LocalDateTime;
 @RequiredArgsConstructor
 public class ChatMessageService {
 
+    /**
+     * 助手消息的 client_msg_id 前缀。
+     * <p>
+     * <b>为什么要给助手消息也写 client_msg_id</b>：{@code uk_session_client_active(session_id,
+     * client_msg_id, is_deleted)} 是"同一轮只落一条回复"的唯一权威判据，但它对 NULL 不生效
+     * （唯一索引允许多个 NULL），而助手消息原先一直是 NULL——于是两个并发的 /completions
+     * 都能通过 {@code selectAssistantReply} 的普通快照读，各自调一次模型、各落一条回复
+     * （实测：prompt_tokens 5855 + 5940，两条 seq_no 都是 2）。
+     * <p>
+     * 用一个<b>确定性</b>的值（{@code assistant:<replyToMsgId>}）就复用上现成的唯一键，
+     * 落败的一方捕获 1062 后回查既有回复返回，两个客户端最终看到同一条回答。
+     * 前缀不能省：客户端生成的 clientMsgId 是 UUID，不会与之相撞；若直接复用用户消息的
+     * clientMsgId 反而会与那条用户消息本身冲突。
+     */
+    private static final String ASSISTANT_CLIENT_MSG_ID_PREFIX = "assistant:";
+
+    /** seq_no 撞唯一键后的重试次数：窗口是"两条 SQL 之间"的毫秒级，1 次重试即可覆盖正常并发。 */
+    private static final int SEQ_NO_RETRY = 3;
+
     private final ChatMessageMapper chatMessageMapper;
     private final ChatSessionMapper chatSessionMapper;
     private final ChatSessionService chatSessionService;
@@ -48,11 +67,14 @@ public class ChatMessageService {
         message.setMediaId(request.getMediaId());
         message.setVoiceMediaId(request.getVoiceMediaId());
         message.setClientMsgId(request.getClientMsgId());
-        message.setSeqNo(chatMessageMapper.selectNextSeqNo(sessionId));
 
         try {
-            chatMessageMapper.insert(message);
+            insertWithSeqNo(message);
         } catch (DuplicateKeyException e) {
+            // 撞的是顺序号唯一键：说明重试次数已耗尽，这是真冲突，不能当作"重复提交"
+            if (SqlDuplicateKeys.isDuplicateKeyFor(e, ChatMessageMapper.UK_SESSION_SEQ)) {
+                throw e;
+            }
             // 重复 clientMsgId：当作成功，返回既有消息（不重复计数、不重复扣费）
             if (!SqlDuplicateKeys.isDuplicateKey(e)) {
                 throw e;
@@ -122,8 +144,13 @@ public class ChatMessageService {
      * 注意：该方法在响应式回调线程上执行，{@code RequestContext}（ThreadLocal）取不到当前用户，
      * 因此审计字段显式写入 userId，避免 created_by 落成 0。
      * <p>
-     * {@code client_msg_id} 留空：唯一键是 (session_id, client_msg_id)，若与用户消息共用同一个
-     * clientMsgId 会直接冲突；助手消息的幂等改由 {@code reply_to_msg_id} 判定。
+     * <b>幂等靠唯一键而不是靠调用方那次回查</b>：{@code client_msg_id} 写成
+     * {@code assistant:<replyToMsgId>}，于是 {@code uk_session_client_active} 保证"一条用户消息
+     * 至多一条助手回复"。并发的第二个请求会撞 1062，这里回查既有回复返回——
+     * 与用户消息路径（重复提交当成功）是同一套语义，两个客户端最终收敛到同一条回答。
+     * <p>
+     * <b>注意它挡不住"重复调用模型"</b>：INSERT 发生在模型调用之后，重复的模型调用已经花掉了。
+     * 防重复扣费要靠 {@code ChatRoundGuard} 在<b>调模型之前</b>拦截（见 ChatCompletionService）。
      */
     @Transactional
     public ChatMessage appendAssistantMessage(Long userId,
@@ -142,17 +169,64 @@ public class ChatMessageService {
         message.setMsgType(CodeEnum.ChatMsgType.TEXT.getCode());
         message.setContentText(contentText);
         message.setReplyToMsgId(replyToMsgId);
+        if (replyToMsgId != null) {
+            message.setClientMsgId(ASSISTANT_CLIENT_MSG_ID_PREFIX + replyToMsgId);
+        }
         message.setModelCode(modelCode);
         message.setPromptTokens(promptTokens);
         message.setCompletionTokens(completionTokens);
         message.setFinishReason(finishReason);
         message.setLatencyMs(latencyMs);
-        message.setSeqNo(chatMessageMapper.selectNextSeqNo(sessionId));
         message.setCreatedBy(userId);
         message.setUpdatedBy(userId);
-        chatMessageMapper.insert(message);
+
+        try {
+            insertWithSeqNo(message);
+        } catch (DuplicateKeyException e) {
+            if (replyToMsgId == null
+                    || (!SqlDuplicateKeys.isDuplicateKeyFor(e, ChatMessageMapper.UK_SESSION_CLIENT)
+                        && !SqlDuplicateKeys.isDuplicateKeyFor(e, ChatMessageMapper.UK_SESSION_SEQ))) {
+                throw e;
+            }
+            ChatMessage existing = chatMessageMapper.selectAssistantReply(sessionId, replyToMsgId);
+            if (existing == null) {
+                throw e;
+            }
+            log.info("本轮已并发落库过回复，复用既有助手消息 sessionId={} replyToMsgId={} 既有MsgId={}",
+                    sessionId, replyToMsgId, existing.getId());
+            return existing;
+        }
 
         chatSessionMapper.touchOnMessage(sessionId, LocalDateTime.now());
         return message;
+    }
+
+    /**
+     * 分配会话内顺序号并插入；撞 {@code uk_session_seq} 时重算重试。
+     * <p>
+     * 为什么用"乐观重试"而不是加锁：顺序号的冲突窗口只有"取 MAX 到 INSERT"之间的毫秒，
+     * 且失败方重算一次几乎必然成功（MAX 已经包含并发方刚插入的行）。加锁（无论行锁还是分布式锁）
+     * 都要为一个展示用字段付出协调成本，不划算。
+     * <p>
+     * 「重算必然前进」依赖 {@code selectNextSeqNo} 不过滤 {@code is_deleted}——否则软删除最大号那条后，
+     * 每次重算都会得到同一个号，重试永远失败。
+     */
+    private void insertWithSeqNo(ChatMessage message) {
+        for (int attempt = 1; ; attempt++) {
+            message.setSeqNo(chatMessageMapper.selectNextSeqNo(message.getSessionId()));
+            try {
+                chatMessageMapper.insert(message);
+                return;
+            } catch (DuplicateKeyException e) {
+                if (!SqlDuplicateKeys.isDuplicateKeyFor(e, ChatMessageMapper.UK_SESSION_SEQ)) {
+                    throw e;
+                }
+                if (attempt >= SEQ_NO_RETRY) {
+                    log.warn("顺序号连续 {} 次冲突，放弃重试 sessionId={}", attempt, message.getSessionId());
+                    throw e;
+                }
+                log.debug("顺序号冲突，重算后重试 sessionId={} attempt={}", message.getSessionId(), attempt);
+            }
+        }
     }
 }

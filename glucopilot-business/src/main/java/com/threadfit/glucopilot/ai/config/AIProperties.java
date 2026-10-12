@@ -79,7 +79,16 @@ public class AIProperties {
     @Data
     public static class MemoryProperties {
 
-        /** 送入模型的最近原文消息条数；与 chat_session.window_msg_count 语义一致。 */
+        /**
+         * 送入模型的最近原文消息条数（窗口上限）。
+         * <p>
+         * 由 {@code ChatMemoryReadAdvisor.keepLastWindow(...)} 在读取侧施加——<b>不要</b>指望
+         * {@code MessageWindowChatMemory.maxMessages}：框架的 {@code get()} 不裁剪，裁剪只在
+         * {@code add()}（本项目不走的写入路径）上（详见该 Advisor 的类注释）。
+         * <p>
+         * {@code chat_session.window_msg_count} 在建会话时落的是本值的快照，仅供追溯；
+         * 改这里不会回改历史会话的那一列。
+         */
         private int windowMessages = 20;
 
         /** 单次从库里捞取的防御性上限，避免窗口配置被误改成大数后一次拉全表。 */

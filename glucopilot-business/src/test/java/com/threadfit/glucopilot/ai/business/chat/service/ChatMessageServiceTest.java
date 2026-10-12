@@ -12,14 +12,19 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.file.entity.MediaFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -118,7 +123,102 @@ class ChatMessageServiceTest {
         verifyNoInteractions(ownedMediaResolver);
     }
 
+    // ---------- 并发：助手回复的唯一性与顺序号 ----------
+
+    @Test
+    void 助手消息应写入确定性的clientMsgId使唯一键生效() {
+        when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(2);
+        ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
+
+        service.appendAssistantMessage(USER_ID, SESSION_ID, 42L, "答案", "test-model", 1, 2, 1, 10);
+
+        verify(chatMessageMapper).insert(captor.capture());
+        // 唯一键 uk_session_client_active 对 NULL 不生效（唯一索引允许多个 NULL），
+        // 所以助手消息必须有一个确定性的值，"同一轮至多一条回复"才是数据库保证的
+        assertEquals("assistant:42", captor.getValue().getClientMsgId());
+    }
+
+    @Test
+    void 助手回复撞唯一键时应回查既有回复而不是报错() {
+        ChatMessage winner = new ChatMessage();
+        winner.setId(88L);
+        winner.setReplyToMsgId(42L);
+        winner.setContentText("并发方先落库的回答");
+
+        when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(2);
+        when(chatMessageMapper.insert(any(ChatMessage.class)))
+                .thenThrow(duplicateKey("chat_message.uk_session_client_active"));
+        when(chatMessageMapper.selectAssistantReply(SESSION_ID, 42L)).thenReturn(winner);
+
+        ChatMessage result = service.appendAssistantMessage(
+                USER_ID, SESSION_ID, 42L, "本请求的回答", "test-model", 1, 2, 1, 10);
+
+        // 两个客户端最终收敛到同一条回答（幂等语义与用户消息路径一致）
+        assertEquals(88L, result.getId());
+        assertEquals("并发方先落库的回答", result.getContentText());
+        // 没有新行落库，就不该再动会话的消息计数
+        verify(chatSessionMapper, never()).touchOnMessage(anyLong(), any());
+    }
+
+    @Test
+    void 助手回复撞唯一键却查不到既有行时应抛出() {
+        when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(2);
+        when(chatMessageMapper.insert(any(ChatMessage.class)))
+                .thenThrow(duplicateKey("chat_message.uk_session_client_active"));
+        when(chatMessageMapper.selectAssistantReply(SESSION_ID, 42L)).thenReturn(null);
+
+        assertThrows(DuplicateKeyException.class, () -> service.appendAssistantMessage(
+                USER_ID, SESSION_ID, 42L, "答案", "test-model", 1, 2, 1, 10));
+    }
+
+    @Test
+    void 顺序号冲突时应重算并重试成功() {
+        when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(7, 8);
+        when(chatMessageMapper.insert(any(ChatMessage.class)))
+                .thenThrow(duplicateKey("chat_message.uk_session_seq"))
+                .thenReturn(1);
+
+        ChatMessage saved = service.appendAssistantMessage(
+                USER_ID, SESSION_ID, 42L, "答案", "test-model", 1, 2, 1, 10);
+
+        assertEquals(8, saved.getSeqNo(), "重试时必须重新取号");
+        verify(chatMessageMapper, times(2)).insert(any(ChatMessage.class));
+    }
+
+    @Test
+    void 顺序号连续冲突超过上限应抛出() {
+        when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(7);
+        when(chatMessageMapper.insert(any(ChatMessage.class)))
+                .thenThrow(duplicateKey("chat_message.uk_session_seq"));
+
+        assertThrows(DuplicateKeyException.class, () -> service.appendAssistantMessage(
+                USER_ID, SESSION_ID, 42L, "答案", "test-model", 1, 2, 1, 10));
+
+        // 重试是有上限的：无限重试会把请求挂死，也会掩盖真正的问题
+        verify(chatMessageMapper, times(3)).insert(any(ChatMessage.class));
+    }
+
+    @Test
+    void 用户消息顺序号冲突应重试而不是被当成重复提交() {
+        when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(1, 2);
+        when(chatMessageMapper.insert(any(ChatMessage.class)))
+                .thenThrow(duplicateKey("chat_message.uk_session_seq"))
+                .thenReturn(1);
+
+        service.appendUserMessage(USER_ID, SESSION_ID, textRequest("早餐前血糖 6.8 正常吗"));
+
+        // 撞号走重试；绝不能落到"重复 clientMsgId 回查"那条分支上去（那里查不到东西）
+        verify(chatMessageMapper, never()).selectByClientMsgId(anyLong(), anyString());
+        verify(chatMessageMapper, times(2)).insert(any(ChatMessage.class));
+    }
+
     // ---------- 构造辅助 ----------
+
+    /** 模拟 MySQL 1062：消息里带上键名，供 SqlDuplicateKeys 分流。 */
+    private static DuplicateKeyException duplicateKey(String keyName) {
+        return new DuplicateKeyException("duplicate",
+                new java.sql.SQLException("Duplicate entry 'x' for key '" + keyName + "'", "23000", 1062));
+    }
 
     private static ChatDtos.SendMessageRequest textRequest(String contentText) {
         ChatDtos.SendMessageRequest request = new ChatDtos.SendMessageRequest();

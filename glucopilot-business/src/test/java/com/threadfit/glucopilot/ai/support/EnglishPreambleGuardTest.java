@@ -53,6 +53,32 @@ class EnglishPreambleGuardTest {
                 guard.apply("Let me check your profile. And your monthly records too.这个月的记录我帮您梳理了一下"));
     }
 
+    // ---------- 英文句子后面紧跟排版标记（实测漏网的那种）----------
+
+    @Test
+    void 英文句后紧跟markdown加粗时应只删英文并保留星号() {
+        // 实测原样：I'll check your records.**你这周（10月3日–10月9日）的血糖概况**
+        // 两个星号是中文加粗的开始标记，删英文时必须留下，否则后面的 ** 失去配对
+        assertEquals("**你这周（10月3日–10月9日）的血糖概况**",
+                guard.apply("I'll check your records.**你这周（10月3日–10月9日）的血糖概况**"));
+    }
+
+    @Test
+    void 英文句后跟标题或列表符号时应保留标记() {
+        assertEquals("# 本月概览", guard.apply("Let me check your stats.# 本月概览"));
+        assertEquals("- 记录天数：8 天", guard.apply("I'll pull up your records.- 记录天数：8 天"));
+    }
+
+    @Test
+    void 英文句后跟换行时应从中文开始() {
+        assertEquals("本月血糖如下", guard.apply("I'll check your records.\n\n本月血糖如下"));
+    }
+
+    @Test
+    void 英文句前有空白时也应能识别() {
+        assertEquals("本月血糖如下", guard.apply("  Let me check that for you.  本月血糖如下"));
+    }
+
     // ---------- 必须原样保留 ----------
 
     @Test

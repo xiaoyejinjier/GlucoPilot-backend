@@ -10,8 +10,7 @@ import lombok.EqualsAndHashCode;
  * <p>记录的是「一次媒体资源」的元数据：上传者（C 端 userId / 运营 opsId 二选一）、
  * 业务归属（bizType + bizId）、对象存储在服务端的定位（storageProvider / bucketName / storageKey）、
  * 供前端展示的 fileUrl，以及用于内容去重的 sha256Hex。
- * <p>storageKey 规范为 {@code {bizType}/{yyyy}/{MM}/{userId}/{uuid}.{ext}}（由业务侧统一生成）；
- * 注意 bucketName 字段当前尚未回填（已知缺口）。
+ * <p>storageKey 规范为 {@code {bizType}/{yyyy}/{MM}/{userId}/{uuid}.{ext}}（由业务侧统一生成）。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -33,7 +32,7 @@ public class MediaFile extends BaseEntity {
     /** 存储 provider（CodeEnum.StorageProvider：1=MinIO 2=阿里云OSS）。 */
     private Integer storageProvider;
 
-    /** 桶名（目前未回填，见类注释）。 */
+    /** 桶名。 */
     private String bucketName;
 
     /** 对象 Key。 */

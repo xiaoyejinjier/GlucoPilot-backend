@@ -74,4 +74,9 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
     public StorageProvider provider() {
         return StorageProvider.ALIYUN_OSS;
     }
+
+    @Override
+    public String bucket() {
+        return props.getBucket();
+    }
 }

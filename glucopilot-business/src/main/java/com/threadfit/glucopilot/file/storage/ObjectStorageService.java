@@ -56,6 +56,9 @@ public interface ObjectStorageService {
     /** 当前实现对应的 provider 落库值。 */
     StorageProvider provider();
 
+    /** 当前桶名（落库 media_file.bucket_name 用）。 */
+    String bucket();
+
     /** 生成对象 Key：{bizType}/{yyyy}/{MM}/{userId}/{uuid}.{ext}。 */
     default String buildStorageKey(MediaBizType bizType, String ext, Long userId) {
         LocalDate now = LocalDate.now();

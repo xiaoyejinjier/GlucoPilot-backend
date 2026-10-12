@@ -106,6 +106,11 @@ public class MinioObjectStorageService implements ObjectStorageService {
         return StorageProvider.MINIO;
     }
 
+    @Override
+    public String bucket() {
+        return props.getBucket();
+    }
+
     /** 服务端读取对象完整字节（用于「图片送模型」场景，不产生公开 URL）。读失败必须留痕。 */
     @Override
     public byte[] getObject(String storageKey) {

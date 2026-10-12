@@ -120,7 +120,6 @@ public class MediaFileServiceImpl implements MediaFileService {
 
     /**
      * 落库入口：写入一条 media_file，fileUrl 也由此处统一生成（file_url 由服务端 resolve，非客户端传入）。
-     * 注意：bucket_name 字段当前未回填（已知缺口，平台后续切换 zoned OSS 时再择机补齐）。
      */
     private MediaFile insertMediaFile(MediaBizType bizType, RegisterRequest request, Long userId) {
         StorageProvider provider = objectStorageService.provider();
@@ -128,6 +127,7 @@ public class MediaFileServiceImpl implements MediaFileService {
         row.setUserId(userId);
         row.setBizType(bizType.getCode());
         row.setStorageProvider(provider.getCode());
+        row.setBucketName(objectStorageService.bucket());
         row.setStorageKey(request.getStorageKey());
         row.setMimeType(request.getMimeType());
         row.setSizeBytes(request.getSizeBytes());

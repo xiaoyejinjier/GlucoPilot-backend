@@ -25,8 +25,14 @@ import java.util.List;
  *   <li>本项目的消息表比通用 JDBC 记忆表丰富（seq_no / token 计量 / finish_reason / 幂等键），
  *       通用实现装不下这些字段，自研反而更贴;</li>
  *   <li>框架的 {@code ChatMemory}（{@code MessageWindowChatMemory}）会自动使用本 Bean
- *       （其自动装配带 {@code @ConditionalOnMissingBean}），窗口裁剪语义直接复用框架实现。</li>
+ *       （其自动装配带 {@code @ConditionalOnMissingBean}）。</li>
  * </ul>
+ * <p>
+ * <b>⚠️ 本类只负责"最多捞多少"，不负责"送多少进 prompt"</b>：框架的
+ * {@code MessageWindowChatMemory.get()} 是纯透传、不做任何裁剪（裁剪只在其 {@code add()} 路径上），
+ * 而本项目不经过 {@code add()} 写记忆，所以窗口由 {@code ChatMemoryReadAdvisor.keepLastWindow(...)}
+ * 在读取侧施加。这里的 {@code ai.memory.max-fetch} 是防御性的取值上限
+ * （防"窗口配置被误改成大数后一次拉全表"），不是提示词预算。
  * <p>
  * <b>写入不在这里发生</b>：助手消息必须等流式结束、拿到完整正文与 token 计量后才由
  * {@code ChatCompletionService} 显式落库。因此 {@link #saveAll} 主动抛异常，

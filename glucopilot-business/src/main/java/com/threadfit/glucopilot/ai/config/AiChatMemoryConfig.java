@@ -13,8 +13,15 @@ import org.springframework.context.annotation.Configuration;
  * Spring AI 的 {@code ChatMemoryAutoConfiguration} 自带 {@code ChatMemoryRepository} 与
  * {@code ChatMemory} 两个 Bean（均为 {@code @ConditionalOnMissingBean}），默认用内存实现。
  * 本项目提供 {@link ChatMemoryRepository} 的 MySQL 实现（{@code MyBatisChatMemoryRepository}），
- * 框架随即改用我们的存储——<b>窗口裁剪语义仍由框架的 {@link MessageWindowChatMemory} 负责</b>，
- * 不再自己写 SQL 的 LIMIT 拼接。
+ * 框架随即改用我们的存储。
+ * <p>
+ * <b>⚠️ 窗口裁剪不在这里的 {@code maxMessages} 上（2026-10-12 修正）</b>：核对框架字节码后确认
+ * {@code MessageWindowChatMemory.get()} 是<b>纯透传</b>、不做裁剪，裁剪只发生在 {@code add()} 路径上；
+ * 而本项目从不走 {@code add()} 写记忆（{@code saveAll()} 主动抛异常，写入由业务 Service 显式完成）。
+ * 也就是说 {@code maxMessages} 在当前实现下<b>不产生任何效果</b>——真正决定"送多少条进 prompt"的是
+ * {@link ChatMemoryReadAdvisor} 里的 {@code keepLastWindow(...)}。
+ * 这里仍显式设置 {@code maxMessages}，是为了让"窗口语义"在读/写两侧都指向同一个配置项，
+ * 避免将来一旦启用框架的写路径时窗口悄悄退化成框架默认值。
  * <p>
  * 没有使用框架的 {@code MessageChatMemoryAdvisor}：它会写记忆，与本项目「助手消息在流结束后
  * 显式落库」的时序冲突（详见 {@link ChatMemoryReadAdvisor} 类注释）。
@@ -31,7 +38,8 @@ public class AiChatMemoryConfig {
     }
 
     @Bean
-    public ChatMemoryReadAdvisor chatMemoryReadAdvisor(ChatMemory chatMemory) {
-        return new ChatMemoryReadAdvisor(chatMemory);
+    public ChatMemoryReadAdvisor chatMemoryReadAdvisor(ChatMemory chatMemory, AIProperties aiProperties) {
+        // 窗口条数显式传进去：它只影响"读"，与本类的 maxMessages（只影响"写"）是两回事
+        return new ChatMemoryReadAdvisor(chatMemory, aiProperties.getMemory().getWindowMessages());
     }
 }

@@ -3,8 +3,13 @@
 #   application.yaml        公共配置 + 本机默认可跑通的默认值
 #   application-dev.yaml    开发环境差异（profile=dev）
 #   application-local.yaml  个人密钥/口令，已 gitignore，禁止入库（profile=local）
-# 没显式指定 profile 时（IDE 直接 Run、java -jar 不带参数）默认激活 dev,local，
-# 保证开箱即用；生产用 --spring.profiles.active=prod 显式覆盖即可。
+# 没显式指定 profile 时（IDE 直接 Run、java -jar 不带参数）默认激活 dev,local；
+# 生产用 --spring.profiles.active=prod 显式覆盖即可。
+#
+# ⚠️ 「开箱即用」有一个前提：token.secret 引用的 ${OPS_TOKEN_SECRET} 没有默认值，
+#    缺了它连本地都起不来（PlaceholderResolutionException）。.env 只在 Docker/Compose 下被读取，
+#    shell 与 IDE 都不读，所以本机开发需要 export 该变量，或写进 application-local.yaml
+#    （该文件放在本目录，见 backend/README.md）。
 spring:
   application:
     name: GlucoPilot Backend

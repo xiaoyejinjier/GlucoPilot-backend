@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 public interface ChatSessionMapper extends BaseMapper<ChatSession> {
 
     /**
-     * 「每用户至多一条进行中会话」的唯一键（V10 新增）。
+     * 「每用户至多一条进行中会话」的唯一键（V11 新增）。
      * <p>
      * 索引建在生成列 {@code active_user_id} 上：进行中的行等于 user_id，其余为 NULL，
      * 利用「唯一索引允许多个 NULL」表达条件唯一。并发建会话落败的一方捕获该键的 1062 后回查。

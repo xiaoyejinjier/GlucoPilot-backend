@@ -1351,7 +1351,7 @@ ALTER TABLE chat_session
 
 ## 23.6 迁移里先修数据再加约束
 
-V10 是"修复 + 约束"两步，且修复只针对确实有问题的会话：
+`V11__add_chat_concurrency_constraints.sql` 是"修复 + 约束"两步，且修复只针对确实有问题的会话：
 1. 用窗口函数把有重复 `seq_no` 的会话按 `(seq_no, id)` 重排为 1..N（保留原有相对顺序）；
 2. 归档多余的"进行中"会话（保留 `selectActiveByUserId` 会选中的那条）；
 3. 再加两个唯一约束。
@@ -1359,9 +1359,19 @@ V10 是"修复 + 约束"两步，且修复只针对确实有问题的会话：
 **实测**：本地库存在一对重复的 `seq_no`（会话 48 的 `1/2/2`），迁移后修正为 `1/2/3`，
 `uk_session_seq` / `uk_user_active` 建立成功（178ms）。
 
+**⚠️ 这个文件最初编号是 V10，与 RuoYi 迁移的 `V10__official_ruoyi_schema.sql` 撞号，已改为 V11。**
+两边在同一天各自按"下一个可用编号"取了 V10（`RUOYI-MIGRATION-PLAN.md` 里"实施时再次确认远端最新编号"
+这句防护没生效），结果 Flyway 报 `Found more than one migration with version 10`、应用直接起不来
+（`MigrationFilesTest` 当场抓到）。改我这边的理由：对方的 V10 已被 `DEPLOYMENT.md`、`RUOYI-INTEGRATION.md`、
+`RUOYI-DATABASE-MIGRATION.md` 与迁移集成测试共同引用（"V9→V10 数据保留"），改动它要连带改四份文档和一个 IT；
+我这个迁移只有两处 javadoc 引用它，且当时**任何共享库都还没执行过它**（对方的迁移手册写明
+"目标数据库未连接，代码提交不代表已变更目标数据"）。
+已经把 `V10__add_chat_concurrency_constraints.sql` 应用到本地库的人，需要按
+`docs/RUOYI-DATABASE-MIGRATION.md` 的"编号冲突修正"一节处理。
+
 顺带记一个坑：**测试不会执行迁移**——`GlucoPilotBackendApplicationTests` 是占位测试
 （全量上下文依赖 MySQL，注释里写明"联调环境再开 @SpringBootTest"），
-所以 V10 只有**启动应用**才会真正执行。
+所以迁移只有**启动应用**才会真正执行（迁移集成测试除外，它需要 `-Pmigration-it`）。
 
 ## 23.7 验证方式与结果
 
@@ -1400,6 +1410,88 @@ V10 是"修复 + 约束"两步，且修复只针对确实有问题的会话：
    前端有 `sending` 锁，正常操作不会触发；要做"等待重放"需要轮询或推送，属于产品决策。
 3. **历史重复数据不回填**：迁移不会删除已经存在的重复助手回复（那是用户可见内容），
    只保证从此刻起不再新增。老行的 `client_msg_id` 仍是 NULL，因此不受唯一键管辖。
+
+# 24. 会话记忆窗口从未生效：`window-messages` 是死配置（2026-10-12）
+
+## 24.1 现象与根因
+
+`ai.memory` 下有两个数字，注释说得很清楚：
+
+| 配置 | 注释声称 | 实际 |
+| --- | --- | --- |
+| `window-messages: 20` | 「送入模型的最近原文消息条数」 | **完全没生效** |
+| `max-fetch: 200` | 「单次从库里捞取的防御性上限」 | **这个才是真正送进 prompt 的条数** |
+
+根因在框架侧，且与项目原先的注释判断相反。`MessageWindowChatMemory.get()` 的字节码是**纯透传**：
+
+```
+0: aload_1
+1: ldc  "conversationId cannot be null or empty"
+3: invokestatic Assert.hasText
+6: getfield   chatMemoryRepository
+11: invokeinterface ChatMemoryRepository.findByConversationId
+16: areturn                       ← 直接返回，没有任何裁剪
+```
+
+裁剪只发生在私有方法 `process(...)` 里，而它**只被 `add(...)` 调用**。本项目从不走 `add()`
+（`MyBatisChatMemoryRepository.saveAll()` 主动抛异常，写入由业务 Service 显式完成），
+于是 `maxMessages(20)` 成了死配置，真正决定条数的是仓库那一行的 `LIMIT`：
+
+```java
+chatMessageMapper.selectRecentBySession(sessionId, aiProperties.getMemory().getMaxFetch());  // 200
+```
+
+配置、字段注释、类注释三者都在"骗人"：`chat_session.window_msg_count` 里记着 20，
+`AiChatMemoryConfig` 的注释写着"窗口裁剪语义仍由框架的 MessageWindowChatMemory 负责"，
+而实际每轮往 prompt 里塞最多 200 条历史。**没有任何测试断言过条数**——
+`MyBatisChatMemoryRepositoryTest` 把 200 抄进了 mock 参数，`ChatMemoryReadAdvisorTest` 只测 `merge()`。
+
+## 24.2 修法（方案 B：窗口留在读取侧）
+
+按框架分层，仓库负责"最多捞多少"，Advisor 负责"送多少进 prompt"：
+
+```java
+// ChatMemoryReadAdvisor
+List<Message> history = keepLastWindow(chatMemory.get(conversationId), windowMessages);
+
+static List<Message> keepLastWindow(List<Message> history, int window) {
+    if (window <= 0 || history.size() <= window) {
+        return history;                     // 配错时不裁剪（构造器已 WARN），避免静默清空历史
+    }
+    return new ArrayList<>(history.subList(history.size() - window, history.size()));
+}
+```
+
+配套改动：
+1. `ChatMemoryReadAdvisor` 增加 `windowMessages` 构造参数（由 `AiChatMemoryConfig` 从 `ai.memory.window-messages` 传入），
+   窗口非法（≤0）时构造期 WARN 并选择"不裁剪"这个可解释的行为；
+2. 修正三处不成立的注释：`AiChatMemoryConfig`、`MyBatisChatMemoryRepository`、`AIProperties.MemoryProperties`；
+3. `MessageWindowChatMemory.maxMessages` 保留但注明它只作用于（本项目不走的）写入路径；
+4. 补测试：静态裁剪 3 条 + **顾问层** 3 条（走 `adviseCall` 断言真正注入 prompt 的条数）+ 原去重 4 条。
+
+**为什么不选方案 A（把仓库 LIMIT 换成窗口）**：那会让"窗口"变成仓库的职责，而框架自己
+是把窗口放在 `ChatMemory` 层的；仓库的 `max-fetch` 作为防御上限仍有意义（防窗口被误配成大数后一次拉全表）。
+
+## 24.3 验证
+
+- 单测：`ChatMemoryReadAdvisorTest` 10 项（含"80 条历史 → 只注入 20 条 + 本轮 1 条"）、
+  `MyBatisChatMemoryRepositoryTest` 4 项；全量 **222** 项全绿。
+- 端到端（同一会话、历史 30 条，真实模型）：
+
+| | 日志 |
+| --- | --- |
+| 修复前（旧 jar） | `注入会话记忆 conversationId=55 history=30 条` |
+| 修复后 | `注入会话记忆 conversationId=55 history=20 条（窗口上限 20）` |
+
+## 24.4 顺带发现的两个知识点
+
+1. **`ChatMemory.get()` 不裁剪是框架的既定行为**，不是 bug：窗口语义被设计在 `add()` 路径上。
+   只要项目自己掌握写入（本项目正是如此），就必须自己施加窗口——这一点值得写进任何
+   "不用框架 Advisor"的自研方案里。
+2. **打包时不要同时启动应用**：`java -jar ruoyi-admin.jar` 会占用 jar，
+   与 `mvn package` 的 repackage 撞车（本次实测 `-rf :ruoyi-admin` 失败），
+   且失败后旧 jar 仍在，表现为"代码改了但行为没变"——很容易误判成修法无效。
+
 
 
 

@@ -13,7 +13,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
     /** 客户端幂等唯一键：同会话内一个 clientMsgId 只能有一条消息。 */
     String UK_SESSION_CLIENT = "uk_session_client_active";
 
-    /** 会话内顺序号唯一键（V10 新增）：并发插入撞号时靠它暴露冲突，应用侧重算重试。 */
+    /** 会话内顺序号唯一键（V11 新增）：并发插入撞号时靠它暴露冲突，应用侧重算重试。 */
     String UK_SESSION_SEQ = "uk_session_seq";
 
     /**

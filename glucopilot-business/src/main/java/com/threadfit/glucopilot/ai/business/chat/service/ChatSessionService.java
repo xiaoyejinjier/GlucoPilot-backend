@@ -38,7 +38,7 @@ public class ChatSessionService {
      * 2.23 取进行中会话；没有就建一个。
      * <p>
      * <b>并发下"每用户至多一条进行中会话"由唯一键 {@code uk_user_active} 保证</b>
-     * （建在生成列 {@code active_user_id} 上，见 V10 迁移），而不是由上面的
+     * （建在生成列 {@code active_user_id} 上，见 V11 迁移），而不是由上面的
      * {@code selectActiveByUserId} 保证——那是普通快照读，两个并发请求都会查不到，
      * 然后各建一条（实测可复现）。
      * <p>

@@ -27,14 +27,17 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -55,6 +58,8 @@ import java.util.stream.Collectors;
 public class MealRecordServiceImpl implements MealRecordService {
 
     private static final int TEXT_MAX = 512;
+    /** 档案汇总高频食物条数上限。 */
+    private static final int TOP_FOOD_LIMIT = 4;
 
     private final MealRecordMapper mealRecordMapper;
     private final MealFoodItemMapper mealFoodItemMapper;
@@ -179,6 +184,52 @@ public class MealRecordServiceImpl implements MealRecordService {
                         .in("user_id", userIds))
                 .stream()
                 .collect(Collectors.groupingBy(MealRecord::getUserId, Collectors.counting()));
+    }
+
+    @Override
+    public MealVos.ArchiveSummary archiveSummary(Long userId, LocalDate from, LocalDate to) {
+        List<MealRecord> records = mealRecordMapper.selectList(new LambdaQueryWrapper<MealRecord>()
+                .eq(MealRecord::getUserId, userId)
+                .ge(MealRecord::getRecordDate, from)
+                .le(MealRecord::getRecordDate, to));
+        int recordDays = (int) records.stream().map(MealRecord::getRecordDate).distinct().count();
+        // 均碳：按主记录 carbsG 快照取均餐值（无值记录不参与）
+        BigDecimal avgCarbsG = averageOf(records.stream().map(MealRecord::getCarbsG).toList());
+        // 均热：明细热量先按餐求和，再取均餐值（无热量明细的餐点不参与）
+        List<MealFoodItem> items = records.isEmpty() ? List.of() : mealFoodItemMapper.selectList(
+                new LambdaQueryWrapper<MealFoodItem>()
+                        .in(MealFoodItem::getMealId, records.stream().map(MealRecord::getId).toList()));
+        Map<Long, BigDecimal> calByMeal = items.stream()
+                .filter(i -> i.getCaloriesKcal() != null)
+                .collect(Collectors.groupingBy(MealFoodItem::getMealId,
+                        Collectors.reducing(BigDecimal.ZERO, MealFoodItem::getCaloriesKcal, BigDecimal::add)));
+        BigDecimal avgCal = averageOf(new ArrayList<>(calByMeal.values()));
+        List<String> topFoods = items.stream()
+                .map(MealFoodItem::getFoodName)
+                .filter(StringUtils::hasText)
+                .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()))
+                .entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed()
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .limit(TOP_FOOD_LIMIT)
+                .map(Map.Entry::getKey)
+                .toList();
+        return MealVos.ArchiveSummary.builder()
+                .recordDays(recordDays)
+                .avgCarbsG(avgCarbsG)
+                .avgCal(avgCal)
+                .topFoods(topFoods)
+                .build();
+    }
+
+    /** 非空数值均值，整数口径（HALF_UP）；无有效值返回 null。 */
+    private static BigDecimal averageOf(List<BigDecimal> values) {
+        List<BigDecimal> valid = values.stream().filter(Objects::nonNull).toList();
+        if (valid.isEmpty()) {
+            return null;
+        }
+        BigDecimal sum = valid.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+        return sum.divide(BigDecimal.valueOf(valid.size()), 0, RoundingMode.HALF_UP);
     }
 
     /** 校验照片归属：mediaId 可空；非空时须是本用户、餐食业务类型的可用照片。 */

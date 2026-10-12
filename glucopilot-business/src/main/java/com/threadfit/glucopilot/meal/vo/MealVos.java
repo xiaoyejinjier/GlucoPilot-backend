@@ -55,6 +55,20 @@ public final class MealVos {
         private List<MealItemDetail> items;
     }
 
+    /** 管理端健康档案：近期饮食记录汇总（窗口内活跃记录）。 */
+    @Data
+    @Builder
+    public static class ArchiveSummary {
+        /** 窗口内有饮食记录的天数 */
+        private Integer recordDays;
+        /** 平均每餐碳水（g，按主记录 carbsG 均值，无数据为 null） */
+        private BigDecimal avgCarbsG;
+        /** 平均每餐热量（kcal，按明细热量求和后取均餐值，无数据为 null） */
+        private BigDecimal avgCal;
+        /** 高频食物名（按明细出现次数降序，最多 4 个） */
+        private List<String> topFoods;
+    }
+
     /** 单行食物明细 VO。 */
     @Data
     @Builder

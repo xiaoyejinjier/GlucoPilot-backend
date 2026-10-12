@@ -9,9 +9,13 @@ import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
+import com.threadfit.glucopilot.glucose.entity.GlucoseNode;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
+import com.threadfit.glucopilot.glucose.period.GlucosePeriodService;
+import com.threadfit.glucopilot.glucose.trend.GlucoseTrendService;
 import com.threadfit.glucopilot.meal.service.MealRecordService;
+import com.threadfit.glucopilot.meal.vo.MealVos;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
@@ -25,9 +29,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -38,12 +45,17 @@ public class AdminUserService {
 
     private static final BigDecimal TARGET_LOW = new BigDecimal("3.9");
     private static final BigDecimal TARGET_HIGH = new BigDecimal("7.8");
+    /** 档案趋势窗口（近 7 日，仅含有记录的天）。 */
+    private static final int TREND_DAYS = 7;
+    /** 档案饮食汇总窗口（近 30 日）。 */
+    private static final int MEAL_SUMMARY_DAYS = 30;
 
     private final UserAccountMapper userAccountMapper;
     private final UserProfileMapper userProfileMapper;
     private final UserHealthMapper userHealthMapper;
     private final GlucoseRecordMapper glucoseRecordMapper;
     private final MealRecordService mealRecordService;
+    private final GlucosePeriodService glucosePeriodService;
 
     public PageResult<AdminUserDtos.UserItem> page(
             String keyword, Integer accountStatus, PageQuery query) {
@@ -123,14 +135,140 @@ public class AdminUserService {
         return AdminUserDtos.UpdatedResult.builder().updated(true).build();
     }
 
+    /**
+     * 管理端健康档案详情：聚合 user_account / user_profile / user_health 真实数据，
+     * 趋势与分时段取自未删除的 glucose_record，饮食汇总经 meal service 聚合。
+     * height / weight 因 user_profile 无对应列、summary 无 AI 数据源，均按 TODO 返回 null。
+     */
+    public AdminUserDtos.Archive archive(Long userId) {
+        UserAccount account = userAccountMapper.selectById(userId);
+        if (account == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "用户不存在");
+        }
+        UserProfile profile = userProfileMapper.selectOne(new QueryWrapper<UserProfile>()
+                .eq("user_id", userId).last("LIMIT 1"));
+        UserHealth health = userHealthMapper.selectOne(new QueryWrapper<UserHealth>()
+                .eq("user_id", userId).last("LIMIT 1"));
+
+        LocalDate today = LocalDate.now();
+        LocalDate trendFrom = today.minusDays(TREND_DAYS - 1L);
+        List<GlucoseRecord> records = glucoseRecordMapper.selectList(new QueryWrapper<GlucoseRecord>()
+                .eq("user_id", userId)
+                .ge("record_date", trendFrom)
+                .le("record_date", today));
+        MealVos.ArchiveSummary meal = mealRecordService.archiveSummary(
+                userId, today.minusDays(MEAL_SUMMARY_DAYS - 1L), today);
+
+        return AdminUserDtos.Archive.builder()
+                .userId(String.valueOf(account.getId()))
+                .owner(AdminUserDtos.Owner.builder()
+                        .nickname(nicknameOf(account, profile))
+                        .phoneMasked(PhoneUtils.mask(account.getPhone()))
+                        .age(health == null ? null : health.getAge())
+                        .diabetesTypeText(diabetesTypeTextOf(health))
+                        .registeredAt(account.getGmtCreate())
+                        .build())
+                .profile(AdminUserDtos.Profile.builder()
+                        // TODO 待 user_profile 增加身高/体重列后回填
+                        .height(null)
+                        .weight(null)
+                        .medication(health == null ? null : health.getMedication())
+                        .exerciseHabit(health == null ? null : health.getExerciseHabit())
+                        .diagnosedYm(health == null ? null : health.getDiagnosedYm())
+                        .build())
+                .trend(trendOf(records, trendFrom, today))
+                .nodeStats(nodeStatsOf(records))
+                .mealSummary(AdminUserDtos.MealSummary.builder()
+                        .recordDays(meal.getRecordDays())
+                        .avgCarbsG(meal.getAvgCarbsG())
+                        .avgCal(meal.getAvgCal())
+                        .topFoods(meal.getTopFoods())
+                        .build())
+                // TODO 待接入 AI 档案小结后回填
+                .summary(null)
+                .build();
+    }
+
+    /** 按天聚合趋势：仅输出有记录的天，避免 null 均值污染前端均值计算。 */
+    private static List<AdminUserDtos.TrendPoint> trendOf(
+            List<GlucoseRecord> records, LocalDate from, LocalDate to) {
+        Map<LocalDate, List<GlucoseRecord>> byDate = records.stream()
+                .filter(r -> r.getRecordDate() != null)
+                .collect(Collectors.groupingBy(GlucoseRecord::getRecordDate));
+        List<AdminUserDtos.TrendPoint> points = new ArrayList<>();
+        for (LocalDate date = from; !date.isAfter(to); date = date.plusDays(1)) {
+            List<GlucoseRecord> rows = byDate.getOrDefault(date, List.of());
+            BigDecimal avg = GlucoseTrendService.average(rows);
+            if (avg == null) {
+                continue;
+            }
+            points.add(AdminUserDtos.TrendPoint.builder()
+                    .date(date)
+                    .avg(avg)
+                    .okRate(okRateOf(rows))
+                    .build());
+        }
+        return points;
+    }
+
+    /** 分时段均值：节点名取自字典，仅返回有记录的节点（含样本数）。 */
+    private List<AdminUserDtos.NodeStat> nodeStatsOf(List<GlucoseRecord> records) {
+        Map<String, List<GlucoseRecord>> byNode = records.stream()
+                .filter(r -> r.getNodeCode() != null)
+                .collect(Collectors.groupingBy(GlucoseRecord::getNodeCode));
+        List<AdminUserDtos.NodeStat> stats = new ArrayList<>();
+        for (GlucoseNode node : glucosePeriodService.listEnabledNodes()) {
+            List<GlucoseRecord> rows = byNode.get(node.getNodeCode());
+            if (rows == null || rows.isEmpty()) {
+                continue;
+            }
+            BigDecimal avg = GlucoseTrendService.average(rows);
+            if (avg == null) {
+                continue;
+            }
+            stats.add(AdminUserDtos.NodeStat.builder()
+                    .node(node.getNodeCode())
+                    .nodeName(node.getNodeName())
+                    .avg(avg)
+                    .samples(rows.size())
+                    .build());
+        }
+        return stats;
+    }
+
+    /** 达标率：区间 [3.9, 7.8) 占比，保留整数百分比；无有效值为 0。 */
+    private static Integer okRateOf(List<GlucoseRecord> rows) {
+        long validCount = rows.stream().map(GlucoseRecord::getGlucoseValue).filter(Objects::nonNull).count();
+        long targetCount = rows.stream()
+                .map(GlucoseRecord::getGlucoseValue)
+                .filter(value -> value != null
+                        && value.compareTo(TARGET_LOW) >= 0
+                        && value.compareTo(TARGET_HIGH) < 0)
+                .count();
+        return validCount == 0 ? 0 : (int) Math.round(targetCount * 100.0 / validCount);
+    }
+
+    /** 昵称兜底：资料昵称 → 账号名 → 用户#id。 */
+    private static String nicknameOf(UserAccount account, UserProfile profile) {
+        if (profile != null && StringUtils.hasText(profile.getNickname())) {
+            return profile.getNickname();
+        }
+        return StringUtils.hasText(account.getUsername())
+                ? account.getUsername()
+                : "用户#" + account.getId();
+    }
+
+    /** 糖尿病类型文案：健康档案无值统一回退「未填写」。 */
+    private static String diabetesTypeTextOf(UserHealth health) {
+        return health == null || !StringUtils.hasText(health.getDiabetesTypeText())
+                ? "未填写"
+                : health.getDiabetesTypeText();
+    }
+
     private static AdminUserDtos.UserItem toItem(
             UserAccount account, UserProfile profile, UserHealth health, List<GlucoseRecord> records,
             long mealCount) {
-        String nickname = profile != null && StringUtils.hasText(profile.getNickname())
-                ? profile.getNickname()
-                : StringUtils.hasText(account.getUsername())
-                        ? account.getUsername()
-                        : "用户#" + account.getId();
+        String nickname = nicknameOf(account, profile);
         String avatarText = profile != null && StringUtils.hasText(profile.getAvatarText())
                 ? profile.getAvatarText()
                 : nickname.substring(0, 1);
@@ -150,9 +288,7 @@ public class AdminUserService {
                 .avatarText(avatarText)
                 .phoneMasked(PhoneUtils.mask(account.getPhone()))
                 .age(health == null ? null : health.getAge())
-                .diabetesTypeText(health == null || !StringUtils.hasText(health.getDiabetesTypeText())
-                        ? "未填写"
-                        : health.getDiabetesTypeText())
+                .diabetesTypeText(diabetesTypeTextOf(health))
                 .accountStatus(account.getAccountStatus())
                 .registeredAt(account.getGmtCreate())
                 .lastActiveAt(account.getLastLoginAt())

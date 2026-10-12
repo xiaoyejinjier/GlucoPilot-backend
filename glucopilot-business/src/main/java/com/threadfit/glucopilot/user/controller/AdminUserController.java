@@ -41,4 +41,11 @@ public class AdminUserController {
             @Valid @RequestBody AdminUserDtos.StatusRequest request) {
         return ApiResponse.ok(adminUserService.updateStatus(id, request.getAccountStatus()));
     }
+
+    /** 健康档案详情：真实聚合用户资料/健康档案/血糖趋势/饮食汇总，供管理端档案页替换 Mock。 */
+    @GetMapping("/{id}/archive")
+    @PreAuthorize("@ss.hasPermi('" + PermCodes.HEALTH_ARCHIVE_VIEW + "')")
+    public ApiResponse<AdminUserDtos.Archive> archive(@PathVariable Long id) {
+        return ApiResponse.ok(adminUserService.archive(id));
+    }
 }

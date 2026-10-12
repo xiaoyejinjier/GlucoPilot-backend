@@ -17,6 +17,8 @@ import java.math.BigDecimal;
  * - age                年龄；
  * - medication         用药情况；
  * - exercise_habit     运动习惯；
+ * - height_cm          身高 cm（可空，50~250）；
+ * - weight_kg          体重 kg（可空，20.0~300.0，一位小数）；
  * - target_fasting     空腹血糖目标，DECIMAL(4,1) 范围 1.0~33.3 mmol/L；
  * - target_postprandial 餐后血糖目标，DECIMAL(4,1) 范围 1.0~33.3 mmol/L；
  * 唯一约束 uk_user_active(user_id, is_deleted) 保证一用户一份活跃档案。
@@ -33,6 +35,8 @@ public class UserHealth extends BaseEntity {
     private Integer age;
     private String medication;
     private String exerciseHabit;
+    private Integer heightCm;
+    private BigDecimal weightKg;
     private BigDecimal targetFasting;
     private BigDecimal targetPostprandial;
 }

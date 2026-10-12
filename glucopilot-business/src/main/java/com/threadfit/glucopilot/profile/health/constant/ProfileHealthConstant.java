@@ -15,6 +15,14 @@ public final class ProfileHealthConstant {
     public static final int AGE_MIN = 1;
     public static final int AGE_MAX = 150;
 
+    /** 身高合法区间（cm）。 */
+    public static final int HEIGHT_MIN = 50;
+    public static final int HEIGHT_MAX = 250;
+
+    /** 体重合法区间（kg，一位小数）。 */
+    public static final String WEIGHT_MIN = "20.0";
+    public static final String WEIGHT_MAX = "300.0";
+
     /** 目标血糖区间（mmol/L）。 */
     public static final String TARGET_MIN = "1.0";
     public static final String TARGET_MAX = "33.3";

@@ -138,7 +138,7 @@ public class AdminUserService {
     /**
      * 管理端健康档案详情：聚合 user_account / user_profile / user_health 真实数据，
      * 趋势与分时段取自未删除的 glucose_record，饮食汇总经 meal service 聚合。
-     * height / weight 因 user_profile 无对应列、summary 无 AI 数据源，均按 TODO 返回 null。
+     * height / weight 取自 user_health（profile.health 域）；summary 无 AI 数据源，暂返回 null。
      */
     public AdminUserDtos.Archive archive(Long userId) {
         UserAccount account = userAccountMapper.selectById(userId);
@@ -169,9 +169,8 @@ public class AdminUserService {
                         .registeredAt(account.getGmtCreate())
                         .build())
                 .profile(AdminUserDtos.Profile.builder()
-                        // TODO 待 user_profile 增加身高/体重列后回填
-                        .height(null)
-                        .weight(null)
+                        .height(health == null ? null : health.getHeightCm())
+                        .weight(health == null ? null : health.getWeightKg())
                         .medication(health == null ? null : health.getMedication())
                         .exerciseHabit(health == null ? null : health.getExerciseHabit())
                         .diagnosedYm(health == null ? null : health.getDiagnosedYm())

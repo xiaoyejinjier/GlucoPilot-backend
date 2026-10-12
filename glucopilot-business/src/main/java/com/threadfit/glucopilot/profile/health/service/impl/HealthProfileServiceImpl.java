@@ -101,6 +101,16 @@ public class HealthProfileServiceImpl implements HealthProfileService {
         } else {
             wrapper.set(UserHealth::getExerciseHabit, null);
         }
+        if (request.getHeight() != null) {
+            entity.setHeightCm(request.getHeight());
+        } else {
+            wrapper.set(UserHealth::getHeightCm, null);
+        }
+        if (request.getWeight() != null) {
+            entity.setWeightKg(request.getWeight());
+        } else {
+            wrapper.set(UserHealth::getWeightKg, null);
+        }
         if (request.getTargetFasting() != null) {
             entity.setTargetFasting(request.getTargetFasting());
         } else {
@@ -158,6 +168,8 @@ public class HealthProfileServiceImpl implements HealthProfileService {
                 .age(h.getAge())
                 .medication(h.getMedication())
                 .exerciseHabit(h.getExerciseHabit())
+                .height(h.getHeightCm())
+                .weight(h.getWeightKg())
                 .targetFasting(h.getTargetFasting())
                 .targetPostprandial(h.getTargetPostprandial())
                 .build();

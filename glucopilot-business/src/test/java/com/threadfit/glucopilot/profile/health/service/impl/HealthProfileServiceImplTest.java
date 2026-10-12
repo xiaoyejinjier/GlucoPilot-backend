@@ -16,6 +16,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.time.YearMonth;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -52,6 +53,8 @@ class HealthProfileServiceImplTest {
         request.setDiabetesType(2);
         request.setAge(58);
         request.setDiagnosedYm("2020-03");
+        request.setHeight(168);
+        request.setWeight(new BigDecimal("66.5"));
 
         HealthView view = service.saveHealth(USER_ID, request);
 
@@ -64,9 +67,32 @@ class HealthProfileServiceImplTest {
         assertEquals("2 型糖尿病", entity.getDiabetesTypeText());
         assertEquals(58, entity.getAge());
         assertEquals("2020-03", entity.getDiagnosedYm());
+        assertEquals(168, entity.getHeightCm());
+        assertEquals(0, new BigDecimal("66.5").compareTo(entity.getWeightKg()));
         // 未填字段显式清空（entity 保持 null，由 wrapper SET NULL）
         assertNull(entity.getMedication());
         assertEquals("2 型糖尿病", view.getDiabetesTypeText());
+        assertEquals(168, view.getHeight());
+        assertEquals(0, new BigDecimal("66.5").compareTo(view.getWeight()));
+    }
+
+    @Test
+    void saveHealthClearsBodyMetricsWhenAbsent() {
+        when(userHealthMapper.selectOne(any())).thenReturn(health());
+
+        // 仅提交糖尿病类型 → 身高/体重按"清空"处理
+        HealthSaveRequest request = new HealthSaveRequest();
+        request.setDiabetesType(2);
+
+        HealthView view = service.saveHealth(USER_ID, request);
+
+        ArgumentCaptor<UserHealth> entityCaptor = ArgumentCaptor.forClass(UserHealth.class);
+        verify(userHealthMapper).update(entityCaptor.capture(), any());
+        // 置空字段不写入 entity（改由 wrapper SET NULL），视图回落 null
+        assertNull(entityCaptor.getValue().getHeightCm());
+        assertNull(entityCaptor.getValue().getWeightKg());
+        assertNull(view.getHeight());
+        assertNull(view.getWeight());
     }
 
     @Test

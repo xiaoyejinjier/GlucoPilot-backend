@@ -156,6 +156,8 @@ class AdminUserServiceTest {
         health.setMedication("二甲双胍 0.5g bid");
         health.setExerciseHabit("每周快走 3 次");
         health.setDiagnosedYm("2021-06");
+        health.setHeightCm(168);
+        health.setWeightKg(new BigDecimal("66.5"));
         MealVos.ArchiveSummary meal = MealVos.ArchiveSummary.builder()
                 .recordDays(12)
                 .avgCarbsG(new BigDecimal("46"))
@@ -187,9 +189,10 @@ class AdminUserServiceTest {
         assertEquals("二甲双胍 0.5g bid", archive.getProfile().getMedication());
         assertEquals("每周快走 3 次", archive.getProfile().getExerciseHabit());
         assertEquals("2021-06", archive.getProfile().getDiagnosedYm());
-        // 无数据源字段恒 null（TODO 未落库）
-        assertNull(archive.getProfile().getHeight());
-        assertNull(archive.getProfile().getWeight());
+        // 身高/体重取自 user_health（profile.health 域）
+        assertEquals(168, archive.getProfile().getHeight());
+        assertEquals(0, new BigDecimal("66.5").compareTo(archive.getProfile().getWeight()));
+        // 无数据源字段恒 null（AI 小结 TODO 未落库）
         assertNull(archive.getSummary());
         assertEquals(12, archive.getMealSummary().getRecordDays());
         assertEquals(0, new BigDecimal("46").compareTo(archive.getMealSummary().getAvgCarbsG()));
@@ -245,6 +248,9 @@ class AdminUserServiceTest {
         assertNull(archive.getProfile().getMedication());
         assertNull(archive.getProfile().getExerciseHabit());
         assertNull(archive.getProfile().getDiagnosedYm());
+        // health 缺失时身高/体重回落 null
+        assertNull(archive.getProfile().getHeight());
+        assertNull(archive.getProfile().getWeight());
         // 空数据不抛异常，数值类回落 null
         assertNull(archive.getMealSummary().getAvgCarbsG());
         assertNull(archive.getMealSummary().getAvgCal());

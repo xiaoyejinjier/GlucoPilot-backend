@@ -49,6 +49,16 @@ public final class HealthDtos {
         @Size(max = 256, message = "运动习惯不能超过 256 个字符")
         private String exerciseHabit;
 
+        /** 身高 cm；null/空白 = 清空。 */
+        @Min(value = ProfileHealthConstant.HEIGHT_MIN, message = "身高不能小于 50 cm")
+        @Max(value = ProfileHealthConstant.HEIGHT_MAX, message = "身高不能大于 250 cm")
+        private Integer height;
+
+        /** 体重 kg（一位小数）；null = 清空。 */
+        @DecimalMin(value = ProfileHealthConstant.WEIGHT_MIN, message = "体重不能小于 20.0 kg")
+        @DecimalMax(value = ProfileHealthConstant.WEIGHT_MAX, message = "体重不能大于 300.0 kg")
+        private BigDecimal weight;
+
         @DecimalMin(value = ProfileHealthConstant.TARGET_MIN, message = "空腹目标血糖不能低于 1.0 mmol/L")
         @DecimalMax(value = ProfileHealthConstant.TARGET_MAX, message = "空腹目标血糖不能高于 33.3 mmol/L")
         private BigDecimal targetFasting;
@@ -69,6 +79,8 @@ public final class HealthDtos {
         private Integer age;
         private String medication;
         private String exerciseHabit;
+        private Integer height;
+        private BigDecimal weight;
         private BigDecimal targetFasting;
         private BigDecimal targetPostprandial;
     }

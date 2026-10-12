@@ -54,7 +54,7 @@ public final class AdminUserDtos {
     /**
      * 管理端健康档案详情（GET /admin/v1/users/{id}/archive）。
      * 只读出参：owner/profile/mealSummary 取业务库真实数据；
-     * height/weight 因 user_profile 无对应列暂返回 null，summary（AI 小结）待接入，均为 TODO。
+     * height/weight 取自 user_health（profile.health 域），summary（AI 小结）待接入，为 TODO。
      */
     @Data
     @Builder
@@ -85,10 +85,10 @@ public final class AdminUserDtos {
     @Data
     @Builder
     public static class Profile {
-        /** TODO user_profile 无身高列，暂 null */
+        /** 身高 cm；来自 user_health.height_cm，未填写为 null */
         private Integer height;
-        /** TODO user_profile 无体重列，暂 null */
-        private Integer weight;
+        /** 体重 kg（一位小数）；来自 user_health.weight_kg，未填写为 null */
+        private BigDecimal weight;
         private String medication;
         private String exerciseHabit;
         /** 确诊年月 YYYY-MM */

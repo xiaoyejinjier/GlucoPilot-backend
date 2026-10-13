@@ -11,3 +11,5 @@
 验证：管理端类型检查与生产构建通过；配置 YAML 与 Git 空白检查通过；小程序 JS 语法检查通过。后端结果见最终交付记录。Docker 和真机联调待运维/页面负责人执行。
 
 最终验证：使用本机 Corretto Java 21，mvn -B -ntp -pl ruoyi-admin -am verify 全部九个模块成功，已生成 ruoyi-admin/target/ruoyi-admin.jar。未执行远程数据库迁移集成测试或 Docker 启动。
+
+无 Key 部署：新增文本 AI 关闭模式，保留现有开启行为；调用未启用模型时明确业务拒绝，需重新构建并交运维部署。

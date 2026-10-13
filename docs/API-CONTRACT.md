@@ -169,3 +169,10 @@
 
 - 图片轮次首字延迟明显高于文本轮次（要先完成一次视觉识别），沿用现有「正在思考…」占位即可，**不要用固定超时判定失败**；
 - 服务端会把图片的描述写入该条消息，供后续轮次回看（例如发完图再问「那我晚饭吃多少」），因此多轮追问图片内容是支持的。
+
+
+## 部署时关闭文本 AI
+
+服务器设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false` 时，不初始化模型客户端，不需要 DeepSeek Key。
+非 AI 接口继续工作；实际请求文本 AI 时返回现有 ApiResponse 业务拒绝错误（BIZ_REJECTED），提示“文本 AI 未启用”。
+接口路径、成功响应和 SSE 协议保持现有契约；启用时恢复 `SPRING_AI_MODEL_CHAT=deepseek` 并设置真实 Key。

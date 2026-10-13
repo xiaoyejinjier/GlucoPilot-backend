@@ -28,30 +28,34 @@ import org.springframework.stereotype.Component;
  * <p>
  * <b>注入必须带 {@code @Qualifier}</b>：容器里有两个 {@code ChatClient} Bean，
  * 不带限定符的注入会在启动期因候选不唯一失败，而不是运行期才暴露。
- * 视觉 client 用 {@link ObjectProvider} 注入，是为了在 {@code ai.vision.enabled=false}
+ * 文本和视觉 client 用 {@link ObjectProvider} 注入，是为了在 {@code ai.vision.enabled=false}
  * （Bean 不存在）时仍能正常启动，把「未接入」留到实际调用时再明确报错。
  */
 @Component
 public class AiChatClientRegistry {
 
-    private final ChatClient textChatClient;
+    private final ObjectProvider<ChatClient> textChatClients;
 
     /** 视觉 client 可能不存在（未开启或未配凭据），因此不直接注入实例。 */
     private final ObjectProvider<ChatClient> visionChatClients;
 
     private final SceneModelResolver sceneModelResolver;
 
-    public AiChatClientRegistry(@Qualifier("textChatClient") ChatClient textChatClient,
+    public AiChatClientRegistry(@Qualifier("textChatClient") ObjectProvider<ChatClient> textChatClients,
                                @Qualifier("visionChatClient") ObjectProvider<ChatClient> visionChatClients,
                                SceneModelResolver sceneModelResolver) {
-        this.textChatClient = textChatClient;
+        this.textChatClients = textChatClients;
         this.visionChatClients = visionChatClients;
         this.sceneModelResolver = sceneModelResolver;
     }
 
     /** 文本模型客户端。 */
     public ChatClient textClient() {
-        return textChatClient;
+        ChatClient text = textChatClients.getIfAvailable();
+        if (text == null) {
+            throw new BizException(ErrorCode.BIZ_REJECTED, "文本 AI 未启用，请联系管理员配置模型服务");
+        }
+        return text;
     }
 
     /**

@@ -44,3 +44,5 @@ docker build -t glucopilot-api:local .
 
 当前目录就是构建根目录，Docker 构建使用 `docker build -t glucopilot-api:accepted-tag .`。
 独立部署步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
+无 AI Key 部署：服务器 .env 设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false`，不填写虚假 API Key。实际调用文本 AI 返回业务拒绝；其他功能仍需数据库、Redis 和登录签名密钥。恢复 AI 时设置 `SPRING_AI_MODEL_CHAT=deepseek` 和真实 Key，重建容器。

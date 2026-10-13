@@ -27,3 +27,5 @@ HTTPS 证书、域名与防火墙由运维配置；小程序必须使用登记�
 检查两类 API 的登录、鉴权、响应封装以及小程序主要业务流程。
 验收后由运维部署 release 对应镜像；回滚时恢复上一镜像标签并重新 up -d。
 数据库迁移不自动回滚，发布前由运维确认备份和迁移兼容性。
+
+无 AI Key 部署：服务器 .env 设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false`，不填写虚假 API Key。实际调用文本 AI 返回业务拒绝；其他功能仍需数据库、Redis 和登录签名密钥。恢复 AI 时设置 `SPRING_AI_MODEL_CHAT=deepseek` 和真实 Key，重建容器。

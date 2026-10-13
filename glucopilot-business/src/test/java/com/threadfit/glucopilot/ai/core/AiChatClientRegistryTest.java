@@ -4,6 +4,11 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration;
+import org.springframework.ai.model.chat.client.autoconfigure.ChatClientAutoConfiguration;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import com.threadfit.glucopilot.ai.config.AiChatClientConfig;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -36,6 +41,25 @@ class AiChatClientRegistryTest {
                 .withBean("textChatClient", ChatClient.class, () -> textClient)
                 .withBean(SceneModelResolver.class, () -> mock(SceneModelResolver.class))
                 .withUserConfiguration(AiChatClientRegistry.class);
+    }
+
+    @Test
+    void disabledTextAiStartsWithoutApiKeyAndRejectsCalls() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        DeepSeekChatAutoConfiguration.class, ChatClientAutoConfiguration.class))
+                .withPropertyValues("spring.ai.model.chat=none", "spring.ai.deepseek.api-key=")
+                .withBean(SceneModelResolver.class, () -> mock(SceneModelResolver.class))
+                .withUserConfiguration(AiChatClientRegistry.class, AiChatClientConfig.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(ChatModel.class);
+                    assertThat(context).doesNotHaveBean("textChatClient");
+                    BizException ex = assertThrows(BizException.class,
+                            () -> context.getBean(AiChatClientRegistry.class).textClient());
+                    assertEquals(ErrorCode.BIZ_REJECTED, ex.getErrorCode());
+                    assertThat(ex.getMessage()).contains("文本 AI 未启用");
+                });
     }
 
     @Test

@@ -176,3 +176,12 @@
 服务器设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false` 时，不初始化模型客户端，不需要 DeepSeek Key。
 非 AI 接口继续工作；实际请求文本 AI 时返回现有 ApiResponse 业务拒绝错误（BIZ_REJECTED），提示“文本 AI 未启用”。
 接口路径、成功响应和 SSE 协议保持现有契约；启用时恢复 `SPRING_AI_MODEL_CHAT=deepseek` 并设置真实 Key。
+
+
+## 课程部署：关闭对象存储
+
+设置服务器环境变量 `STORAGE_PROVIDER=disabled` 时，不创建 OSS 或 MinIO 客户端，不需要云存储凭据。
+媒体上传凭证、对象校验和读取等存储操作返回现有 ApiResponse 的 BIZ_REJECTED，提示“文件存储未启用，当前环境不支持文件上传与读取”。
+不生成虚假上传 URL、不登记不存在的媒体、不返回模拟上传成功。
+已有接口路径、DTO、响应封装保持不变；其他模块仍可使用数据库和 Redis。
+此模式不覆盖上传功能验收，头像上传、饮食图片上传、图片聊天等依赖对象存储的操作不可用。

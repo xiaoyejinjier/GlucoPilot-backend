@@ -13,3 +13,5 @@
 最终验证：使用本机 Corretto Java 21，mvn -B -ntp -pl ruoyi-admin -am verify 全部九个模块成功，已生成 ruoyi-admin/target/ruoyi-admin.jar。未执行远程数据库迁移集成测试或 Docker 启动。
 
 无 Key 部署：新增文本 AI 关闭模式，保留现有开启行为；调用未启用模型时明确业务拒绝，需重新构建并交运维部署。
+
+课程交付成本约束：不新增 OSS 服务。后端增加显式 disabled 存储模式，保持 API 契约，存储操作业务拒绝；上传功能不在本模式验收范围。依赖：新镜像、服务器 STORAGE_PROVIDER=disabled、有效 OPS_TOKEN_SECRET。

@@ -12,6 +12,8 @@ WORKDIR /app
 RUN addgroup -S glucopilot && adduser -S glucopilot -G glucopilot
 COPY --from=build /workspace/ruoyi-admin/target/ruoyi-admin.jar /app/app.jar
 
+RUN mkdir -p /app/uploads && chown glucopilot:glucopilot /app/uploads
+
 USER glucopilot
 EXPOSE 8080
 

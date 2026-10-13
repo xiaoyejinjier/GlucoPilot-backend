@@ -1,0 +1,23 @@
+name: glucopilot-backend
+services:
+  api:
+    image: ${API_IMAGE:?Set API_IMAGE to an accepted immutable image tag}
+    restart: unless-stopped
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+    expose:
+      - "8080"
+    volumes:
+      - uploads:/app/uploads
+    networks:
+      shared:
+        aliases:
+          - api
+volumes:
+  uploads:
+networks:
+  shared:
+    external: true
+    name: glucopilot-shared

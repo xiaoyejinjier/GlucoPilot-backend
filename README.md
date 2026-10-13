@@ -37,4 +37,10 @@ mvn verify -Pmigration-it
 docker build -t glucopilot-api:local .
 ```
 
-构建上下文固定为 backend/。唯一可执行产物是 ruoyi-admin/target/ruoyi-admin.jar。远程服务与 Nginx 部署见 [部署手册](../docs/DEPLOYMENT.md)，数据库切换见 [迁移手册](../docs/RUOYI-DATABASE-MIGRATION.md)。
+构建上下文固定为仓库根目录。唯一可执行产物是 ruoyi-admin/target/ruoyi-admin.jar。远程服务与 Nginx 部署见 [部署手册](docs/DEPLOYMENT.md)，数据库切换见 [迁移手册](docs/RUOYI-DATABASE-MIGRATION.md)。
+
+
+## 独立仓库
+
+当前目录就是构建根目录，Docker 构建使用 `docker build -t glucopilot-api:accepted-tag .`。
+独立部署步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)。

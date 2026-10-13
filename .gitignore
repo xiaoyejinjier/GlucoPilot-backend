@@ -1,0 +1,65 @@
+HELP.md
+target/
+backend/target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### Node ###
+node_modules/
+admin/node_modules/
+admin/dist/
+frontend/node_modules/
+frontend/miniprogram_npm/
+
+### 本地私密配置（含 API Key，禁止入库）###
+**/application-local.yaml
+**/application-local.yml
+
+### Cursor / IDE ###
+.cursor/
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### OS ###
+.DS_Store
+Thumbs.db
+
+### Deployment secrets ###
+.env
+.env.*
+!.env.example
+
+# Local upstream checkout, migration scratch files and private database backups
+.migration/
+.backups/
+backend/backend-run.log
+backend/target-build.log
+admin/dev-run.log
+
+/dist/
+/miniprogram_npm/
+project.private.config.json
+*.log

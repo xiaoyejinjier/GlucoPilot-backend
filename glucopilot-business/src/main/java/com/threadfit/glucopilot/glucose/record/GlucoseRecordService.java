@@ -8,6 +8,7 @@ import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.constant.GlucoseNodes;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
+import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.mybatis.SoftDeletes;
 import com.threadfit.glucopilot.glucose.dto.GlucoseDtos;
@@ -15,6 +16,7 @@ import com.threadfit.glucopilot.glucose.entity.GlucoseNode;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
 import com.threadfit.glucopilot.glucose.period.GlucosePeriodService;
+import com.threadfit.glucopilot.file.service.MediaFileService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +43,7 @@ public class GlucoseRecordService {
 
     private final GlucoseRecordMapper glucoseRecordMapper;
     private final GlucosePeriodService glucosePeriodService;
+    private final MediaFileService mediaFileService;
 
     /** C 端覆盖写入：sourceType 缺省按手动。 */
     @Transactional
@@ -78,6 +81,12 @@ public class GlucoseRecordService {
         assertValueInRange(glucoseValue);
         int resolvedSource = sourceType == null ? CodeEnum.GlucoseSourceType.MANUAL.getCode() : sourceType;
         CodeEnum.of(CodeEnum.GlucoseSourceType.class, resolvedSource);
+        if (resolvedSource == CodeEnum.GlucoseSourceType.OCR.getCode() && mediaId == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "OCR 血糖记录必须关联原始图片");
+        }
+        if (mediaId != null && mediaFileService.findOwnedMedia(mediaId, userId, MediaBizType.GLUCOSE) == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "血糖图片不存在或不可用");
+        }
 
         String merged = remark;
         if (StringUtils.hasText(externalKey)) {
@@ -222,8 +231,8 @@ public class GlucoseRecordService {
     }
 
     /**
-     * 日看板：9 个节点全部返回，未记录节点 hasRecord=false。
-     * 饮食模块未实现，餐点节点恒为未记录，recordKind 预留 "meal"。
+     * 血糖日看板：9 个节点全部返回，未记录节点 hasRecord=false。
+     * 餐点记录由 /api/v1/meal-records 独立查询，因此本接口的餐点节点不混入饮食数据。
      */
     public GlucoseDtos.DayBoard dayBoard(Long userId, LocalDate recordDate) {
         List<GlucoseNode> nodes = glucosePeriodService.listEnabledNodes();

@@ -3,6 +3,12 @@
 # 之所以不写在 application.yaml 根文档里：spring.config.activate.on-profile 放在根文档会让
 # **整个文件**都变成 dev 专属，不带 profile 启动会直接因缺少 datasource 而失败。
 spring:
+  config:
+    # 私密环境配置只保存在忽略的 .env，兼容 backend、项目根目录和外层 IDE 工作区。
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
+      - optional:file:GlucoPilot/.env[.properties]
   flyway:
     # 开发库常被手工改过结构：已有表但无 flyway_schema_history 时自动 baseline，避免重复建表/插种子。
     # 生产不要开这个开关，否则会静默跳过建表与种子。
@@ -18,16 +24,10 @@ logging:
     com.threadfit.glucopilot.ai.business.chat.mapper: INFO
 
 # ---------------------------------------------------------------------------
-# 对象存储（dev = 本地 MinIO mock）。完整入库流程必须走完：凭证 → 直传 → 登记 → 去重。
-# 前置：本机需先起 MinIO 并**手工创建桶**（代码不会自动建桶）。
-# ⚠️ MinioObjectStorageService.resolvePublicUrl 返回不带签名的直链
-#    （endpoint/bucket/storageKey），所以 dev 桶必须允许匿名读，否则小程序加载图片会 401/403。
-# prod 走阿里云 OSS，见 application-prod.yaml。
+# 对象存储（dev = 后端自带的本地文件存储）。完整入库流程仍走：凭证 → PUT → 登记 → 去重，
+# 但无需开发者额外安装 MinIO；生产仍走阿里云 OSS，见 application-prod.yaml。
 # ---------------------------------------------------------------------------
 glucopilot:
   storage:
-    provider: minio
-    endpoint: http://localhost:9000     # 真机改 http://<开发机IP>:9000
-    access-key: admin
-    secret-key: admin123456
-    bucket: glucopilot-dev
+    provider: local
+    local-dir: ${LOCAL_UPLOAD_DIR:./data/uploads}

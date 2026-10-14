@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.food.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.threadfit.glucopilot.food.entity.FoodNutrition;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Insert;
 
 /**
  * 食品营养数据访问接口。
@@ -12,5 +13,14 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface FoodNutritionMapper extends BaseMapper<FoodNutrition> {
-    // 当前查询均可由 BaseMapper 完成，因此接口体暂时不需要自定义 SQL 方法。
+    /** 唯一键冲突不覆盖已有营养；回读原记录处理并发识别。 */
+    @Insert("""
+        INSERT INTO food_nutrition
+          (food_name, category_id, category_code, carbs_per_100g, calories_per_100g,
+           shelf_status, nutrition_source, source_model, created_by, updated_by)
+        VALUES (#{foodName}, #{categoryId}, #{categoryCode}, #{carbsPer100g}, #{caloriesPer100g},
+                0, 'AI_ESTIMATE', #{sourceModel}, #{createdBy}, #{updatedBy})
+        ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)
+        """)
+    int insertRecognitionDraft(FoodNutrition food);
 }

@@ -88,8 +88,8 @@ public class AiVisionClientConfig {
         log.info("视觉 provider 已装配 model={} baseUrl={} timeout={}s maxTokens={}",
                 vision.getModel(), vision.getBaseUrl(), vision.getTimeoutSeconds(), vision.getMaxTokens());
 
+        // 系统提示词由每次调用按 SceneCode 注入，同一个视觉 client 才能安全复用到 CHAT_IMAGE / OCR_GLUCOSE。
         return ChatClient.builder(chatModel)
-                .defaultSystem(promptTemplateService.systemPrompt(SceneCode.CHAT_IMAGE))
                 .defaultTemplateRenderer(promptTemplateService.renderer())
                 .build();
     }

@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "glucopilot.storage")
 public class StorageProperties {
 
-    /** minio / aliyun-oss。 */
+    /** local / minio / aliyun-oss。 */
     private String provider;
 
     /** 服务端点（dev=MinIO 地址；prod=OSS Endpoint）。 */
@@ -26,4 +26,7 @@ public class StorageProperties {
 
     /** OSS 地域（仅 prod 使用，dev 忽略）。 */
     private String region;
+
+    /** 本地开发存储目录；仅 provider=local 时使用。 */
+    private String localDir = "./data/uploads";
 }

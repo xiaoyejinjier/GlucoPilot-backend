@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.food.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
 
@@ -29,6 +30,9 @@ public final class AdminFoodDtos {
         /** 管理端展示的分类名称。 */
         private String name;
 
+        /** 分类图片 URL，可为空。 */
+        private String image;
+
         /** 分类排序值。 */
         private Integer sort;
     }
@@ -42,6 +46,10 @@ public final class AdminFoodDtos {
         /** 分类名称不能为空或全是空格。 */
         @NotBlank
         private String name;
+
+        /** 省略时保留已有图片，空字符串表示使用默认图片。 */
+        @Size(max = 512)
+        private String image;
 
         /** 分类排序；未填写时 Service 使用 0。 */
         private Integer sort;
@@ -83,6 +91,8 @@ public final class AdminFoodDtos {
 
         /** 格式化后的最后修改时间。 */
         private String updatedAt;
+        private String nutritionSource;
+        private String sourceModel;
     }
 
     /** 管理端新增或修改食品时提交的请求体。 */

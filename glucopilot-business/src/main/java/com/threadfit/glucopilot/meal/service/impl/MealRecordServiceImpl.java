@@ -175,6 +175,16 @@ public class MealRecordServiceImpl implements MealRecordService {
     }
 
     @Override
+    public List<MealRecord> listRange(Long userId, LocalDate from, LocalDate to) {
+        return mealRecordMapper.selectList(new LambdaQueryWrapper<MealRecord>()
+                .eq(MealRecord::getUserId, userId)
+                .ge(MealRecord::getRecordDate, from)
+                .le(MealRecord::getRecordDate, to)
+                .orderByAsc(MealRecord::getRecordDate)
+                .orderByAsc(MealRecord::getId));
+    }
+
+    @Override
     public Map<Long, Long> countActiveByUserIds(Collection<Long> userIds) {
         if (userIds == null || userIds.isEmpty()) {
             return Collections.emptyMap();

@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.ai.vision;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.exception.BizException;
@@ -12,6 +13,7 @@ import com.threadfit.glucopilot.file.storage.ObjectStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
@@ -54,6 +56,7 @@ public class VisionAnalyzer {
     private final AiChatClientRegistry chatClientRegistry;
     private final ObjectStorageService objectStorageService;
     private final AIProperties aiProperties;
+    private final AiPromptTemplateService promptTemplateService;
 
     /**
      * 识别图片并返回描述。
@@ -63,27 +66,15 @@ public class VisionAnalyzer {
      * @return 客观描述，保证非空
      */
     public String describe(MediaFile media, String userText) {
-        // 先确认视觉 provider 可用：未接入时立刻失败，避免白读一张图（甚至白下载 20MB）
-        ChatClient visionClient = chatClientRegistry.visionClient(SceneCode.CHAT_IMAGE);
-
-        AIProperties.VisionProperties vision = aiProperties.getVision();
-        String mimeType = requireImage(media, vision);
-        byte[] bytes = readWithinLimit(media, vision);
-
         String instruction = buildInstruction(userText);
         long startNanos = System.nanoTime();
         String caption;
         try {
-            caption = visionClient.prompt()
-                    .user(user -> user
-                            .text(instruction)
-                            .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes)))
-                    .call()
-                    .content();
+            caption = analyze(media, SceneCode.CHAT_IMAGE, instruction);
         } catch (RuntimeException e) {
             // 基础设施类失败（凭据/网络/上游 5xx）不吞：吞掉会让「API 挂了」表现成
             // 「模型说看不懂这张图」，用户按提示换张更清晰的图重试依然失败，而运维侧毫无信号。
-            log.error("视觉分析调用失败 mediaId={} mime={} bytes={}", media.getId(), mimeType, bytes.length, e);
+            log.error("视觉分析调用失败 mediaId={}", media.getId(), e);
             throw e;
         }
 
@@ -94,6 +85,30 @@ public class VisionAnalyzer {
         }
         log.info("视觉分析完成 mediaId={} 耗时={}ms 描述={}字", media.getId(), elapsedMs, caption.length());
         return caption;
+    }
+
+    /**
+     * 按业务场景执行一次视觉识别。调用方负责解析结构化结果；本方法只处理图片读取、大小限制和场景提示词。
+     */
+    public String analyze(MediaFile media, SceneCode scene, String instruction) {
+        ChatClient visionClient = chatClientRegistry.visionClient(scene);
+        AIProperties.VisionProperties vision = aiProperties.getVision();
+        String mimeType = requireImage(media, vision);
+        byte[] bytes = readWithinLimit(media, vision);
+        ChatClient.ChatClientRequestSpec prompt = visionClient.prompt()
+                .system(promptTemplateService.systemPrompt(scene));
+        if (scene == SceneCode.MEAL_ANALYSIS) {
+            prompt.options(OpenAiChatOptions.builder()
+                    .model(aiProperties.getMeal().getModel())
+                    .maxCompletionTokens(aiProperties.getMeal().getMaxTokens())
+                    .temperature(0.1));
+        }
+        return prompt
+                .user(user -> user
+                        .text(instruction)
+                        .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes)))
+                .call()
+                .content();
     }
 
     /**

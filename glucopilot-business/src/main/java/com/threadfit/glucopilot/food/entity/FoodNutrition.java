@@ -48,4 +48,7 @@ public class FoodNutrition extends BaseEntity {
 
     /** 上下架状态：0=下架，1=上架。 */
     private Integer shelfStatus;
+
+    private String nutritionSource;
+    private String sourceModel;
 }

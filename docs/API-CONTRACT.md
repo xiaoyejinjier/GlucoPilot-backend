@@ -1,5 +1,7 @@
 # API 契约
 
+本文件是 `xiaoyejinjier/GlucoPilot-backend` 的权威契约。本文历史路径中的 `frontend/` 指独立仓库 `GlucoPilot-frontend` 根目录，`admin/` 指 `GlucoPilot-admin` 根目录，`backend/` 指本仓库根目录；拆仓不改变接口路径或响应格式。
+
 ## 官方若依后端迁移约定（2026-10-09）
 
 后端改为官方 RuoYi-Vue 多模块工程，由 `ruoyi-admin` 启动。所有原有路径、普通响应成功码 0、分页字段和 SSE 事件继续保持。管理端登录返回的 accessToken 改为若依 JWT，登录状态由 Redis 管理；旧后台会话在切换时失效，小程序 user_session 保留。运营身份与 sys_user 通过 gp_ops_identity_map 关联，既有 opsId 和审计字段语义保留。系统资源适配接口调用官方系统服务，业务分组参数独立保存于 gp_app_config。
@@ -23,6 +25,60 @@
 其中 `profile.height` / `profile.weight` 取自 `user_health`（`profile.health` 域，C 端 `PUT /users/me/health-profile` 写入，未填写返回 `null`），`summary`（AI 档案小结无数据源）**暂返回 `null`，为 TODO**，前端按空值展示；用户不存在时按公共 `40400` 处理。
 
 以上接口全部返回公共 `ApiResponse { code, message, data, requestId }`。成功码为 `0`；非法状态使用公共 `40000`；用户不存在使用公共 `40400`；鉴权和系统异常继续由 `GlobalExceptionHandler` 按公共 `ErrorCode` 处理，禁止自定义另一套响应码。
+
+## 管理端九时段记录可视化
+
+管理端通过 `GET /admin/v1/health-records/nine-slot` 查看 C 端用户真实入库的九时段数据，权限复用 `health:archive:view`。查询参数为 `startDate`、`endDate`、`keyword`、`pageNum`、`pageSize`；日期为空时默认最近 30 天（含当天），单次查询最多 92 天，`keyword` 匹配用户名、昵称或手机号。
+
+接口按“用户 + 业务日期”分页，返回 `overview` 与 `page`：
+
+- `overview` 包含 `activeUsers`、`recordDays`、`glucoseRecords`、`mealRecords`、`totalRecords`、`avgGlucose`、`complianceRate`、`abnormalRecords`、`trend` 和 `nodeStats`；
+- `page` 使用统一 `PageResult`，每条记录包含用户、日期、完成数、实测血糖均值以及 `slots`；`slots` 固定覆盖九个节点；
+- 六个非餐点节点读取 `glucose_record`，返回实测 `glucoseValue`、来源、备注和记录时间；
+- 早餐、中餐、晚餐读取 `meal_record`，返回食物摘要、碳水、预测值和记录时间；正餐预测值只能作为饮食记录详情展示，禁止计入 `avgGlucose`、达标率或真实血糖趋势；
+- 达标口径与现有用户管理一致：实测血糖 `[3.9, 7.8)` 为达标，其他实测值计入异常记录。
+
+接口只读，不提供后台修改或删除用户健康记录的能力。响应继续使用统一 `ApiResponse { code, message, data, requestId }`，成功码为 `0`。
+
+## 管理端业务列表分页
+
+用户、食品和反馈三个管理列表统一使用服务端分页，响应 `data` 均为 `PageResult { pageNum, pageSize, total, pages, records }`。`pageNum` 从 1 开始，`pageSize` 范围为 1～100；筛选条件由服务端执行，管理端不得先拉取固定数量的数据再进行本地分页。
+
+| 方法与路径 | 可选筛选参数 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| `GET /admin/v1/users` | `keyword`、`accountStatus`、`pageNum`、`pageSize` | `user:manage` | C 端用户分页；关键词匹配用户名、昵称或手机号 |
+| `GET /admin/v1/foods` | `keyword`、`categoryId`、`enabled`、`pageNum`、`pageSize` | `food:library:manage` | 食品分页；`enabled=true/false` 对应上架/下架 |
+| `GET /admin/v1/feedbacks` | `keyword`、`feedbackType`、`replyStatus`、`pageNum`、`pageSize` | `feedback:manage` | 反馈分页；类型为 `1～4`，处理状态为 `0～3` |
+
+运营端反馈列表按反馈 `id` 从小到大排序后执行分页，先提交的记录排在前面。页面只显示一列连续“序号”，计算方式为 `(pageNum - 1) * pageSize + 行索引 + 1`，翻页后继续编号；数据库 `id` 保留在接口中用于审批/回复，不另外显示为列表编号。
+
+管理端食品营养库默认每页 10 条，可选择 10/20/50/100 条、切换页码或跳页；表格内部滚动，分页栏保留在表格下方。每次翻页均调用 `/admin/v1/foods` 获取服务端分页结果，禁止对旧数组响应进行本地切片以冒充服务端分页。关键词、分类与上下架筛选提交后回到第一页，后续翻页保留已提交的筛选条件；新增食品回到第一页，删除或下架导致当前页超出总页数时自动回到最后一个有效页。
+
+反馈管理、用户管理和九时段用户每日明细使用同样的分页交互：默认 10 条、可选 10/20/50/100 条，表格内部滚动，分页栏展示总数、当前页和记录区间。页码与每页条数改变时重新请求各自服务端接口，筛选条件只在提交查询时生效并随翻页保留；反馈状态、用户状态变更或数据减少导致当前页越界时自动回退。九时段按“用户 + 日期”分页，`overview` 统计整个查询范围，不按当前页记录数计算，也不得随翻页丢失已提交的日期范围。
+
+## 管理端食物图片
+
+新增与编辑食物可选择内置图片或已上传的食物图片，也可上传新的 JPG/PNG 图片（单张 1 字节至 5MB）。上传采用现有对象存储的“凭证 → PUT 文件字节 → 登记”流程，不将 base64 或浏览器临时地址写入食品表。
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| `GET /admin/v1/food-images` | `food:library:manage` | 查询已登记、可用的食物图片，返回 `{ id, fileUrl }[]` |
+| `POST /admin/v1/food-images/upload-credentials` | `food:library:manage` | 请求 `{ bizType: 5, mimeType, sizeBytes }`；返回 `{ uploadUrl, storageKey, expireIn }` |
+| `POST /admin/v1/food-images` | `food:library:manage` | 请求 `{ bizType: 5, storageKey, mimeType, sizeBytes }`；返回 `{ id, fileUrl }`；携带 `X-Idempotency-Key`，相同对象重复登记复用原记录 |
+
+食物图片使用 `media_file` 的 `CMS(5)` 类型、`biz_id=FOOD_IMAGE` 和当前运营 `ops_id`，`user_id` 为空。服务端验证对象所属运营账号、文件大小、真实图片格式与尺寸，禁止登记其他用途图片。图片稳定地址为 `/api/v1/foods/images/{id}`；该地址公开读取经过登记的食物配图，成功返回图片二进制（与已有文件读取接口一致），失败返回统一 `ApiResponse`。私有对象存储通过服务端读取，不将短期签名下载地址保存到 `food_nutrition.image_url`。小程序从统一地址配置解析此相对路径。
+
+管理端食品大类也可指定图片：`GET /admin/v1/food-categories` 返回 `{ id, name, sort, image }`；分类新增与编辑请求支持 `{ name, sort, image }`，`image` 为可选字段、最多 512 字符。图片地址持久化到 `food_category.image_url`（新增迁移 `V14__add_food_category_image.sql`）；旧分类没有图片时，由管理端根据分类名称展示内置图片。旧调用方省略 `image` 时保留原分类图片；传空字符串时清空自选图片并使用默认图。选择已有图片和上传新的 JPG/PNG 图片复用上述食物图片接口，分类列表与分类选择下拉框展示保存后的图片。
+
+分类保存成功响应必须使用数据库回读结果；管理端保存后再次读取分类列表，确认目标分类的 `image` 与提交值一致才提示成功。后端仍返回旧结构、漏存图片或列表读取失败时，保留编辑弹窗与已上传图片并显示具体错误，禁止提示保存成功后悄悄退回默认图。
+
+九时段用户每日明细默认 10 条全部展开，分页栏置于这 10 条下方；每页选择更多条数时才限制表格高度并启用内部滚动。
+
+## 免责声明版本门禁
+
+用户登录或小程序从后台重新进入前台时，客户端读取 `/api/v1/users/me` 中的 `settings.disclaimerAgreed`、`settings.disclaimerVersion`，并与公开配置 `/api/v1/app-config?groups=TEXT` 返回的 `text.disclaimer.version` 比较。未同意，或已同意版本与当前版本不一致时，必须通过 `reLaunch` 进入免责声明页，阅读到底并成功提交同意前不得进入业务页面；已同意当前版本的用户正常进入首页，不重复打扰。
+
+更新免责声明时，运维必须同时更新 `text.disclaimer` 与 `text.disclaimer.version`。用户通过 `POST /api/v1/users/me/settings/disclaimer-agreement` 提交当前版本，服务端再次校验版本并记录 `disclaimer_agreed`、`disclaimer_version`、`disclaimer_agreed_at`；版本不一致时拒绝提交并要求重新读取最新文案。
 
 ## 统一入口
 
@@ -89,7 +145,41 @@
 
 用户端通过 `POST /api/v1/device/glucose-sync` 将血糖记录提交到同步服务。请求必须使用已登录用户的令牌，记录应带来源侧稳定的 `externalRecordId` 以便追踪重试来源；当前服务按用户、业务日期和血糖节点执行写入或更新，重复同步同一节点不会新增记录。接口修改前必须同步更新用户端调用、服务端 DTO 和测试。
 
+## 九时段统计
+
+2026-10-14 记录页今日曲线交互：固定保留九时段横轴位置，仅非餐点的有效实测血糖参与折线和Y轴范围。点击实心点高亮该点，并在曲线下方展示时段、血糖、真实记录时间、来源和备注；点击空心占位点只提示无实测数据，空白处取消选择，不修改记录、不受录入截止限制。使用Canvas本地坐标进行扩大命中判断，滚动/多指操作不当作点击；不使用遮盖Canvas的弹窗。
+
+沿用 `GET /api/v1/day-boards/{recordDate}` 与 `GET /api/v1/meal-records` 同步当日看板，同时调用既有 `GET /api/v1/glucose-records?startDate=yyyy-MM-dd&endDate=yyyy-MM-dd&pageSize=100` 获取真实 `recordedAt/sourceType/remark`。血糖记录列表成功时优先使用其完整快照；列表失败时可使用看板值，但只在缓存血糖值一致时保留旧记录时间，否则显示“时间未提供”，不得用当前时刻补齐。旧同步/绘制回调在离开页面或切换日期后须失效；无服务端DTO变更。
+
+2026-10-14 日历视图层级调整：`month` 模式显示所选年份的1～12月入口，点击月份切换至 `day` 模式。`day` 模式展示该月完整日期日历，原完成度着色及选中日期高亮保留；日历下方同时显示选中日期的九时段明细、完成率及实测均糖，不再以日明细替换日期日历。支持切换年份、月份、相邻日期及返回月份列表。月份入口只表示导航，不伪造全年统计、不额外添加年度接口；日期日历沿用统计接口，日明细并行调用血糖记录与饮食记录接口，加载/错误状态独立，快速切换时不得显示旧日期数据。选择月份或日期仍清除手动选周覆盖，血糖周视图默认跟随该日期。
+
+用户端时段选择与拍照、确认保存共用截止规则（设备当地时间）：10:00 截止早餐前与早餐；14:00 截止早餐后、午餐前与午餐；20:00 截止午餐后、晚餐前与晚餐；晚餐后不设日内截止。截止时间点本身视为已截止，页面回到前台、点击节点和确认保存时均再次校验。该规则限制当天录入入口，不影响已保存记录的查询与后台展示。
+
+用户端通过 `GET /api/v1/glucose-records/summary` 获取统计页数据。每天的完成度按九时段计算：六个非餐点节点读取 `glucose_record`，早餐、中餐、晚餐三个餐点节点读取 `meal_record`；同一日期同一节点最多计一次，因此单日完成数范围为 `0-9`。正餐是否由拍照识别生成不影响统计，只要该餐点已有有效饮食记录即视为完成。
+
+统计页周曲线必须传入当前选中日期所在自然周的 `startDate` 与 `endDate`（周一至周日），不能只传 `year/month` 后始终展示服务器当前周。曲线按每日实测血糖均值绘制；正餐记录不作为血糖值，无记录日期保留横轴占位，已有数值点按日期顺序连接。
+
+2026-10-14 血糖视图支持独立选周：默认跟随日历/月视图选中日期；点击曲线卡片中的周日期范围弹出选周面板，按月份列出与该月相交的完整自然周（允许跨月、跨年），可切换月份并选择。手动选周仅替换请求中的 `startDate/endDate`，`year/month` 仍对应原日历月份，不改变日历选中日期；月度指标与时段分布仍使用原日历月份。后续改变日历日期/月份或点击“跟随日历”时，清除手动周覆盖。周曲线和周摘要同步更新；快速切周时旧请求不得覆盖新选择，失败须显示重试状态而非把旧数据当成新周结果。沿用现有接口，无后端 DTO 变更。
+
+响应中的 `calendar.days[].recordCount`、`monthStats.totalRecords`、`monthStats.recordDays`、`checkIn.todayCount`、`checkIn.streakDays` 和 `checkIn.monthRecordDays` 均按血糖与正餐记录合并后的九时段口径计算；`checkIn.totalNodes` 固定来自启用的九时段字典。`monthStats.avgValue/maxValue/minValue`、`week`、`slotStats` 和 `trend` 只统计具有真实数值的血糖记录，禁止把餐食预测值当成实测血糖。
+
+`monthStats.complianceRate` 当前表示当月有任一时段记录的天数除以当月总天数，客户端必须展示为“记录率”或“打卡率”，不得展示为血糖达标率。
+
 ## 饮食记录
+
+### 正餐照片识别与营养库匹配
+
+确认照片后上传为 `MEAL(3)`，调用 `POST /api/v1/meal-analysis`，请求 `{ mediaId, nodeCode, foodText? }`。需要用户登录，校验照片归属和餐点节点，补充文字最多200字；携带稳定 `X-Idempotency-Key`，客户端超时90秒。取消/离开页面不写入饮食记录。
+
+餐食场景复用千问视觉凭据，独立使用 `ai.meal.model`（`AI_MEAL_MODEL`，默认 `qwen3-vl-plus`），不改变血糖 OCR 模型。响应含 `model`、`items`、`carbsG`、`caloriesKcal`、`matchedCount`、`newFoodsCount`、`warnings`。明细含食物名、`foodId`（仅上架食品）、`libraryFoodId`、分类码、估算重量、每100g营养、按份量计算的营养、GI（库中已有时）、`nutritionSource`、`libraryStatus`、置信度。无法确定的数值返回空，客户端要求补充或重新识别，不得替换为示例值。
+
+规范化食品名后精确匹配 `food_nutrition`，已有食品必须使用库中营养，严禁模型覆盖。可信的新食品自动入库为待审核条目（`shelf_status=0`、`nutrition_source=AI_ESTIMATE`），保留来源模型；使用现有唯一键防止重复登记。模型估算明确标记，运营核对营养后可编辑上架。待审核 ID 不作为上架 `foodId` 提交，饮食记录保存食物名和营养快照。迁移 `V15__add_food_nutrition_source.sql` 保存来源。
+
+确认食物及份量后使用原饮食记录接口保存照片与明细。真实血糖预测必须提供真实当前血糖并调用现有 `/api/v1/predictions/meal-glucose`，未提供时不显示数值预测，仍可保存饮食。
+
+2026-10-14 用户授权的临时演示：餐食结果页暂不调用真实预测接口，识别成功后自动展示“模拟预测评分”。前端适配入口为 `frontend/services/meal-score-preview.js` 的异步 `getMealScorePreview(input)`，入参包含餐点、食物明细、营养合计、可空实测血糖、饱腹感；返回 `{ schemaVersion: 1, source: 'MOCK', score: 85, maxScore: 100, label, description }`。85分是固定展示样例，不根据营养或血糖计算，不代表真实评估；食品识别、食品库匹配及营养数据仍为真实接口结果。修改补充信息、重新识别、识别失败或退出页面时清除失效评分。
+
+模拟评分只保存在当前页面，不提交 `score`、`predictNow`、`predictSuggest` 或模拟建议，不写入本地饮食缓存或数据库、不参与统计。后续由预测模块负责人确认真实评分接口契约，再替换上述适配入口；现有后端预测实现和请求/响应字段不改动。
 
 用户端确认餐食后写入饮食记录与营养快照；快照在保存时点固化、不可变，不提供字段级修改（改 = 重新保存覆盖），不随营养库实时联动。同日同餐点重复保存为覆盖写入，不新增记录。
 
@@ -163,6 +253,8 @@
 2. 客户端直接把文件字节 PUT 到该 URL（有效期 300 秒，不经过后端）；
 3. `POST /api/v1/media-files` 登记 → 得到 `mediaId`，此后才能用于 2.24。
 
+开发环境默认使用后端自带的本地文件存储，不要求开发者另外安装 MinIO。此时第 1 步返回的是同一后端生成的一次性 PUT URL（`/api/v1/media-files/local-uploads/{token}`），该 URL 与本地文件读取地址仅在 `storage.provider=local` 时开放；向该本地上传地址 PUT 文件字节时必须携带 `Content-Type: application/octet-stream`，禁止使用 `application/json`，否则 JSON 请求过滤器会破坏二进制内容。启用 OSS 的生产环境仍使用私有 OSS 预签名 URL，并遵循凭证签名约束，不额外添加参与签名的请求头。除这一传输头差异外，调用方始终按上述三步协议处理。 课程部署可显式关闭对象存储，按下方 disabled 契约拒绝上传；本次功能不强制启用云存储，也不改变现有关闭模式。
+
 **2.25 的 SSE 事件契约不变**：仍是 `delta` / `done` / `error`，`done` 必带完整正文。图片轮次对客户端**完全透明**——服务端内部先调用视觉模型产出客观描述，再把描述交给文本模型组织回答，2.25 的入参出参与文本轮次一模一样，前端不需要区分也不需要新增事件。
 
 客户端注意两点：
@@ -185,3 +277,17 @@
 不生成虚假上传 URL、不登记不存在的媒体、不返回模拟上传成功。
 已有接口路径、DTO、响应封装保持不变；其他模块仍可使用数据库和 Redis。
 此模式不覆盖上传功能验收，头像上传、饮食图片上传、图片聊天等依赖对象存储的操作不可用。
+## 血糖仪 OCR 识别
+
+血糖仪图片先按媒体三步流程上传并登记为 `GLUCOSE(2)`，随后创建 OCR 任务。OCR 只识别图片中的血糖数值和单位；餐前/餐后节点由用户进入拍照页前选择，服务端不得根据图片猜测 `nodeCode`。识别结果只用于预填，必须由用户确认或修改后再调用血糖记录接口入库。
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| `POST /api/v1/ocr-tasks` | C 端登录 | 创建异步识别任务；请求体 `{ "mediaId": 1001, "bizType": 1 }`，须携带稳定的 `X-Idempotency-Key` |
+| `GET /api/v1/ocr-tasks/{id}` | C 端登录 | 查询当前用户的任务状态与识别结果 |
+
+任务状态统一为：`0` 待处理、`1` 处理中、`2` 成功、`3` 失败。`bizType=1` 表示血糖识别；本期不开放 `bizType=2` 餐食 OCR。媒体必须属于当前用户、状态可用且业务类型为 `GLUCOSE(2)`。
+
+成功结果中的 `ocrResult` 固定为：`schemaVersion=1`、`bizType=1`、`suggestedValue`（`mmol/L`，无法可靠识别时为 `null`）、`confidence`（`0-100`）和 `rawText`。即使状态成功，`suggestedValue=null` 也表示图片质量不足，客户端必须进入手工输入。任务失败时返回 `errorMsg`，客户端仍应允许用户手工记录。
+
+用户确认后调用 `PUT /api/v1/glucose-records/by-node`：采纳 OCR 值时必须传 `sourceType=2` 和原 `mediaId`；用户改为手工输入时传 `sourceType=1`，但仍可携带原 `mediaId` 供追溯。非空 `mediaId` 必须属于当前用户、状态可用且类型为 `GLUCOSE(2)`。血糖值继续执行 `(0,40)` 的服务端范围校验，识别接口不得直接写入 `glucose_record`。

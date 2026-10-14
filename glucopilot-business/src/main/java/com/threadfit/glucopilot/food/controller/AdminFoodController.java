@@ -1,6 +1,8 @@
 package com.threadfit.glucopilot.food.controller;
 
 import com.threadfit.glucopilot.common.api.ApiResponse;
+import com.threadfit.glucopilot.common.api.PageQuery;
+import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.constant.PermCodes;
 import com.threadfit.glucopilot.food.dto.AdminFoodDtos;
 import com.threadfit.glucopilot.food.service.AdminFoodService;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -74,11 +77,15 @@ public class AdminFoodController {
         return ApiResponse.ok();
     }
 
-    /** 查询全部未删除食品，供管理端营养库页面展示。 */
+    /** 分页查询未删除食品，筛选条件由服务端执行。 */
     @GetMapping("/foods")
     @PreAuthorize("@ss.hasPermi('" + PermCodes.FOOD_LIBRARY_MANAGE + "')")
-    public ApiResponse<List<AdminFoodDtos.FoodItem>> listFoods() {
-        return ApiResponse.ok(adminFoodService.listFoods());
+    public ApiResponse<PageResult<AdminFoodDtos.FoodItem>> listFoods(
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Boolean enabled,
+            @Valid PageQuery query) {
+        return ApiResponse.ok(adminFoodService.pageFoods(categoryId, keyword, enabled, query));
     }
 
     /** 新建食品；@Valid 会校验食品名称和分类 ID。 */

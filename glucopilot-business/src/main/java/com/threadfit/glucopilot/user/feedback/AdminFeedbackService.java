@@ -48,8 +48,7 @@ public class AdminFeedbackService {
                         .eq(replyStatus != null, Feedback::getReplyStatus, replyStatus)
                         .like(StringUtils.hasText(keyword), Feedback::getContentText,
                                 keyword == null ? null : keyword.trim())
-                        .orderByDesc(Feedback::getGmtCreate)
-                        .orderByDesc(Feedback::getId));
+                        .orderByAsc(Feedback::getId));
 
         List<Long> userIds = rows.getRecords().stream()
                 .map(Feedback::getUserId)

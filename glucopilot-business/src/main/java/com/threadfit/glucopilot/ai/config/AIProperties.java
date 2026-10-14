@@ -40,6 +40,14 @@ public class AIProperties {
 
     private VisionProperties vision = new VisionProperties();
 
+    private MealProperties meal = new MealProperties();
+
+    @Data
+    public static class MealProperties {
+        private String model = "qwen3-vl-plus";
+        private int maxTokens = 2048;
+    }
+
     /** 取场景配置；未配置视为部署错误（提示词/参数没有来源，跑了也是错的）。 */
     public SceneProperties scene(SceneCode sceneCode) {
         SceneProperties scene = scenes.get(sceneCode.getConfigKey());
@@ -159,7 +167,7 @@ public class AIProperties {
         /** 凭据；只放 application-local.yaml 或环境变量，禁止入库。 */
         private String apiKey;
 
-        /** 视觉模型编码，如 qwen-vl-max。 */
+        /** 视觉模型编码，如 qwen3-vl-plus。 */
         private String model;
 
         /** 图片描述的输出上限：描述要短，限死以避免视觉模型长篇发挥。 */

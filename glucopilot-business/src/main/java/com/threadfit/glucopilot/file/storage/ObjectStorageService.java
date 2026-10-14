@@ -10,11 +10,11 @@ import java.time.LocalDate;
 /**
  * 对象存储抽象：凭证 / 直传对象 / 访问 URL。
  *
- * <p>两实现共同契约（不一致即缺陷）：
+ * <p>各实现共同契约（不一致即缺陷）：
  * <ul>
  *   <li>{@code storageKey = {bizType}/{yyyy}/{MM}/{userId}/{uuid}.{ext}}</li>
  *   <li>桶私有，禁止匿名下载；{@code fileUrl} 由服务端 {@link #resolvePublicUrl} 生成</li>
- *   <li>落库 provider 值：MinIO=1 / 阿里云OSS=2</li>
+ *   <li>落库 provider 值：本地开发存储与 MinIO=1 / 阿里云OSS=2</li>
  * </ul>
  */
 public interface ObjectStorageService {

@@ -20,6 +20,9 @@ public class FoodCategory extends BaseEntity {
     /** 分类名称，对应 category_name。 */
     private String categoryName;
 
+    /** 分类配图地址；未选择时由客户端展示默认图片。 */
+    private String imageUrl;
+
     /** 分类排序，对应 sort_no。 */
     private Integer sortNo;
 

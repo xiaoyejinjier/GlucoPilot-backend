@@ -2,8 +2,11 @@ package com.threadfit.glucopilot.food.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.api.PageQuery;
+import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.model.BaseEntity;
 import com.threadfit.glucopilot.common.mybatis.SoftDeletes;
@@ -15,6 +18,7 @@ import com.threadfit.glucopilot.food.mapper.FoodNutritionMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -52,6 +56,7 @@ public class AdminFoodService {
                 .map(c -> AdminFoodDtos.FoodCategoryItem.builder()
                         .id(c.getId())
                         .name(c.getCategoryName())
+                        .image(c.getImageUrl() == null ? "" : c.getImageUrl())
                         .sort(c.getSortNo())
                         .build())
                 .toList();
@@ -68,6 +73,9 @@ public class AdminFoodService {
 
         // 去除分类名称首尾空格，排序未填写时按 0 处理。
         row.setCategoryName(req.getName().trim());
+        if (req.getImage() != null) {
+            row.setImageUrl(req.getImage().trim());
+        }
         row.setSortNo(req.getSort() == null ? 0 : req.getSort());
 
         // 新分类默认启用；修改时保留原来的启用状态。
@@ -82,11 +90,16 @@ public class AdminFoodService {
             foodCategoryMapper.updateById(row);
         }
 
-        // 将保存后的 Entity 转成管理端返回 DTO。
+        // 回读持久化结果，不能把仅存在于内存中的图片值当成保存成功。
+        FoodCategory saved = requireCategory(row.getId());
+        if (req.getImage() != null && !req.getImage().trim().equals(saved.getImageUrl())) {
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "分类图片保存校验失败，请重试");
+        }
         return AdminFoodDtos.FoodCategoryItem.builder()
-                .id(row.getId())
-                .name(row.getCategoryName())
-                .sort(row.getSortNo())
+                .id(saved.getId())
+                .name(saved.getCategoryName())
+                .image(saved.getImageUrl() == null ? "" : saved.getImageUrl())
+                .sort(saved.getSortNo())
                 .build();
     }
 
@@ -120,6 +133,30 @@ public class AdminFoodService {
     }
 
     /**
+     * 按管理端筛选条件分页查询食品。筛选和分页均在数据库执行，避免管理端
+     * 先拉取固定数量的数据后遗漏记录。
+     */
+    public PageResult<AdminFoodDtos.FoodItem> pageFoods(
+            Long categoryId, String keyword, Boolean enabled, PageQuery query) {
+        LambdaQueryWrapper<FoodNutrition> wrapper = new LambdaQueryWrapper<FoodNutrition>()
+                .eq(categoryId != null, FoodNutrition::getCategoryId, categoryId)
+                .like(StringUtils.hasText(keyword), FoodNutrition::getFoodName,
+                        StringUtils.hasText(keyword) ? keyword.trim() : null)
+                .eq(enabled != null, FoodNutrition::getShelfStatus,
+                        enabled == null ? null : (enabled ? 1 : 0))
+                .orderByDesc(FoodNutrition::getId);
+
+        Page<FoodNutrition> page = foodNutritionMapper.selectPage(
+                new Page<>(query.getPageNum(), query.getPageSize()), wrapper);
+        Map<Long, String> catNames = foodCategoryMapper.selectList(null).stream()
+                .collect(Collectors.toMap(FoodCategory::getId, FoodCategory::getCategoryName, (a, b) -> a));
+        List<AdminFoodDtos.FoodItem> records = page.getRecords().stream()
+                .map(food -> toFood(food, catNames))
+                .toList();
+        return PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), records);
+    }
+
+    /**
      * 新增或修改食品。
      * 请求没有 id 时新增；请求带 id 时修改现有食品。
      */
@@ -148,6 +185,10 @@ public class AdminFoodService {
 
         // enabled 明确为 false 时下架，其余情况默认上架。
         row.setShelfStatus(Boolean.FALSE.equals(req.getEnabled()) ? 0 : 1);
+        if (row.getNutritionSource() == null) row.setNutritionSource("MANUAL");
+        if (Boolean.TRUE.equals(req.getEnabled()) && "AI_ESTIMATE".equals(row.getNutritionSource())) {
+            row.setNutritionSource("AI_REVIEWED");
+        }
 
         // 根据 id 是否存在选择 INSERT 或 UPDATE。
         if (req.getId() == null) {
@@ -195,6 +236,8 @@ public class AdminFoodService {
                 .description("")
                 .enabled(f.getShelfStatus() == null || f.getShelfStatus() == 1)
                 .updatedAt(fmt(f.getGmtModified()))
+                .nutritionSource(f.getNutritionSource() == null ? "MANUAL" : f.getNutritionSource())
+                .sourceModel(f.getSourceModel())
                 .build();
     }
 

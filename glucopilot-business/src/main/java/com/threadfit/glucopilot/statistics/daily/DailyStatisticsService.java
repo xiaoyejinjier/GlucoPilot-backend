@@ -4,12 +4,15 @@ import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.period.GlucosePeriodService;
 import com.threadfit.glucopilot.glucose.record.GlucoseRecordService;
 import com.threadfit.glucopilot.glucose.trend.GlucoseTrendService;
+import com.threadfit.glucopilot.meal.entity.MealRecord;
+import com.threadfit.glucopilot.meal.service.MealRecordService;
 import com.threadfit.glucopilot.statistics.dto.StatisticsDtos;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -23,17 +26,26 @@ public class DailyStatisticsService {
 
     private final GlucoseRecordService glucoseRecordService;
     private final GlucosePeriodService glucosePeriodService;
+    private final MealRecordService mealRecordService;
 
     public StatisticsDtos.CheckIn checkIn(Long userId, LocalDate today) {
         List<GlucoseRecord> todayRecords = glucoseRecordService.listRange(userId, today, today);
-        Set<LocalDate> recordedDates = Set.copyOf(glucoseRecordService.recordedDatesDesc(
-                userId, today.minusDays(STREAK_LOOKBACK_DAYS), today));
+        List<MealRecord> todayMeals = mealRecordService.listRange(userId, today, today);
+        LocalDate lookbackStart = today.minusDays(STREAK_LOOKBACK_DAYS);
+        Set<LocalDate> recordedDates = new HashSet<>(glucoseRecordService.recordedDatesDesc(
+                userId, lookbackStart, today));
+        mealRecordService.listRange(userId, lookbackStart, today).stream()
+                .map(MealRecord::getRecordDate)
+                .forEach(recordedDates::add);
         YearMonth yearMonth = YearMonth.of(today.getYear(), today.getMonthValue());
-        List<LocalDate> monthDates = glucoseRecordService.recordedDatesDesc(
-                userId, yearMonth.atDay(1), yearMonth.atEndOfMonth());
+        Set<LocalDate> monthDates = new HashSet<>(glucoseRecordService.recordedDatesDesc(
+                userId, yearMonth.atDay(1), yearMonth.atEndOfMonth()));
+        mealRecordService.listRange(userId, yearMonth.atDay(1), yearMonth.atEndOfMonth()).stream()
+                .map(MealRecord::getRecordDate)
+                .forEach(monthDates::add);
 
         return StatisticsDtos.CheckIn.builder()
-                .todayCount(todayRecords.size())
+                .todayCount(todayRecords.size() + todayMeals.size())
                 .todayAvg(GlucoseTrendService.average(todayRecords))
                 .totalNodes(glucosePeriodService.listEnabledNodes().size())
                 .streakDays(streakOf(recordedDates, today))

@@ -22,6 +22,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -110,11 +111,8 @@ class ConfigFilesTest {
     void 对象存储配置应能绑定到StorageProperties() throws IOException {
         StorageProperties props = bindFrom("application-dev.yaml", "glucopilot.storage", StorageProperties.class);
 
-        assertTrue(StringUtils.hasText(props.getProvider()), "glucopilot.storage.provider 未绑定");
-        assertTrue(StringUtils.hasText(props.getEndpoint()), "glucopilot.storage.endpoint 未绑定");
-        assertTrue(StringUtils.hasText(props.getAccessKey()), "glucopilot.storage.access-key 未绑定");
-        assertTrue(StringUtils.hasText(props.getSecretKey()), "glucopilot.storage.secret-key 未绑定");
-        assertTrue(StringUtils.hasText(props.getBucket()), "glucopilot.storage.bucket 未绑定");
+        assertEquals("local", props.getProvider(), "开发环境应使用免配置的本地存储");
+        assertTrue(StringUtils.hasText(props.getLocalDir()), "glucopilot.storage.local-dir 未绑定");
     }
 
     private static <T> T bindFrom(String fileName, String prefix, Class<T> type) throws IOException {

@@ -1,10 +1,12 @@
 package com.threadfit.glucopilot.meal.service;
 
 import com.threadfit.glucopilot.meal.dto.MealDtos;
+import com.threadfit.glucopilot.meal.entity.MealRecord;
 import com.threadfit.glucopilot.meal.vo.MealVos;
 
 import java.time.LocalDate;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
 /** 饮食记录：保存（覆盖写入）、按日查询、删除与消费方读取。 */
@@ -15,6 +17,9 @@ public interface MealRecordService {
     MealVos.DayMeals listDay(Long userId, LocalDate recordDate);
 
     void remove(Long userId, Long id);
+
+    /** 区间内有效餐点记录（含首尾），供九时段完成度统计。 */
+    List<MealRecord> listRange(Long userId, LocalDate from, LocalDate to);
 
     /** 批量统计活跃记录数（user_id → 数量），无记录用户不返回键。 */
     Map<Long, Long> countActiveByUserIds(Collection<Long> userIds);

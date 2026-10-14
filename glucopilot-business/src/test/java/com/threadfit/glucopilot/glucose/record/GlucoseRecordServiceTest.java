@@ -8,6 +8,7 @@ import com.threadfit.glucopilot.glucose.entity.GlucoseNode;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
 import com.threadfit.glucopilot.glucose.period.GlucosePeriodService;
+import com.threadfit.glucopilot.file.service.MediaFileService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -36,6 +37,8 @@ class GlucoseRecordServiceTest {
     private GlucoseRecordMapper glucoseRecordMapper;
     @Mock
     private GlucosePeriodService glucosePeriodService;
+    @Mock
+    private MediaFileService mediaFileService;
 
     @InjectMocks
     private GlucoseRecordService service;
@@ -43,6 +46,13 @@ class GlucoseRecordServiceTest {
     @Test
     void rejectsMealNode() {
         GlucoseDtos.UpsertRequest request = upsertRequest("breakfast", new BigDecimal("5.0"));
+        assertThrows(BizException.class, () -> service.upsertByNode(USER_ID, request));
+    }
+
+    @Test
+    void rejectsOcrSourceWithoutOriginalImage() {
+        GlucoseDtos.UpsertRequest request = upsertRequest("before_breakfast", new BigDecimal("6.2"));
+        request.setSourceType(2);
         assertThrows(BizException.class, () -> service.upsertByNode(USER_ID, request));
     }
 

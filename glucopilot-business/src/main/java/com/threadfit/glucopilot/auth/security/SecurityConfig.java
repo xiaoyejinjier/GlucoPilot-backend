@@ -72,6 +72,10 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.OPTIONS, "/**")
                     .permitAll()
                     .requestMatchers(
+                        HttpMethod.PUT,
+                        "/api/v1/media-files/local-uploads/*")
+                    .permitAll()
+                    .requestMatchers(
                         HttpMethod.POST,
                         "/api/v1/auth/wechat/sessions",
                         "/api/v1/auth/sms/codes",
@@ -85,8 +89,10 @@ public class SecurityConfig {
                         "/api/v1/food-categories",
                         "/api/v1/foods",
                         "/api/v1/foods/*",
+                        "/api/v1/foods/images/*",
                         "/api/v1/dict/**",
-                        "/api/v1/app-config")
+                        "/api/v1/app-config",
+                        "/api/v1/media-files/local-objects")
                     .permitAll()
                     .anyRequest()
                     .authenticated())

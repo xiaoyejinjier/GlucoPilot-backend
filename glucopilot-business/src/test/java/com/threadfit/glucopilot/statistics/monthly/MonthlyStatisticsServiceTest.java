@@ -2,6 +2,8 @@ package com.threadfit.glucopilot.statistics.monthly;
 
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.record.GlucoseRecordService;
+import com.threadfit.glucopilot.meal.entity.MealRecord;
+import com.threadfit.glucopilot.meal.service.MealRecordService;
 import com.threadfit.glucopilot.statistics.dto.StatisticsDtos;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,13 +29,16 @@ class MonthlyStatisticsServiceTest {
 
     @Mock
     private GlucoseRecordService glucoseRecordService;
+    @Mock
+    private MealRecordService mealRecordService;
 
     @InjectMocks
     private MonthlyStatisticsService service;
 
     @Test
     void calendarLevelsFollowRecordCount() {
-        when(glucoseRecordService.listRange(eq(1L), any(), any())).thenReturn(septemberRecords());
+        when(glucoseRecordService.listRange(eq(1L), any(), any())).thenReturn(septemberGlucoseRecords());
+        when(mealRecordService.listRange(eq(1L), any(), any())).thenReturn(septemberMealRecords());
 
         StatisticsDtos.CalendarView calendar = service.calendar(1L, 2026, 9);
 
@@ -51,12 +56,13 @@ class MonthlyStatisticsServiceTest {
 
     @Test
     void monthStatsComputeComplianceAndExtremes() {
-        when(glucoseRecordService.listRange(eq(1L), any(), any())).thenReturn(septemberRecords());
+        when(glucoseRecordService.listRange(eq(1L), any(), any())).thenReturn(septemberGlucoseRecords());
+        when(mealRecordService.listRange(eq(1L), any(), any())).thenReturn(septemberMealRecords());
 
         StatisticsDtos.MonthStats stats = service.monthStats(1L, 2026, 9);
 
         assertEquals(5, stats.getRecordDays());
-        assertEquals(21, stats.getTotalRecords());
+        assertEquals(23, stats.getTotalRecords());
         // 5 / 30 天，保留两位四舍五入
         assertEquals(new BigDecimal("0.17"), stats.getComplianceRate());
         assertEquals(new BigDecimal("6.1"), stats.getAvgValue());
@@ -64,9 +70,9 @@ class MonthlyStatisticsServiceTest {
         assertEquals(new BigDecimal("5.6"), stats.getMinValue());
     }
 
-    /** 9 月 1~5 日分别有 1/3/4/6/7 条记录，共 21 条；极值来自 8.2 与 5.6。 */
-    private static List<GlucoseRecord> septemberRecords() {
-        int[] counts = {1, 3, 4, 6, 7};
+    /** 六个血糖节点分别贡献 1/2/3/5/6 条；三个餐点补成单日 1/3/4/6/9。 */
+    private static List<GlucoseRecord> septemberGlucoseRecords() {
+        int[] counts = {1, 2, 3, 5, 6};
         List<GlucoseRecord> records = new ArrayList<>();
         for (int day = 1; day <= counts.length; day++) {
             for (int i = 0; i < counts[day - 1]; i++) {
@@ -75,6 +81,21 @@ class MonthlyStatisticsServiceTest {
         }
         records.get(0).setGlucoseValue(new BigDecimal("8.2"));
         records.get(1).setGlucoseValue(new BigDecimal("5.6"));
+        return records;
+    }
+
+    private static List<MealRecord> septemberMealRecords() {
+        int[] counts = {0, 1, 1, 1, 3};
+        List<MealRecord> records = new ArrayList<>();
+        for (int day = 1; day <= counts.length; day++) {
+            for (int i = 0; i < counts[day - 1]; i++) {
+                MealRecord row = new MealRecord();
+                row.setUserId(1L);
+                row.setRecordDate(LocalDate.of(2026, 9, day));
+                row.setNodeCode(i == 0 ? "breakfast" : i == 1 ? "lunch" : "dinner");
+                records.add(row);
+            }
+        }
         return records;
     }
 

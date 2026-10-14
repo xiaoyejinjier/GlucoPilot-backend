@@ -67,3 +67,6 @@ admin/dev-run.log
 /miniprogram_npm/
 project.private.config.json
 *.log
+
+# 开发上传的用户照片不得进入代码仓库
+/data/uploads/

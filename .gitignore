@@ -55,6 +55,10 @@ Thumbs.db
 # Local upstream checkout, migration scratch files and private database backups
 .migration/
 .backups/
+
+# 本地对象存储（dev 默认 glucopilot.storage.provider=local，写入 ./data/uploads）：
+# 运行期产生的用户上传文件，绝不入库（旧主线在单仓根 .gitignore 里已有同名条目）。
+/data/uploads/
 backend/backend-run.log
 backend/target-build.log
 admin/dev-run.log

@@ -31,3 +31,16 @@ glucopilot:
   storage:
     provider: local
     local-dir: ${LOCAL_UPLOAD_DIR:./data/uploads}
+
+# ---------------------------------------------------------------------------
+# 微信登录（dev 只有 Mock 实现，没有真实 jscode2session）：
+#   留空 = 按 wx.login() 给的 code 哈希派生 openid —— 开发者工具每次登录的 code 都不同，
+#          于是"每次登录都是一个新用户"：每次都要重新同意免责声明、会话与血糖记录攒不到一起，
+#          而 app.js 的 onShow 免责校验会把页面强制拉回声明页，看起来像"AI 对话页打不开"。
+#   填值 = 恒定返回该 openid，登录一次之后一直是同一个开发用户（推荐本机联调使用）。
+# 本机填值请写在 application-local.yaml（已 gitignore），不要提交个人 openid。
+# 需要联调"新用户/首登/免责声明"流程时，清空本项并重启。
+# ---------------------------------------------------------------------------
+wechat:
+  mock:
+    fixed-openid: ${WECHAT_MOCK_FIXED_OPENID:}

@@ -2,9 +2,11 @@ package com.threadfit.glucopilot.ai.core;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AIProperties.SceneProperties;
+import com.threadfit.glucopilot.ai.model.AiModelSpec;
+import com.threadfit.glucopilot.ai.model.AiRuntimeConfigService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -13,6 +15,10 @@ import org.springframework.util.StringUtils;
  * <p>
  * 取代了早期的 {@code AiModelInfo}：模型编码不再是「全局一个」，而是随场景解析，
  * 落库（{@code chat_message.model_code}）与回显都走这里，保证「落库的模型 = 实际调用的模型」。
+ * <p>
+ * <b>模型编码必须问运行时配置，不能读 yaml 里的那个字面量</b>：后台（{@code ai_model_config}）
+ * 才是文本/视觉模型的真实来源，yaml 只是兜底。2026-10-13 的反馈（后台把默认模型从 flash 换成 pro，
+ * 记录里却还写着 flash）就是这条没做全：解析走 DB 了，落库还在读 yaml，两边对不上。
  * <p>
  * 当前 provider 只有 DeepSeek，因此这里直接构造 {@link DeepSeekChatOptions}；
  * 这是本模块内**唯一**允许出现 DeepSeek 类型的地方，接入第二个 provider 时只改这里。
@@ -29,23 +35,17 @@ import org.springframework.util.StringUtils;
  *       把 DeepSeek 的 options 交给它属于类型层面的错误，是这三者里唯一真会炸的。</li>
  * </ul>
  */
+@Slf4j
 @Component
 public class SceneModelResolver {
 
     private final AIProperties aiProperties;
 
-    /** 全局默认模型编码，与 {@code spring.ai.deepseek.chat.model} 保持单一来源。 */
-    private final String defaultModelCode;
+    private final AiRuntimeConfigService runtimeConfig;
 
-    /** 视觉场景的模型编码，与 {@code ai.vision.model} 保持单一来源。 */
-    private final String visionModelCode;
-
-    public SceneModelResolver(AIProperties aiProperties,
-                              @Value("${spring.ai.deepseek.chat.model:unknown}") String defaultModelCode,
-                              @Value("${ai.vision.model:unknown}") String visionModelCode) {
+    public SceneModelResolver(AIProperties aiProperties, AiRuntimeConfigService runtimeConfig) {
         this.aiProperties = aiProperties;
-        this.defaultModelCode = defaultModelCode;
-        this.visionModelCode = visionModelCode;
+        this.runtimeConfig = runtimeConfig;
     }
 
     /**
@@ -53,13 +53,15 @@ public class SceneModelResolver {
      * <p>
      * 视觉场景返回的是视觉模型（阶段 1 真正调用的那个），而不是回落成 DeepSeek 的名字——
      * 否则落库的 {@code chat_message.model_code} 会与事实不符，用于成本核算时会算错账。
+     * <p>
+     * 文本场景返回 {@link AiRuntimeConfigService#textSpec} 的结果：场景绑定 → 后台默认 → yaml，
+     * 与 {@code DynamicChatModel} 真正拿去发请求的那一份同源。
      */
     public String modelCode(SceneCode scene) {
         if (scene.isRequiresVision()) {
-            return visionModelCode;
+            return runtimeConfig.visionSpec().modelCode();
         }
-        String configured = aiProperties.scene(scene).getModelCode();
-        return StringUtils.hasText(configured) ? configured : defaultModelCode;
+        return runtimeConfig.textSpec(scene).modelCode();
     }
 
     /**
@@ -85,6 +87,12 @@ public class SceneModelResolver {
      * 只写场景显式声明的字段，未声明的留空，由 Spring AI 与 {@code spring.ai.deepseek.chat.*}
      * 的默认值合并，避免同一份参数在两处维护。
      * <p>
+     * <b>场景绑定了 {@code model-code} 时，写进去的是该配置的 {@code model_endpoint} 而不是编码本身</b>：
+     * 编码是业务起的名字（可以叫 "glucopilot-chat"），真正发给厂商的必须是端点名。
+     * 早先直接写编码，在"编码 ≠ 端点"的配置上会既调错模型、又用错凭据。
+     * 编码没登记（或已被停用）时不写 model 并 WARN，交给通道默认——与
+     * {@link AiRuntimeConfigService#textSpec} 的回落保持一致，避免"记录里写一个、实际调另一个"。
+     * <p>
      * 视觉场景直接拒绝：该方法只能造出 DeepSeek 的 options，交给 OpenAI 协议的视觉 client
      * 是类型层面的错误。要调视觉参数请改 {@code ai.vision.*}。
      */
@@ -97,7 +105,14 @@ public class SceneModelResolver {
         SceneProperties config = aiProperties.scene(scene);
         DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder();
         if (StringUtils.hasText(config.getModelCode())) {
-            builder.model(config.getModelCode());
+            AiModelSpec bound = runtimeConfig.specByModelCode(config.getModelCode());
+            if (bound != null) {
+                builder.model(bound.modelEndpoint());
+            } else {
+                log.warn("场景 {} 绑定的模型编码 {} 不在运行时配置里（不存在或已停用），"
+                                + "本次不指定模型，交由通道默认模型处理",
+                        scene.getCode(), config.getModelCode());
+            }
         }
         if (config.getTemperature() != null) {
             builder.temperature(config.getTemperature());

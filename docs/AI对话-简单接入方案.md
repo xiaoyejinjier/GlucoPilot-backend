@@ -510,7 +510,7 @@ If you have database settings to be loaded from a particular profile you may nee
 | `frontend/services/api.js` | 新增 `getOrCreateChatSession` / `sendChatMessage` / `streamChatCompletion` |
 | `frontend/pages/voice/voice.js` | 由 `setTimeout` + 硬编码回复改为真实链路 |
 | `frontend/pages/voice/voice.wxml` / `.wxss` | 「正在思考…」占位、失败后的「重新生成」入口、回复中禁用发送 |
-| `project/tools/sse-check/`（新增） | SSE 解析自检脚本 + 真实响应夹具（见 14.4） |
+| `GlucoPilot-frontend/tools/sse-check/`（原单仓 `project/tools/sse-check/`，2026-10-13 拆仓后随前端仓） | SSE 解析自检脚本 + 真实响应夹具（见 14.4） |
 
 ## 14.2 对话页链路
 
@@ -536,7 +536,7 @@ If you have database settings to be loaded from a particular profile you may nee
 
 ## 14.4 验证方式与结果
 
-小程序端无法在 CI 里跑，但 SSE 解析是**最容易静默出错**的一段，因此把后端真实响应抓成夹具，在 Node 里把 `openSse` 的分片按任意粒度重放（`project/tools/sse-check/`，用法见其中 README）：
+小程序端无法在 CI 里跑，但 SSE 解析是**最容易静默出错**的一段，因此把后端真实响应抓成夹具，在 Node 里把 `openSse` 的分片按任意粒度重放（`GlucoPilot-frontend/tools/sse-check/`，用法见其中 README）：
 
 | 用例 | 断言 | 结果 |
 |---|---|---|
@@ -789,7 +789,7 @@ mvn test     # Tests run: 31, Failures: 0, Errors: 0
   `X-Accel-Buffering: no`。生产上可能出现「整段一次性吐出」（流式观感失效），
   且 `proxy_read_timeout 30s` 小于服务端 60s。这条与「用不用 Flux」无关。
 - 未做真实环境 `curl -N` 复核：本机无 Key／无远程 MySQL，无法启动完整应用。
-  建议第一次联调时按 `tools/sse-check/README` 重新抓一次夹具，顺便确认 17.2 的编码在真实链路上同样正确。
+  建议第一次联调时按前端仓 `GlucoPilot-frontend/tools/sse-check/README` 重新抓一次夹具，顺便确认 17.2 的编码在真实链路上同样正确。
 
 ---
 
@@ -1288,7 +1288,7 @@ OpenAiChatModel.builder()
 3. **多轮工具的铺垫文本**：模型偶发连说两三句"我再看看…"。英文的会被清掉，中文的保留；
    是否把中文铺垫也压成一句，属于产品口味，待定。
 4. **端到端脚本目前放在 `backend/target/e2e/`**：`mvn clean` 会清掉。是否移到
-   `backend/scripts/e2e/`（连同 `MockGlucoseData.java` 一起）由项目负责人定。
+   `scripts/e2e/`（连同 `MockGlucoseData.java` 一起）由项目负责人定。
 
 # 23. 会话/消息的三处并发竞态：实测复现与修复（2026-10-09）
 
@@ -1474,8 +1474,7 @@ static List<Message> keepLastWindow(List<Message> history, int window) {
 
 ## 24.3 验证
 
-- 单测：`ChatMemoryReadAdvisorTest` 10 项（含"80 条历史 → 只注入 20 条 + 本轮 1 条"）、
-  `MyBatisChatMemoryRepositoryTest` 4 项；全量 **222** 项全绿。
+- 单测：`ChatMemoryReadAdvisorTest` 10 项（含"80 条历史 → 只注入 20 条 + 本轮 1 条"）、  `MyBatisChatMemoryRepositoryTest` 4 项；全量 **222** 项全绿。
 - 端到端（同一会话、历史 30 条，真实模型）：
 
 | | 日志 |
@@ -1491,6 +1490,203 @@ static List<Message> keepLastWindow(List<Message> history, int window) {
 2. **打包时不要同时启动应用**：`java -jar ruoyi-admin.jar` 会占用 jar，
    与 `mvn package` 的 repackage 撞车（本次实测 `-rf :ruoyi-admin` 失败），
    且失败后旧 jar 仍在，表现为"代码改了但行为没变"——很容易误判成修法无效。
+
+# 25. 模型配置后台化：模型名 / 密钥 / 参数可实时改（2026-10-13）
+
+## 25.1 为什么要做
+
+在此之前模型配置全在 yaml：改一次要改文件 + 重新打包 + 重启。就在这之前的两天里，这个代价
+被真实撞到两次：视觉模型名写成账号下不存在的 `qwen3-vl-flash`（只能等用户发图才看到
+`404 Model not exist`），以及配置被打进 jar 导致"改了源文件不重新构建不生效"。
+
+`ai_model_config` 表从 V1 起就存在（`api_key_cipher` 的注释甚至写着"密文或 KMS 引用，禁止明文"），
+但一直零引用——这一期把它接上了。
+
+## 25.2 三层配置与优先级
+
+```
+① 后台 DB（ai_model_config）  运行时可变，优先级最高
+② yaml / 环境变量            兜底 + 首次种子，保证"空库也能跑"
+③ 代码默认                   最后一道
+```
+
+三条定死的行为：
+1. **密钥留空 = 沿用 yaml/环境变量**：后台只改模型名/参数时不必重录密钥，V13 的种子行因此开箱即用；
+2. **密钥解不开 = 整行跳过 + WARN**：拿一个解不开的密钥发请求，等于带着未知凭证调第三方；
+3. **加载失败 = 沿用上一份快照**：后台误配或库抖动绝不能让 AI 全挂。
+
+主密钥（`AI_CONFIG_MASTER_KEY`）缺失时的行为是**与产品确认过的选择**：不解密、相关行跳过并 WARN、
+应用照常启动（本地开发不被挡住），但后台保存密钥会被明确拒绝——绝不降级成明文存储。
+
+## 25.3 动态装配：为什么是"委托 ChatModel"而不是"重建 ChatClient"
+
+硬约束：文本 client 必须从自动装配的 `ChatClient.Builder` clone，因为工具由 `ToolCallingAdvisor`
+执行、而它只挂在这个 Builder 上（手搓会静默丢工具）。于是动态化只能落在 ChatModel 这一层：
+
+```
+自动装配的 Builder ──► DynamicChatModel（@Primary 委托） ──► 当前生效的 ChatModel
+                                  ▲ 原子替换
+                       AiRuntimeConfigService 快照（不可变）
+```
+
+已用 `javap` 核对两件事，缺一不可：
+- `ChatClientAutoConfiguration.chatClientBuilder(..., ChatModel, ...)` 是**单值注入** → `@Primary` 生效；
+- `DeepSeekChatAutoConfiguration.deepSeekChatModel()` 上的 `@ConditionalOnMissingBean` 是**按方法返回类型
+  （`DeepSeekChatModel`）判定**的，因此我们的 `ChatModel` 委托不会顶掉它——它正好成为 yaml 兜底那份
+  （带着 RetryTemplate 与观测）。
+
+其它要点：
+- **请求级快照绑定**：一次调用只解析一次模型，绝不允许流到一半换模型；
+- **按请求声明的模型名取凭据**：请求 options 里可能覆盖了 model，用错凭据就会出现"用 A 的 key 调 B 的模型"；
+- **与 yaml 等价时复用容器里的模型**：避免后台只是把同一套参数登记一遍、却静默失去重试能力；
+- **版本按"内容"而不是时间**：配置没变时 TTL 刷新不递增版本，否则每 60 秒清一次模型缓存、
+  反复重建 HTTP 客户端。
+
+## 25.4 单测抓到的一个真 bug（值得单独记）
+
+接线时我把文本通道默认写成了 `snapshot.resolveText(null)`，而 `resolveText(null)` 按设计
+**直接返回 yaml 规格**（不查 DB）——后果是"后台改默认文本模型的密钥/模型名永远不生效"，
+且**不报任何错**。单测把它抓了出来，断言就是这一条：
+
+```java
+assertEquals("db", snapshot.resolveText(snapshot.yamlText().modelCode()).source());
+```
+
+正确写法是传"全局默认模型编码"而不是 null（见 `AiDynamicModelConfig`）。教训与 §24 一致：
+**这类"装配错了但不报错"的问题只能靠断言钉住**。
+
+## 25.5 交付物
+
+| 层 | 文件 |
+| --- | --- |
+| 迁移 | `V13__ai_model_runtime_config.sql`（扩列 / 种子两条模型 / 菜单权限 2000-2002） |
+| 加解密 | `ai/model/AiModelCipher.java`（AES-256-GCM、打码、"缺主密钥不降级明文"） |
+| 运行时 | `AiModelSpec`、`AiRuntimeConfigService`（快照 + 三层合成 + TTL）、`DynamicChatModel`、`ChatModelFactory` |
+| 接线 | `AiDynamicModelConfig`（`@Primary` 委托）、`AiVisionClientConfig`（改用委托，不再启动期烤死） |
+| 后台接口 | `AdminAiModelController`（列表/详情/新增/修改/启停/设默认/**测试连通性**），权限 `ai:model:query` / `ai:model:manage` |
+| 管理端 | `admin/src/views/ai/ModelConfigView.vue` + api / types / router 增量 |
+| 测试 | `AiModelRuntimeConfigTest` 12 项（加密往返、打码、缺主密钥、换错主密钥、优先级、跳过、版本按内容、加载失败回落、按模型名取凭据、yaml 等价复用、错误分类） |
+
+**"测试连通性"是这一期最值钱的功能**：它用该配置真的发一次最小请求，并把错误归类成
+AUTH / MODEL_NOT_FOUND / RATE_LIMIT / TIMEOUT / NETWORK，直接告诉管理员"该改哪个字段"。
+前两天的两次配置事故（视觉模型名不存在、MinIO 服务账号缺失）都是靠翻日志才定位的。
+
+## 25.6 验证
+
+- 全仓 **239** 个测试全绿；V13 在真实库执行成功（约 1.2s）。
+- 运行时端到端（真实模型）：日志
+  `AI 运行时配置已加载：DB 生效 1 个模型（跳过 0），文本默认=deepseek-v4-flash[db]`，
+  **工具照常执行**（`get_health_profile` / `query_glucose_range` / `get_daily_checkin`），
+  回答基于真实数据——证明动态装配没有破坏工具链。
+- "改配置生效"：把 DB 温度 0.70 改成 0.30、等 TTL 过后再发一轮，日志显示配置重新加载并
+  **重建了模型**（指纹变化），请求正常完成。
+
+## 25.7 已知边界与 P2（需要时再做）
+
+1. **场景绑定仍在 yaml**：DB 按 `model_code` 生效，"哪个场景用哪个模型"由
+   `ai.scenes.*.model-code` + 全局默认决定。场景绑定表与 UI 属 P2（另一个轴，混在一期会放大回归面）。
+2. **多实例靠 60 秒 TTL 最终一致**：本实例改完立即生效（`refreshNow`），其他实例最多滞后 60 秒；
+   要即时广播需加 Redis pub/sub（优化项，不是正确性依赖）。
+3. **乐观锁冲突没有独立错误码**：目前与"模型编码已存在"等校验错误共用 `BIZ_REJECTED(40001)`，
+   前端只能按文案匹配（管理端已如此实现并留了兜底）。建议后续给版本冲突单独一个码（如 40901）。
+4. **管理端 `request.ts` 固定 15s 超时 < 后台测试 30s**：极端情况下前端会先中断并给出误导性提示；
+   表单已标注"建议不超过 15000"，根治需要给请求封装加可覆盖的超时参数。
+5. **写接口未带 `X-Idempotency-Key`**：`request.ts` 的 `get/post/put` 没有 headers 入口。
+6. **后台账号当前不可登录**（V2 种子把 admin 置为"禁用+占位密码"，而 V3 的开发演示哈希在本库
+   因 baseline 跳过而从未执行）——要在本地验后台页面，先按 `RUOYI-DATABASE-MIGRATION.md` 重置该账号。
+
+---
+
+## 26. "后台换了模型，实际还在调老的" —— 一次线上反馈的完整复盘（2026-10-13）
+
+### 26.1 反馈
+
+> 在后台停用 `deepseek-v4-flash`、启用新建的 `deepseek-v4-pro`，再次对话仍然调用 flash 的配置。
+
+库里当时的状态（脚本读出来的现场，不是推测）：
+
+```
+id=2 deepseek-v4-flash  is_enabled=0  is_default=1   ← 停用了，默认标记还留着
+id=3 qwen3-vl-plus      is_enabled=1  is_default=0   ← 视觉行
+id=4 deepseek-v4-pro    is_enabled=1  is_default=0   ← 新启用的行
+```
+
+### 26.2 根因：通道默认是"yaml 那个模型名的解析"，从头到尾没人看 `is_default`
+
+`DynamicChatModel` 的文本通道默认写成：
+
+```java
+snapshot -> snapshot.resolveText(snapshot.yamlText().modelCode())   // yamlText.modelCode() = "deepseek-v4-flash"
+```
+
+于是停用 flash 之后：
+
+1. `mapper.selectEnabled()` 不再返回 flash → `byCode` 里没有 flash 的 DB 条目；
+2. 紧接着的兜底句 `byCode.putIfAbsent(yamlText.modelCode(), yamlText)` **恰好把 yaml 规格塞进了
+   键名 `deepseek-v4-flash`**；
+3. `resolveText("deepseek-v4-flash")` 命中这个 yaml 条目并原样返回 —— 端点、密钥、温度全是 yaml 的 flash。
+
+`is_default` 从来没被读过一次，"谁是全局默认"这件事在代码里根本不存在。所以：**后台改了什么，
+实际调的还是老模型，而且不报任何错**。这也解释了为什么"页面每个开关看起来都对"。
+
+顺带暴露的第二处不一致：`chat_message.model_code` 由 `SceneModelResolver` 写入，而它读的是
+`@Value("${spring.ai.deepseek.chat.model:unknown}")`——即使调用真的换了模型，**记录里也永远写着 flash**。
+"落库的模型 = 实际调用的模型"是那个类写在注释里的承诺，必须一起修，否则排查时会被记录带偏。
+
+### 26.3 修法：把"默认"变成一次显式的、有判据的选择
+
+`AiRuntimeConfigService` 在加载快照时就把文本默认定下来，顺序固定、每步都有名字：
+
+| 顺序 | 判据 | 什么时候会命中 |
+| --- | --- | --- |
+| 1 | **默认标记** | 有 `is_default=1` 且启用的行（管理员的显式意图） |
+| 2 | **唯一启用的文本模型** | 只剩一个启用候选（"停用旧的、启用新的"正是这种） |
+| 3 | **最近修改的文本模型** | 多个候选且都没标默认，取 `gmt_modified` 最新的那个 |
+| 4 | **yaml 兜底** | DB 里一个可用候选都没有 |
+
+第 3 条刻意**不**回落 yaml：DB 里明明启用着配置却去用 yaml，正是这次要修的病灶。
+判据字符串（`默认标记` / `唯一启用的文本模型` / `最近修改的文本模型` / `yaml 兜底`）会进启动日志，
+也随列表接口下发到管理端——"为什么用的是这个模型"必须永远有答案。
+
+配套改动：
+
+- **视觉行不参与文本候选**：`model_endpoint` 等于 `ai.vision.model` 的行被排除，否则它会在
+  对话里抢默认位然后报 404。同时把 `resolveVision()` 从"按 model_code 查"改成"按 endpoint 查"
+  （两列可以不同名，早先没暴露只是因为 V13 种子里两列恰好相等）。
+- **通道默认只有一个入口**：`Snapshot#resolveTextDefault()`，`DynamicChatModel` 的文本通道、
+  `AiRuntimeConfigService#textSpec` 全部改用它；`resolveText(code)` 退回"按编码查"的本意。
+- **落库与调用同源**：`SceneModelResolver#modelCode` 改为问 `textSpec(scene)` / `visionSpec()`，
+  `SceneModelResolver#optionsBuilder` 在场景绑定 `model-code` 时写的是该配置的 **endpoint**（而不是编码），
+  编码没登记时不写 model 并 WARN——两边都落到同一份规格，"记录里写一个、实际调另一个"不再可能。
+- **停用默认模型时摘掉它的默认标记**（`AiModelConfigMapper#clearDefault` + WARN 日志）：
+  否则列表里会留下"已停用却仍显示默认"的行，正是最初误导人的那种自相矛盾状态。
+- **管理端新增"生效中"列**与顶部横幅：`effectiveRole`（`text-default` / `vision`，与"意愿"字段分开）
+  与 `textDefaultReason` 由后端算好下发，页面直接显示"当前文本对话实际使用：deepseek-v4-pro
+  （判据：默认标记）"；判据不是"默认标记"时横幅变黄并提示去点"设为默认"。
+
+### 26.4 验证（`backend/target/e2e/default-model-e2e.ps1`，22 项断言全过）
+
+用的就是上面那份真实现场，没有手工造状态：
+
+| 阶段 | 断言 | 实测 |
+| --- | --- | --- |
+| A 列表 | 文本默认 = `deepseek-v4-pro`，判据 = 唯一启用的文本模型 | 启动日志：`文本默认=deepseek-v4-pro[db]（判据：唯一启用的文本模型）` |
+| A | 每行"生效中"角色 | flash=—、qwen3-vl-plus=vision、pro=text-default |
+| B 真实对话 | 走 pro 且落库一致 | 日志 `通道 text 构造模型：modelCode=deepseek-v4-pro endpoint=deepseek-v4-pro source=db`；`chat_message.model_code='deepseek-v4-pro'`（回答 203/205 行） |
+| C 显式设默认 | 判据变 `默认标记`，flash 陈旧标记被清 | `POST /4/default` 后 flash `is_default` 由 1 → 0 |
+| D 反向验证 | 把 pro 也停用 → 必须回落 yaml | `文本默认=deepseek-v4-flash[yaml]（判据：yaml 兜底）`，pro 的默认标记被摘掉 |
+| E 恢复现场 | 终态 = pro 启用且为默认、flash 停用无标记、视觉行不动 | 全部符合 |
+
+单测里也钉了这条回归（`AiModelRuntimeConfigTest`，12 → 19 个用例）：其中
+`文本通道默认不应被yaml里同名的模型名钉死` 直接断言 `resolveText("deepseek-v4-flash")` 返回 **yaml** 规格
+（也就是旧代码拿到的那个），而 `resolveTextDefault()` 返回 **pro** —— 把旧写法为什么错固定成了可执行的证据。
+
+### 26.5 仍然保留的边界
+
+- 判据 3（最近修改）本质是"替管理员兜底"，它会随无关改动漂移；日志与页面都会 WARN 提示去显式设默认。
+- 场景 → 模型绑定表/UI 仍是 P2；`ai.scenes.*.model-code` 指到不存在或已停用的编码时是 WARN + 回落通道默认（不报错、不影响用户）。
+- 多实例仍是 60 秒 TTL 最终一致，`is_default` 变更也不例外。
+
 
 
 

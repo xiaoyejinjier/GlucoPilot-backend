@@ -296,18 +296,22 @@ public class AdminAiModelService {
         return null;
     }
 
-    /** 测试用的规格：与运行时同一套解析（DB 密钥优先，否则沿用 yaml），保证"测的就是会用的那套"。 */
+    /**
+     * 测试用的规格：<b>以本行自己的配置为准</b>（本行密钥优先，没有才沿用 yaml），
+     * 这样"点测试 = 测这一行保存的凭据"，而不是测别人。
+     * <p>
+     * <b>2026-10-14 修正</b>：此前先做 {@code snapshot.resolveByName(endpoint)}，命中就直接返回那份运行时规格。
+     * 运行时索引里同名条目可能是 <b>yaml 规格</b>（本行被停用时它不在 DB 索引里，只剩 yaml 兜底），
+     * 于是"停用后点测试"会拿 yaml 的密钥去测——即使本行存的是无效密钥也会显示成功。
+     * 这是 cipher-e2e 脚本在真实库上跑出来的（target 行被停用时 `/test` 返回 OK 而非 AUTH）。
+     */
     private AiModelSpec toSpecForTest(AiModelConfigEntity entity) {
         AiRuntimeConfigService.Snapshot snapshot = runtimeConfig.snapshot();
-        AiModelSpec registered = snapshot.resolveByName(entity.getModelEndpoint());
-        if (registered != null) {
-            return registered;
-        }
         String decrypted = cipher.decryptOrNull(entity.getApiKeyCipher());
-        String yamlVisionKey = StringUtils.hasText(decrypted) ? decrypted : null;
+        String ownKey = StringUtils.hasText(decrypted) ? decrypted : null;
         int provider = entity.getProviderCode() == null ? 1 : entity.getProviderCode();
-        String fallbackKey = yamlVisionKey != null
-                ? yamlVisionKey
+        String effectiveKey = ownKey != null
+                ? ownKey
                 : (provider == 1 ? snapshot.yamlText().apiKey() : snapshot.yamlVision().apiKey());
         return new AiModelSpec(
                 entity.getModelCode(),
@@ -315,7 +319,7 @@ public class AdminAiModelService {
                 provider,
                 StringUtils.hasText(entity.getApiBaseUrl()) ? entity.getApiBaseUrl()
                         : (provider == 1 ? snapshot.yamlText().baseUrl() : snapshot.yamlVision().baseUrl()),
-                fallbackKey,
+                effectiveKey,
                 entity.getModelEndpoint(),
                 toDouble(entity.getTemperature()),
                 toDouble(entity.getTopP()),

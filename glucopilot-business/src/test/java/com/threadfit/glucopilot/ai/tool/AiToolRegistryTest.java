@@ -57,6 +57,31 @@ class AiToolRegistryTest {
         assertThat(registry.callbacks()).isEmpty();
     }
 
+    @Test
+    void 同名工具重复注册时只放出先注册的那个() {
+        // 两个工具类定义了同名 @Tool：静默丢弃后注册的会让"模型看到的工具与预期不符"无从排查，
+        // 这里既钉住"只放一个"，也保证不会因为重复而整体不可用。
+        AiToolRegistry registry = registry(allowList("a"), provider("a"), provider("a"));
+
+        assertThat(registry.callbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("a");
+    }
+
+    @Test
+    void provider返回空数组或null时不应让启动失败() {
+        // provider 契约上是数组，但第三方实现返回 null 并不罕见；
+        // 若直接 Arrays.stream(null) 会把"某个工具类没注册好"放大成"整个应用起不来"。
+        ToolCallbackProvider empty = provider();
+        ToolCallbackProvider returnsNull = mock(ToolCallbackProvider.class);
+        when(returnsNull.getToolCallbacks()).thenReturn(null);
+        AiToolRegistry registry = registry(allowList("a"), empty, returnsNull, provider("a"));
+
+        assertThat(registry.callbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("a");
+    }
+
     // ---------- 构造辅助 ----------
 
     private static List<String> allowList(String... names) {

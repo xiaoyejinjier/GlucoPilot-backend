@@ -76,7 +76,9 @@ public class AdminAiModelService {
         }
         if (mapper.selectCount(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AiModelConfigEntity>()
                 .eq(AiModelConfigEntity::getModelCode, request.getModelCode())) > 0) {
-            throw new BizException(ErrorCode.BIZ_REJECTED, "模型编码已存在：" + request.getModelCode());
+            // 唯一键冲突用 CONFLICT(40900)：管理端据此提示"已存在"而不是"业务校验失败"，
+            // 不必再靠文案匹配（BIZ_REJECTED 40001 承载了太多语义）。
+            throw new BizException(ErrorCode.CONFLICT, "模型编码已存在：" + request.getModelCode());
         }
         AiModelConfigEntity entity = new AiModelConfigEntity();
         entity.setModelCode(request.getModelCode().trim());
@@ -118,10 +120,16 @@ public class AdminAiModelService {
         int updated = mapper.updateWithVersion(entity, request.getConfigVersion().longValue(),
                 cipherText, cipherAlgo, keyVersion);
         if (updated == 0) {
-            throw new BizException(ErrorCode.BIZ_REJECTED, "配置已被他人修改，请刷新后重试");
+            // 乐观锁冲突给独立错误码 CONFLICT(40900)：之前与"模型编码已存在"等校验错误共用
+            // BIZ_REJECTED(40001)，管理端只能按文案猜，前端也无法区分"该刷新重试"还是"该改输入"。
+            throw new BizException(ErrorCode.CONFLICT, "配置已被他人修改，请刷新后重试");
         }
         if (Boolean.TRUE.equals(request.getClearApiKey())) {
-            mapper.clearApiKey(id, request.getConfigVersion().longValue() + 1);
+            // 清空密钥是第二条带版本条件的语句；它影响的是"密钥被清掉"这个安全相关的效果，
+            // 因此返回 0 行（版本对不上）必须显式失败，不能静默当成功。
+            if (mapper.clearApiKey(id, request.getConfigVersion().longValue() + 1) == 0) {
+                throw new BizException(ErrorCode.CONFLICT, "清空密钥时配置版本已变化，请刷新后重试");
+            }
         }
         if (isYes(request.getIsDefault())) {
             mapper.markDefault(id);

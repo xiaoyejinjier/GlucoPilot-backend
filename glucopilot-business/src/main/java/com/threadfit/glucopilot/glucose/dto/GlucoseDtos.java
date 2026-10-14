@@ -101,8 +101,14 @@ public final class GlucoseDtos {
     @Builder
     public static class DayBoard {
         private LocalDate recordDate;
+        /** 已记录的<b>血糖</b>节点数（餐点不由本接口返回，见类注释的口径说明）。 */
         private Integer recordedCount;
+        /** 全部启用节点数（当前 6 血糖 + 3 餐点 = 9）；与 {@code recordedCount} 不是同一口径。 */
         private Integer totalNodes;
+        /** 其中血糖节点数（当前的进度分母，端上显示「已记 X/6」用它）。 */
+        private Integer glucoseTotalNodes;
+        /** 其中餐点节点数（餐点数据走 /api/v1/meal-records）。 */
+        private Integer mealTotalNodes;
         private List<NodeSlot> nodes;
         private List<ChartPoint> chartPoints;
     }

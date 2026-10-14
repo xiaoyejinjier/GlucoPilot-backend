@@ -117,6 +117,10 @@ class GlucoseRecordServiceTest {
         GlucoseDtos.DayBoard board = service.dayBoard(USER_ID, LocalDate.of(2026, 9, 15));
 
         assertEquals(3, board.getTotalNodes());
+        // 口径必须能被端上分开用：recordedCount 只数血糖，分母应该是 glucoseTotalNodes（2），
+        // 而不是 totalNodes（3，含 1 个餐点）——否则页面显示「已记 1/3」会让人以为还差 2 个时段。
+        assertEquals(2, board.getGlucoseTotalNodes());
+        assertEquals(1, board.getMealTotalNodes());
         assertEquals(1, board.getRecordedCount());
         assertEquals(1, board.getChartPoints().size());
         assertTrue(board.getNodes().get(0).getHasRecord());

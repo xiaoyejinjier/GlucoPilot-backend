@@ -233,6 +233,14 @@ public class GlucoseRecordService {
     /**
      * 血糖日看板：9 个节点全部返回，未记录节点 hasRecord=false。
      * 餐点记录由 /api/v1/meal-records 独立查询，因此本接口的餐点节点不混入饮食数据。
+     * <p>
+     * <b>口径提醒（2026-10-14 现场核对后补）</b>：{@code recordedCount} 只数<b>血糖</b>记录，
+     * 而 {@code totalNodes} 是全部启用节点（当前 6 血糖 + 3 餐点 = 9）。也就是说
+     * {@code recordedCount/totalNodes} <b>不是同一个口径</b>，直接显示成「已记 X/9」会让用户
+     * 以为还差 3 个时段。为此额外返回 {@code glucoseTotalNodes} 与 {@code mealTotalNodes}：
+     * 端上要显示进度就用 {@code recordedCount/glucoseTotalNodes}（6 段血糖），餐点另有入口。
+     * <p>
+     * 刻意不改 {@code totalNodes} 的含义——它已被既有调用方当"节点总数"使用，改语义会静默影响别处。
      */
     public GlucoseDtos.DayBoard dayBoard(Long userId, LocalDate recordDate) {
         List<GlucoseNode> nodes = glucosePeriodService.listEnabledNodes();
@@ -247,8 +255,15 @@ public class GlucoseRecordService {
         List<GlucoseDtos.NodeSlot> slots = new ArrayList<>();
         List<GlucoseDtos.ChartPoint> chartPoints = new ArrayList<>();
         int recorded = 0;
+        int glucoseNodes = 0;
+        int mealNodes = 0;
         for (GlucoseNode node : nodes) {
             boolean isMeal = GlucosePeriodService.isMeal(node);
+            if (isMeal) {
+                mealNodes++;
+            } else {
+                glucoseNodes++;
+            }
             GlucoseRecord row = glucoseByNode.get(node.getNodeCode());
             boolean hasRecord = !isMeal && row != null;
             if (hasRecord) {
@@ -276,6 +291,8 @@ public class GlucoseRecordService {
                 .recordDate(recordDate)
                 .recordedCount(recorded)
                 .totalNodes(nodes.size())
+                .glucoseTotalNodes(glucoseNodes)
+                .mealTotalNodes(mealNodes)
                 .nodes(slots)
                 .chartPoints(chartPoints)
                 .build();

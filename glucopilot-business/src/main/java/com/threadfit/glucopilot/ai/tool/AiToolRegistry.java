@@ -63,18 +63,33 @@ public class AiToolRegistry {
         return allowed;
     }
 
-    /** 汇总两条来源的工具，按名字去重（同名以先注册者为准）。 */
+    /** 汇总两条来源的工具，按名字去重（同名以先注册者为准，并告警）。 */
     private List<ToolCallback> registered() {
         List<ToolCallback> all = new ArrayList<>();
         toolProviders.stream()
-                .flatMap(provider -> Arrays.stream(provider.getToolCallbacks()))
+                .flatMap(provider -> {
+                    // provider 契约上是数组，但第三方/自定义实现返回 null 并不罕见；
+                    // 这里若直接 Arrays.stream(null) 会在启动期 NPE，把一个"某个工具类没注册好"
+                    // 放大成"整个应用起不来"。
+                    ToolCallback[] callbacks = provider.getToolCallbacks();
+                    return callbacks == null ? java.util.stream.Stream.empty() : Arrays.stream(callbacks);
+                })
+                .filter(java.util.Objects::nonNull)
                 .forEach(all::add);
-        singleCallbacks.stream().forEach(all::add);
+        singleCallbacks.stream().filter(java.util.Objects::nonNull).forEach(all::add);
 
         Set<String> seen = new LinkedHashSet<>();
-        return all.stream()
-                .filter(callback -> seen.add(callback.getToolDefinition().name()))
-                .toList();
+        List<ToolCallback> unique = new ArrayList<>(all.size());
+        for (ToolCallback callback : all) {
+            String name = callback.getToolDefinition().name();
+            if (seen.add(name)) {
+                unique.add(callback);
+            } else {
+                // 静默丢一个同名工具，会让"模型看到的工具没按预期生效"变成无从排查的悬案
+                log.warn("同名工具重复注册，已忽略后注册的那个：name={}（模型只会看到先注册的实现）", name);
+            }
+        }
+        return List.copyOf(unique);
     }
 
     private static Set<String> names(List<ToolCallback> callbacks) {

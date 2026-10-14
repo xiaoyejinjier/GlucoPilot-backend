@@ -1,5 +1,6 @@
 package com.threadfit.glucopilot.ai.support;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -30,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 表现为"这一轮永远说正在生成中"。因此过期时间远大于最长一轮（SSE 超时 60s）之后即可接管，
  * 让故障自愈而不是需要人工重启。
  */
+@Slf4j
 @Component
 public class ChatRoundGuard {
 
@@ -66,7 +68,15 @@ public class ChatRoundGuard {
             return false;
         }
         // 过期接管：CAS 替换，避免与"刚好在这一刻释放"或"另一个接管者"互相覆盖
-        return inFlight.replace(key, previous, now);
+        if (inFlight.replace(key, previous, now)) {
+            // 静默接管会让"某轮卡住 5 分钟后自愈"这件事在日志里毫无痕迹：
+            // 既看不出发生过，也无从判断是进程被 kill、还是流的终止回调漏了。这里显式留痕。
+            log.warn("在途轮次已超过 {}s 未释放，判定持有者已死亡并接管：key={}（已持有 {}s）。"
+                            + "若反复出现，检查流的终止回调是否总能执行（进程被 kill / 客户端异常断开）",
+                    staleAfterNanos / 1_000_000_000L, key, (now - previous) / 1_000_000_000L);
+            return true;
+        }
+        return false;
     }
 
     /** 释放执行权；未持有也安全（幂等）。 */

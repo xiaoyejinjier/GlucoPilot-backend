@@ -4,6 +4,7 @@ import com.threadfit.glucopilot.common.api.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -67,6 +68,23 @@ public class AdminAiPromptController {
     @PreAuthorize("@ss.hasPermi('ai:prompt:manage')")
     public ApiResponse<Void> activate(@PathVariable Long id) {
         service.activate(id);
+        return ApiResponse.ok(null);
+    }
+
+    /**
+     * 删除草稿版本（逻辑删除，仅限 {@code status=0} 的版本）。
+     * <p>
+     * 契约 4.11~4.13 没有这条接口，是本轮补的：草稿试错几次就会攒一堆无用版本，
+     * 而"启用旧版"只能解决线上那一版，解决不了列表越来越长。约束刻意收紧为**只能删草稿**，
+     * 生效版本请用"启用其它版本"来替换（详见 {@code AdminAiPromptService#deleteDraft}）。
+     *
+     * @param configVersion 可选乐观锁（带上列表里的值即可防并发覆盖）
+     */
+    @DeleteMapping("/{id}")
+    @PreAuthorize("@ss.hasPermi('ai:prompt:manage')")
+    public ApiResponse<Void> deleteDraft(@PathVariable Long id,
+                                         @RequestParam(required = false) Long configVersion) {
+        service.deleteDraft(id, configVersion);
         return ApiResponse.ok(null);
     }
 }

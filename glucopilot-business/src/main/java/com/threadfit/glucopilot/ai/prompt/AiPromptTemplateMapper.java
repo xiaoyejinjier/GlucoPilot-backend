@@ -44,4 +44,20 @@ public interface AiPromptTemplateMapper extends BaseMapper<AiPromptTemplateEntit
     @Update("UPDATE ai_prompt_template SET is_enabled = #{enabled}, config_version = config_version + 1 "
             + "WHERE id = #{id} AND is_deleted = 0 AND config_version = #{expectedVersion}")
     int updateEnabled(@Param("id") Long id, @Param("enabled") int enabled, @Param("expectedVersion") Long expectedVersion);
+
+    /**
+     * 逻辑删除<b>草稿</b>版本（{@code is_enabled = 0}）。
+     * <p>
+     * 把"只删草稿"写进 SQL 的 WHERE 而不是只靠服务层判断：并发的"启用"操作与"删除"撞在一起时，
+     * 这条语句会因 {@code is_enabled} 不再为 0 而返回 0 行，删除自然失败——
+     * 这正是我们要的（绝不能把正在生效的那一版删掉，否则该场景会静默回落到 classpath 提示词）。
+     * <p>
+     * 唯一键 {@code uk_scene_ver_active(scene_code, version_no, is_deleted)} 包含 is_deleted，
+     * 因此"删掉 v2 之后再建一个 v2"是允许的。
+     */
+    @Update("UPDATE ai_prompt_template SET is_deleted = 1, deleted_at = NOW(3), deleted_by = #{deletedBy}, "
+            + "config_version = config_version + 1 "
+            + "WHERE id = #{id} AND is_deleted = 0 AND is_enabled = 0 AND config_version = #{expectedVersion}")
+    int logicalDeleteDraft(@Param("id") Long id, @Param("deletedBy") Long deletedBy,
+                           @Param("expectedVersion") Long expectedVersion);
 }

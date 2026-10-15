@@ -410,6 +410,61 @@ class AdminAiPromptServiceTest {
         assertEquals(ErrorCode.NOT_FOUND, error.getErrorCode());
     }
 
+    // ---------------------------------------------------------------- 删除草稿
+
+    @Test
+    void 可以删除草稿并带上操作人与乐观锁() {
+        when(mapper.selectById(9L)).thenReturn(entity(9L, "CHAT", 2, 0, VALID_CHAT_PROMPT, "[]"));
+        when(mapper.logicalDeleteDraft(eq(9L), any(), eq(1L))).thenReturn(1);
+
+        service.deleteDraft(9L, 1L);
+
+        verify(mapper).logicalDeleteDraft(9L, null, 1L);
+    }
+
+    @Test
+    void 删除时不给乐观锁则用行上的版本() {
+        AiPromptTemplateEntity row = entity(9L, "CHAT", 2, 0, VALID_CHAT_PROMPT, "[]");
+        row.setConfigVersion(7L);
+        when(mapper.selectById(9L)).thenReturn(row);
+        when(mapper.logicalDeleteDraft(eq(9L), any(), eq(7L))).thenReturn(1);
+
+        service.deleteDraft(9L, null);
+
+        verify(mapper).logicalDeleteDraft(9L, null, 7L);
+    }
+
+    @Test
+    void 生效版本不允许删除() {
+        when(mapper.selectById(4L)).thenReturn(entity(4L, "CHAT", 1, 1, VALID_CHAT_PROMPT, "[]"));
+
+        BizException error = assertThrows(BizException.class, () -> service.deleteDraft(4L, null));
+
+        assertEquals(ErrorCode.BIZ_REJECTED, error.getErrorCode());
+        assertTrue(error.getMessage().contains("正在生效"));
+        verify(mapper, never()).logicalDeleteDraft(anyLong(), any(), anyLong());
+    }
+
+    @Test
+    void 并发下版本刚被启用则删除失败返回409() {
+        when(mapper.selectById(9L)).thenReturn(entity(9L, "CHAT", 2, 0, VALID_CHAT_PROMPT, "[]"));
+        // 服务层读到的是草稿，但执行时 SQL 里 is_enabled = 0 已不成立（别人抢先启用了）
+        when(mapper.logicalDeleteDraft(eq(9L), any(), anyLong())).thenReturn(0);
+
+        BizException error = assertThrows(BizException.class, () -> service.deleteDraft(9L, 1L));
+
+        assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
+    }
+
+    @Test
+    void 删除不存在的版本返回404() {
+        when(mapper.selectById(404L)).thenReturn(null);
+
+        BizException error = assertThrows(BizException.class, () -> service.deleteDraft(404L, null));
+
+        assertEquals(ErrorCode.NOT_FOUND, error.getErrorCode());
+    }
+
     // ---------------------------------------------------------------- 列表
 
     @Test

@@ -141,7 +141,7 @@ $beforeActiveLabel = (@($list.Body.data.scenes) | Where-Object { $_.sceneCode -e
 Write-Host "   当前生效版本：$($beforeActive.version)（id=$beforeActiveId，标签 $beforeActiveLabel）" -ForegroundColor Gray
 
 # 清理上一次运行留下的 E2E 版本（唯一键 uk_scene_ver_active 不允许同场景同版本重复）
-Invoke-E2eSql "DELETE FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1));" | Out-Null
+Invoke-E2eSql "DELETE FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1), $($testVersion + 2));" | Out-Null
 
 # ---------------------------------------------------------------- 2. 阻断式校验
 Write-Host "2) 阻断式校验（坏提示词不允许入库）" -ForegroundColor Gray
@@ -275,6 +275,37 @@ if ($userId) {
     }
 }
 
+# ---------------------------------------------------------------- 6.5 删除草稿（本轮新增的小功能）
+Write-Host "6.5) 删除草稿版本" -ForegroundColor Gray
+# ① 生效版本必须删不掉（删了会让该场景静默回落到 classpath 提示词）
+$deleteActive = Invoke-Api -Method DELETE -Url "$adminApi/ai-prompt-templates/$beforeActiveId" -Headers $adminHeaders -Tag 'delete-active'
+Check '生效版本不允许删除（400）' ($deleteActive.Code -eq 400) "HTTP $($deleteActive.Code) msg=$($deleteActive.Body.message)"
+$activeStillEnabled = Get-SqlScalar "SELECT is_enabled FROM sugar_health.ai_prompt_template WHERE id = $beforeActiveId AND is_deleted = 0;"
+Check '被拒后生效版本仍然完好' ($activeStillEnabled -eq '1') "is_enabled=$activeStillEnabled"
+
+# ② 新建一个一次性草稿 → 删除 → 列表里消失、库里是逻辑删除
+$throwaway = Invoke-Api -Method POST -Url "$adminApi/ai-prompt-templates" -Headers $adminHeaders `
+    -Body @{ sceneCode = $testScene; version = "v$($testVersion + 2)"; promptText = $body; variables = @(); status = 0; changeNote = 'prompt-e2e 待删除' } -Tag 'create-throwaway'
+Check '一次性草稿创建成功' ($throwaway.Code -eq 200) "HTTP $($throwaway.Code) msg=$($throwaway.Body.message)"
+$throwawayId = $throwaway.Body.data.id
+
+$duplicate = Invoke-Api -Method DELETE -Url "$adminApi/ai-prompt-templates/$throwawayId`?configVersion=999" -Headers $adminHeaders -Tag 'delete-stale'
+Check '删除时乐观锁过期 → 409' ($duplicate.Code -eq 409) "HTTP $($duplicate.Code) msg=$($duplicate.Body.message)"
+
+$deleted = Invoke-Api -Method DELETE -Url "$adminApi/ai-prompt-templates/$throwawayId" -Headers $adminHeaders -Tag 'delete-draft'
+Check '删除草稿成功（data 为 null）' ($deleted.Code -eq 200 -and $null -eq $deleted.Body.data) `
+    "HTTP $($deleted.Code) msg=$($deleted.Body.message)"
+
+$softDeleted = Get-SqlScalar "SELECT CONCAT(is_deleted, '/', IF(deleted_at IS NULL, 'null', 'set')) FROM sugar_health.ai_prompt_template WHERE id = $throwawayId;"
+Check '库里是逻辑删除（is_deleted=1 且 deleted_at 已写）' ($softDeleted -eq '1/set') "is_deleted/deleted_at=$softDeleted"
+$listAfterDelete = Invoke-Api -Method GET -Url "$adminApi/ai-prompt-templates?sceneCode=$testScene" -Headers $adminHeaders -Tag 'prompt-list-4e'
+Check '列表里不再出现该草稿' (@(@($listAfterDelete.Body.data.records) | Where-Object { $_.id -eq $throwawayId }).Count -eq 0) '删除后仍出现在列表里'
+$recreate = Invoke-Api -Method POST -Url "$adminApi/ai-prompt-templates" -Headers $adminHeaders `
+    -Body @{ sceneCode = $testScene; version = "v$($testVersion + 2)"; promptText = $body; variables = @(); status = 0 } -Tag 'recreate-same-version'
+Check '删掉之后可以用同一个版本号重建（唯一键含 is_deleted）' ($recreate.Code -eq 200) `
+    "HTTP $($recreate.Code) msg=$($recreate.Body.message)"
+$recreateId = $recreate.Body.data.id
+
 # ---------------------------------------------------------------- 7. 场景绑定
 Write-Host "7) 场景绑定（场景 → 模型 / 场景参数）" -ForegroundColor Gray
 $sceneBefore = Invoke-Api -Method GET -Url "$adminApi/ai-scenes" -Headers $adminHeaders -Tag 'ai-scenes-2'
@@ -295,9 +326,9 @@ Check '清空覆盖（改回继承）成功' ($restored.Code -eq 200 -and $null 
 
 # ---------------------------------------------------------------- 8. 清理
 Write-Host "8) 清理 E2E 产生的数据" -ForegroundColor Gray
-# 5.5 步会由后端自动追加出 v901，两个版本都要清掉
-Invoke-E2eSql "DELETE FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1));" | Out-Null
-$left = Get-SqlScalar "SELECT COUNT(*) FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1));"
+# 5.5 步会由后端自动追加出 v901；6.5 步会留下 v902（一条已逻辑删除 + 一条重建的草稿）与 v900/v901
+Invoke-E2eSql "DELETE FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1), $($testVersion + 2));" | Out-Null
+$left = Get-SqlScalar "SELECT COUNT(*) FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1), $($testVersion + 2));"
 Check 'E2E 提示词版本已清理' ($left -eq '0') "left=$left"
 
 Write-Host ""

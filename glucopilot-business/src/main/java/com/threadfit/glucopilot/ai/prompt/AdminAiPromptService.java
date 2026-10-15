@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.exception.BizException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -214,6 +215,41 @@ public class AdminAiPromptService {
         log.info("后台编辑提示词草稿 id={} scene={} version=v{}（原 v{}）启用={}",
                 id, scene.getCode(), versionNo, base.getVersionNo(), enable);
         return result(id, versionNo, enable, false);
+    }
+
+    // ------------------------------------------------------------------ 删除草稿
+
+    /**
+     * 删除一个<b>草稿</b>版本（逻辑删除）。
+     *
+     * <h2>为什么只允许删草稿</h2>
+     * 生效中的那一版是这个场景唯一的提示词来源：删掉它，运行时会静默回落到 classpath 内置提示词
+     * （行为还在、但后台看不到"现在用的是哪一份"），是最难查的一类问题。
+     * 想换掉生效版本的正确动作是<b>启用另一版</b>（旧版自动停用），而不是删除。
+     *
+     * <h2>并发</h2>
+     * "只删草稿"写进了 SQL 的 WHERE（见 {@link AiPromptTemplateMapper#logicalDeleteDraft}），
+     * 因此与"启用该版本"并发时，删除会因为已经不是草稿而失败（409），不会误删线上版本。
+     *
+     * @param configVersion 可选乐观锁：给了就校验（前端会把列表里的值带上），没给只做状态校验
+     */
+    @Transactional
+    public void deleteDraft(Long id, Long configVersion) {
+        AiPromptTemplateEntity row = require(id);
+        if (row.getIsEnabled() != null && row.getIsEnabled() == 1) {
+            throw new BizException(ErrorCode.BIZ_REJECTED,
+                    "「" + ("v" + row.getVersionNo()) + "」正在生效，不能删除：请先启用其它版本，再删这一版");
+        }
+        long expected = configVersion != null
+                ? configVersion
+                : (row.getConfigVersion() == null ? 0L : row.getConfigVersion());
+        Long opsId = RequestContext.getOpsId();
+        if (mapper.logicalDeleteDraft(id, opsId, expected) == 0) {
+            throw new BizException(ErrorCode.CONFLICT,
+                    "该版本已被他人修改或已生效，请刷新列表后重试");
+        }
+        log.info("后台删除提示词草稿 id={} scene={} version=v{} 操作人={}",
+                id, row.getSceneCode(), row.getVersionNo(), opsId);
     }
 
     // ------------------------------------------------------------------ 启用（4.13）

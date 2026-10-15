@@ -1698,3 +1698,71 @@ snapshot -> snapshot.resolveText(snapshot.yamlText().modelCode())   // yamlText.
 
 
 
+
+# 27. 提示词进后台 + 场景→模型绑定（2026-10-15）
+
+对应契约 4.11~4.13（提示词模板列表 / 新增编辑 / 启用版本）；场景→模型绑定为本轮新增接口。
+
+## 27.1 为什么做
+
+4 个提示词原先烤在 jar 里（`prompts/**/*.md`），改一句文案要重新打包 + 重启；而提示词恰恰是运营最需要
+迭代、同时也是医疗安全表述（免责、就医指引、禁止诊断/开药）的载体。所以这轮的重点不是"能编辑"，
+而是三件事：**改动可留痕、坏内容进不来、出问题能一键回滚**。
+
+## 27.2 三层来源与优先级（运行时）
+
+`ai_prompt_template`（后台启用版本） → classpath 内置提示词（兜底）。两条降级路径都刻意做成"静默降级 + 告警"：
+
+- 库里没有该场景的启用版本 → 用 classpath（行为与引入后台前**完全一致**，这是本次上线零风险的前提）；
+- 库里那一版**校验不通过**（缺变量、正文为空）→ WARN 并退回 classpath。绕过接口直接写库也炸不了线上。
+
+刷新是内容指纹 + 60 秒 TTL 快照；后台保存/启用后调 `refreshNow()` 让本实例**下一条消息**就用新版。
+
+## 27.3 两个关键实现选择
+
+**① `defaultSystem` 必须拆掉，改成按请求注入。**
+`ChatClient.Builder.defaultSystem(...)` 只在构造 client 时取一次，提示词进后台之后它就成了"启动期烤死的旧提示词"，
+改完不重启不生效——等于白做后台化。现在由 `DynamicPromptAdvisor` 每请求注入，并**替换**请求里已有的 SystemMessage
+（而不是追加）：只追加会出现"旧提示词 + 新提示词"两段指令同时进模型，这是最难排查的一类问题。
+Advisor 顺序排在会话记忆之前、医疗硬拦截之后——后者刻意保持最外层，这样它扫到的永远只有用户消息（见它的类注释里那次误拦事故）。
+
+**② 版本追加式的精确语义。**
+新增默认**草稿**（保存与启用分离）；编辑草稿原地更新；**编辑已启用版本不原地改**，而是追加一个新版本并沿用启用状态
+（`appended=true`，旧版本自动停用但保留，可一键切回）。线上生效的那一版永远只读，回滚才有意义。
+
+## 27.4 阻断式校验（不入库，而不是"入库后再拦"）
+
+正文非空 + 长度下限（默认 50 字）+ 变量名合法且**可试渲染**（花括号未声明 → 400）+ 对话场景必含就医关键词。
+反例（脚本实测）：`太短了` → 400；含"就医"缺失 → 400；正文里贴 `{"level":"ok"}` → 400。
+
+## 27.5 场景→模型绑定：为什么单开一张表
+
+`ai_prompt_template` 里本来就有一列 `model_code`（"这个场景用哪个模型"），但它和"提示词版本"耦合：
+换模型得新增一个提示词版本才能带上，语义很绕，而且会让"只想换模型"变成"必须动提示词"。因此单开
+`ai_scene_config`（V17），提示词表那一列保留兼容、不再由接口写入。
+
+生效范围写清楚，避免"改了没反应"：`temperature/maxTokens` 文本与视觉都走请求级参数生效；
+`model_code` **只对文本场景生效**（视觉模型由视觉通道统一解析），接口会返回 `modelCodeApplies=false` 并给出说明；
+`thinking` 是 DeepSeek 专有。优先级：后台非空字段 > yaml `ai.scenes.*` > 通道默认。
+
+## 27.6 踩到的两个坑（都值得记住）
+
+**① MySQL 的 CHECK 约束名是 schema 全局唯一的**，不是每表唯一。
+`ai_scene_config` 用了 `chk_asc_del`，与已有表 `auth_sms_code` 的同名约束冲突，`CREATE TABLE` 直接报
+`Duplicate check constraint name`，整个 V17 迁移失败（应用起不来）。改成 `chk_ascfg_*`。教训：新表的约束名前缀必须先在
+`information_schema.TABLE_CONSTRAINTS` 里查一遍。
+
+**② 排序规则 `utf8mb4_unicode_ci` 让"插了却没插进去"**。
+V16 的种子都写成 `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 ... WHERE scene_code = 'MEAL_ANALYSIS' ...)`，
+而大小写不敏感的排序规则把 V2 的遗留种子 `meal_analysis` 判为与 `MEAL_ANALYSIS` **相等** → NOT EXISTS 为假 →
+MEAL_ANALYSIS 的 v1 从未插入。运行时照样回落 classpath（所以行为没错、也没有任何报错），
+但后台看不到这一版、无法编辑或回滚；同一个原因还会让 `uk_scene_ver_active` 认为两者冲突。
+修法见 V18：把遗留种子改名进 `legacy_*` 命名空间，并用 **BINARY 比较**补播。教训：按 `scene_code` 做存在性判断必须用 BINARY。
+
+## 27.7 验证
+
+- 后端单测：全量 **325 个用例通过**（本轮新增 38 个：提示词服务/顾问/后台提示词/后台场景配置）；
+- `scripts/e2e/prompt-e2e.ps1`：**32/32 通过**，且**不调用任何模型**（不需要 DeepSeek 密钥）。
+  最硬的一条证据是端到端的：启用 v900 后新建会话，`chat_session.system_prompt_ver` 落的是 `chat@v900`；
+  回滚到 v1 后再建会话，落回 `chat@v1`——即"后台改提示词 → 下一条消息就用新提示词 → 可回滚"全链路成立。
+- 管理端：`vue-tsc` 0 error、`vite build` 成功（新增 `PromptConfigView.vue` / `SceneBindingView.vue`）。

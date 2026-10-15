@@ -26,7 +26,7 @@ import java.util.Map;
  * <h2>与提示词管理的关系</h2>
  * 提示词表 {@code ai_prompt_template} 里本来就有一列 {@code model_code}（"这个场景用哪个模型"），
  * 但它与"提示词版本"耦合在一起：换模型要新增一个提示词版本才能带上，语义很绕。
- * 因此场景绑定单列一张 {@code ai_scene_config}（V17），提示词表那一列保留兼容、不再由本接口写入。
+ * 因此场景绑定单列一张 {@code ai_scene_config}（V19），提示词表那一列保留兼容、不再由本接口写入。
  *
  * <h2>优先级与生效范围（与运行时完全一致，改完所见即所得）</h2>
  * DB 非空字段 &gt; yaml {@code ai.scenes.<scene>.*} &gt; 通道默认；其中：

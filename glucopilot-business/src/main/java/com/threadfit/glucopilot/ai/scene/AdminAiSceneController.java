@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
  * {@code ai_prompt_template.model_code} 就是这个形态，本接口不再写它）。
  *
  * <h2>权限</h2>
- * 读 {@code ai:scene:list}，写 {@code ai:scene:manage}（V16 菜单 2021 / 2024）。
+ * 读 {@code ai:scene:list}，写 {@code ai:scene:manage}（V18 菜单 2021 / 2024）。
  * 与模型配置（{@code ai:model:manage}）分开：能改模型凭据的人不一定该改业务场景的采样参数，反之亦然。
  */
 @RestController

@@ -10,7 +10,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * {@code ai_scene_config} 的实体（V17 建表）：场景 → 模型 与 场景级参数的绑定。
+ * {@code ai_scene_config} 的实体（V19 建表）：场景 → 模型 与 场景级参数的绑定。
  * <p>
  * 取代的是一部分 yaml：{@code ai.scenes.<scene>.model-code / temperature / max-tokens / thinking}。
  * yaml 仍保留为兜底，DB 行存在且字段非空时优先。

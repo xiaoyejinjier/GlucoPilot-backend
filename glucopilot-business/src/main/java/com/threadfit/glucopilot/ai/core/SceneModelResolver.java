@@ -44,7 +44,7 @@ public class SceneModelResolver {
     /**
      * 饮食分析在迁移前写死的温度。
      * <p>
-     * 它已挪进 {@code ai_scene_config}（V17 种子 0.10），这里只作为"整行被删掉"时的兜底，
+     * 它已挪进 {@code ai_scene_config}（V19 种子 0.10），这里只作为"整行被删掉"时的兜底，
      * 保留原值以免行为在没人察觉的情况下变化。
      */
     private static final double MEAL_DEFAULT_TEMPERATURE = 0.1;

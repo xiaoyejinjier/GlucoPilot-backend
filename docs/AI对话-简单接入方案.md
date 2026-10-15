@@ -1739,7 +1739,7 @@ Advisor 顺序排在会话记忆之前、医疗硬拦截之后——后者刻意
 
 `ai_prompt_template` 里本来就有一列 `model_code`（"这个场景用哪个模型"），但它和"提示词版本"耦合：
 换模型得新增一个提示词版本才能带上，语义很绕，而且会让"只想换模型"变成"必须动提示词"。因此单开
-`ai_scene_config`（V17），提示词表那一列保留兼容、不再由接口写入。
+`ai_scene_config`（V19），提示词表那一列保留兼容、不再由接口写入。
 
 生效范围写清楚，避免"改了没反应"：`temperature/maxTokens` 文本与视觉都走请求级参数生效；
 `model_code` **只对文本场景生效**（视觉模型由视觉通道统一解析），接口会返回 `modelCodeApplies=false` 并给出说明；
@@ -1749,15 +1749,15 @@ Advisor 顺序排在会话记忆之前、医疗硬拦截之后——后者刻意
 
 **① MySQL 的 CHECK 约束名是 schema 全局唯一的**，不是每表唯一。
 `ai_scene_config` 用了 `chk_asc_del`，与已有表 `auth_sms_code` 的同名约束冲突，`CREATE TABLE` 直接报
-`Duplicate check constraint name`，整个 V17 迁移失败（应用起不来）。改成 `chk_ascfg_*`。教训：新表的约束名前缀必须先在
+`Duplicate check constraint name`，整个 V19 迁移失败（应用起不来）。改成 `chk_ascfg_*`。教训：新表的约束名前缀必须先在
 `information_schema.TABLE_CONSTRAINTS` 里查一遍。
 
 **② 排序规则 `utf8mb4_unicode_ci` 让"插了却没插进去"**。
-V16 的种子都写成 `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 ... WHERE scene_code = 'MEAL_ANALYSIS' ...)`，
+V18 的种子都写成 `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 ... WHERE scene_code = 'MEAL_ANALYSIS' ...)`，
 而大小写不敏感的排序规则把 V2 的遗留种子 `meal_analysis` 判为与 `MEAL_ANALYSIS` **相等** → NOT EXISTS 为假 →
 MEAL_ANALYSIS 的 v1 从未插入。运行时照样回落 classpath（所以行为没错、也没有任何报错），
 但后台看不到这一版、无法编辑或回滚；同一个原因还会让 `uk_scene_ver_active` 认为两者冲突。
-修法见 V18：把遗留种子改名进 `legacy_*` 命名空间，并用 **BINARY 比较**补播。教训：按 `scene_code` 做存在性判断必须用 BINARY。
+修法见 V20：把遗留种子改名进 `legacy_*` 命名空间，并用 **BINARY 比较**补播。教训：按 `scene_code` 做存在性判断必须用 BINARY。
 
 ## 27.7 验证
 

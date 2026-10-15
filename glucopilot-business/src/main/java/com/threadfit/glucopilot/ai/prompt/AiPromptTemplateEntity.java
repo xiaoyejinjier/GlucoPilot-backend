@@ -9,7 +9,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * {@code ai_prompt_template} 的实体（V1 建表、V16 扩列）。
+ * {@code ai_prompt_template} 的实体（V1 建表、V18 扩列）。
  * <p>
  * 一行 = 某个场景的<b>一个版本</b>。版本追加式：编辑历史版本不覆盖，而是新增一行；
  * {@code uk_scene_ver_active(scene_code, version_no, is_deleted)} 保证同场景版本号不重复。

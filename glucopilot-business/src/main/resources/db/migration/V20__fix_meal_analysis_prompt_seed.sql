@@ -28,13 +28,20 @@
 
 -- ---------------------------------------------------------------------------
 -- 1) 遗留种子改名（ci 环境下 'meal_analysis' 会与 'MEAL_ANALYSIS' 相等，必须让路）
+--
+-- ⚠️ 这里的 IN 列表同样必须 BINARY：**第 32 行第一版就是漏了它而失败的**——
+--    `scene_code IN ('meal_analysis')` 在 ci 排序规则下把线上真正的 `MEAL_ANALYSIS` 行也匹配上了，
+--    改名成 legacy_MEAL_ANALYSIS 时撞上已经改名好的 legacy_meal_analysis（ci 下两者相等），
+--    报 Duplicate entry 'legacy_MEAL_ANALYSIS-1-0'，整个 V20 失败、应用起不来。
+--    也就是说：这条坑在同一个文件里连着咬了两次（一次漏播、一次误改名），凡是拿 scene_code 做条件
+--    的地方（UPDATE / INSERT 的 WHERE、SELECT 的存在性判断）都必须 BINARY，没有例外。
 -- ---------------------------------------------------------------------------
 UPDATE ai_prompt_template
    SET scene_code = CONCAT('legacy_', scene_code),
        change_note = CONCAT(COALESCE(change_note, ''),
                             '；V20：改名进 legacy_* 命名空间（原编码与 MEAL_ANALYSIS 大小写冲突）'),
        config_version = config_version + 1
- WHERE scene_code IN ('chat_system', 'meal_analysis', 'glucose_advice')
+ WHERE BINARY scene_code IN ('chat_system', 'meal_analysis', 'glucose_advice')
    AND is_deleted = 0;
 
 -- ---------------------------------------------------------------------------

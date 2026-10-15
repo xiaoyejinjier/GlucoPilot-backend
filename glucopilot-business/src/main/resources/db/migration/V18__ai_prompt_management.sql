@@ -44,11 +44,16 @@ SET @gp_add_config_version := (
 PREPARE gp_stmt FROM @gp_add_config_version; EXECUTE gp_stmt; DEALLOCATE PREPARE gp_stmt;
 
 -- 老种子停用（保留可追溯）
+--
+-- ⚠️ 这里的 IN 列表必须 BINARY：ai_prompt_template 的排序规则是 utf8mb4_unicode_ci（大小写不敏感），
+-- 不加 BINARY 时列表里的 'meal_analysis' 会把**线上真正的 MEAL_ANALYSIS 行**也匹配上并停用掉
+-- （实测踩到过：重放本迁移后 MEAL_ANALYSIS 的 v1 被静默停用，运行时回落 classpath，界面看不出原因）。
+-- 详见 V20 头部对同一个排序规则陷阱的完整记录：凡是拿 scene_code 做条件的地方都必须 BINARY。
 UPDATE ai_prompt_template
    SET is_enabled = 0,
        change_note = CONCAT(COALESCE(change_note, ''), 'V18：命名与当前 SceneCode 不一致，已停用'),
        config_version = config_version + 1
- WHERE scene_code IN ('chat_system', 'meal_analysis', 'glucose_advice')
+ WHERE BINARY scene_code IN ('chat_system', 'meal_analysis', 'glucose_advice')
    AND is_deleted = 0;
 
 -- ---------------------------------------------------------------------------

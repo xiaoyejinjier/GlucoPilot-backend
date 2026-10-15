@@ -1,6 +1,5 @@
 package com.threadfit.glucopilot.ai.config;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -68,7 +67,9 @@ public class AiVisionClientConfig {
     public ChatClient visionChatClient(@Qualifier("glucopilotVisionChatModel") ChatModel visionChatModel,
                                        AiPromptTemplateService promptTemplateService) {
         return ChatClient.builder(visionChatModel)
-                .defaultSystem(promptTemplateService.systemPrompt(SceneCode.CHAT_IMAGE))
+                // 刻意不写 defaultSystem：视觉场景的提示词由 VisionAnalyzer 每请求 .system(...) 注入
+                // （提示词已进后台，烤死的默认值会在改完之后继续随请求发给模型）。
+                // 本 client 也不挂 Advisor：阶段 1 只需要"看图为描述"，见类注释第 2 条。
                 .defaultTemplateRenderer(promptTemplateService.renderer())
                 .build();
     }

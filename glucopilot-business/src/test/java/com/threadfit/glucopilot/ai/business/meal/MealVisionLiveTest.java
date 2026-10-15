@@ -54,7 +54,8 @@ class MealVisionLiveTest {
                     ? "prompts/meal-analysis/system.md" : "prompts/chat/system.md");
             props.getScenes().put(scene.getConfigKey(), configured);
         }
-        AiPromptTemplateService prompts = new AiPromptTemplateService(props);
+        // mapper=null：live 测试只用 classpath 内置提示词，不连库（见 AiPromptTemplateService 构造器）
+        AiPromptTemplateService prompts = new AiPromptTemplateService(props, null);
         ReflectionTestUtils.invokeMethod(prompts, "init");
 
         // 规格取自 ai.vision.*（等价于 yaml 兜底那一份），provider=2 → OpenAI 兼容协议

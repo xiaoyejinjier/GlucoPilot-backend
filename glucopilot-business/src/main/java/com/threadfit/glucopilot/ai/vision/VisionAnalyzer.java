@@ -13,7 +13,7 @@ import com.threadfit.glucopilot.file.storage.ObjectStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
@@ -96,12 +96,12 @@ public class VisionAnalyzer {
         String mimeType = requireImage(media, vision);
         byte[] bytes = readWithinLimit(media, vision);
         ChatClient.ChatClientRequestSpec prompt = visionClient.prompt()
+                // 提示词每请求取一次（已可后台维护），不是启动期烤进 client 的那一份
                 .system(promptTemplateService.systemPrompt(scene));
-        if (scene == SceneCode.MEAL_ANALYSIS) {
-            prompt.options(OpenAiChatOptions.builder()
-                    .model(aiProperties.getMeal().getModel())
-                    .maxCompletionTokens(aiProperties.getMeal().getMaxTokens())
-                    .temperature(0.1));
+        // 场景参数（温度/输出上限，后台可改）：饮食分析用 ai.meal.* + 0.1，其余场景默认继承视觉模型自身参数
+        ChatOptions.Builder<?> sceneOptions = chatClientRegistry.visionOptionsBuilder(scene);
+        if (sceneOptions != null) {
+            prompt.options(sceneOptions);
         }
         return prompt
                 .user(user -> user

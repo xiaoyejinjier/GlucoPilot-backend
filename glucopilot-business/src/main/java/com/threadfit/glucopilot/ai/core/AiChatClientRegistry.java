@@ -87,7 +87,7 @@ public class AiChatClientRegistry {
         return sceneModelResolver.modelCode(scene);
     }
 
-    /** 该场景是否声明了请求级参数覆盖。视觉场景恒为 false——它的参数在 {@code ai.vision.*}。 */
+    /** 该场景是否声明了请求级参数覆盖。 */
     public boolean hasOverrides(SceneCode scene) {
         return sceneModelResolver.hasOverrides(scene);
     }
@@ -95,5 +95,14 @@ public class AiChatClientRegistry {
     /** 请求级参数。仅文本场景可用；视觉场景的 options 类型不同，调用会抛异常。 */
     public ChatOptions.Builder<?> optionsBuilder(SceneCode scene) {
         return sceneModelResolver.optionsBuilder(scene);
+    }
+
+    /**
+     * 视觉场景的请求级参数（OpenAI 兼容协议），供 {@code VisionAnalyzer} 注入。
+     *
+     * @return 需要写进请求的 options；没有可写参数时返回 {@code null}（继承视觉模型自身的参数）
+     */
+    public ChatOptions.Builder<?> visionOptionsBuilder(SceneCode scene) {
+        return sceneModelResolver.visionOptionsBuilder(scene);
     }
 }

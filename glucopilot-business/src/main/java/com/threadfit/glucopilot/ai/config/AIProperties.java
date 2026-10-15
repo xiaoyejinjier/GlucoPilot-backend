@@ -42,10 +42,33 @@ public class AIProperties {
 
     private MealProperties meal = new MealProperties();
 
+    private PromptProperties prompt = new PromptProperties();
+
     @Data
     public static class MealProperties {
         private String model = "qwen3-vl-plus";
         private int maxTokens = 2048;
+    }
+
+    /**
+     * 提示词后台化（接口 4.11~4.13）的校验参数。
+     * <p>
+     * 提示词从"跟着代码走"变成"运营随手可改"之后，风险从"改不动"变成"改坏了"。
+     * 这里的三条是<b>阻断式</b>校验（校验不过不允许入库），默认值刻意保守：
+     * 宁可让运营多点一次"保存并启用"，也不要让半截提示词上线。
+     */
+    @Data
+    public static class PromptProperties {
+
+        /** 正文长度下限（字符）：挡住误清空、误粘贴成一句话。 */
+        private int minLength = 50;
+
+        /** 需要做安全关键词校验的场景（{@link SceneCode#getConfigKey()}），默认只有对话场景。 */
+        private List<String> safetyScenes = new ArrayList<>(List.of("chat"));
+
+        /** 必含安全关键词（命中任意一个即可），仅对 {@link #safetyScenes} 生效。 */
+        private List<String> safetyKeywords =
+                new ArrayList<>(List.of("就医", "医院", "医生", "诊断"));
     }
 
     /** 取场景配置；未配置视为部署错误（提示词/参数没有来源，跑了也是错的）。 */

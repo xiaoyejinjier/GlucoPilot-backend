@@ -4,9 +4,11 @@ import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AIProperties.SceneProperties;
 import com.threadfit.glucopilot.ai.model.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.AiRuntimeConfigService;
+import com.threadfit.glucopilot.ai.scene.AiSceneBindingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -39,13 +41,27 @@ import org.springframework.util.StringUtils;
 @Component
 public class SceneModelResolver {
 
+    /**
+     * 饮食分析在迁移前写死的温度。
+     * <p>
+     * 它已挪进 {@code ai_scene_config}（V17 种子 0.10），这里只作为"整行被删掉"时的兜底，
+     * 保留原值以免行为在没人察觉的情况下变化。
+     */
+    private static final double MEAL_DEFAULT_TEMPERATURE = 0.1;
+
     private final AIProperties aiProperties;
 
     private final AiRuntimeConfigService runtimeConfig;
 
-    public SceneModelResolver(AIProperties aiProperties, AiRuntimeConfigService runtimeConfig) {
+    /** 场景绑定（{@code ai_scene_config}）：DB 非空字段优先于 yaml。 */
+    private final AiSceneBindingService sceneBindings;
+
+    public SceneModelResolver(AIProperties aiProperties,
+                              AiRuntimeConfigService runtimeConfig,
+                              AiSceneBindingService sceneBindings) {
         this.aiProperties = aiProperties;
         this.runtimeConfig = runtimeConfig;
+        this.sceneBindings = sceneBindings;
     }
 
     /**
@@ -56,10 +72,24 @@ public class SceneModelResolver {
      * <p>
      * 文本场景返回 {@link AiRuntimeConfigService#textSpec} 的结果：场景绑定 → 后台默认 → yaml，
      * 与 {@code DynamicChatModel} 真正拿去发请求的那一份同源。
+     * <p>
+     * 场景绑定（{@code ai_scene_config.model_code}）优先于 yaml 的 {@code ai.scenes.<scene>.model-code}，
+     * 但**只有在该编码仍然可解析时才采用**：后台禁用/删掉一个模型后，若还按它落库，
+     * 就会出现"记录里写 A、实际调 B"的老问题（2026-10-13 的反馈）。
      */
     public String modelCode(SceneCode scene) {
         if (scene.isRequiresVision()) {
             return runtimeConfig.visionSpec().modelCode();
+        }
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        if (binding.hasModel()) {
+            AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
+            if (bound != null) {
+                return bound.modelCode();
+            }
+            log.warn("场景 {} 在后台绑定的模型编码 {} 不在运行时配置里（不存在或已停用），"
+                            + "回落 yaml/后台默认模型",
+                    scene.getCode(), binding.modelCode());
         }
         return runtimeConfig.textSpec(scene).modelCode();
     }
@@ -67,12 +97,18 @@ public class SceneModelResolver {
     /**
      * 场景是否声明了请求级参数覆盖。
      * <p>
-     * 视觉场景恒为 {@code false}：它的 model/temperature/max-tokens 来自 {@code ai.vision.*}，
-     * 已由 {@code AiVisionClientConfig} 烤进 client 的 defaultOptions，不再走请求级 options。
+     * 视觉场景：只有 {@link #visionOptionsBuilder} 真的会写参数时才算有覆盖——
+     * 它的 model/temperature/max-tokens 默认来自 {@code ai.vision.*}，已由 {@code ChatModelFactory}
+     * 烤进视觉模型自身的 options，不再走请求级。
      */
     public boolean hasOverrides(SceneCode scene) {
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         if (scene.isRequiresVision()) {
-            return false;
+            // 饮食分析的 model/max-tokens 来自 ai.meal.*（yaml），恒有请求级参数
+            return scene == SceneCode.MEAL_ANALYSIS || binding.hasParams();
+        }
+        if (binding.hasModel() || binding.hasParams()) {
+            return true;
         }
         SceneProperties config = aiProperties.scene(scene);
         return StringUtils.hasText(config.getModelCode())
@@ -87,6 +123,9 @@ public class SceneModelResolver {
      * 只写场景显式声明的字段，未声明的留空，由 Spring AI 与 {@code spring.ai.deepseek.chat.*}
      * 的默认值合并，避免同一份参数在两处维护。
      * <p>
+     * <b>取值优先级：后台场景配置（{@code ai_scene_config} 非空字段） &gt; yaml
+     * {@code ai.scenes.<scene>.*}</b>。整段留给运营的价值就在这：改温度/上限不用重新打包。
+     * <p>
      * <b>场景绑定了 {@code model-code} 时，写进去的是该配置的 {@code model_endpoint} 而不是编码本身</b>：
      * 编码是业务起的名字（可以叫 "glucopilot-chat"），真正发给厂商的必须是端点名。
      * 早先直接写编码，在"编码 ≠ 端点"的配置上会既调错模型、又用错凭据。
@@ -94,38 +133,82 @@ public class SceneModelResolver {
      * {@link AiRuntimeConfigService#textSpec} 的回落保持一致，避免"记录里写一个、实际调另一个"。
      * <p>
      * 视觉场景直接拒绝：该方法只能造出 DeepSeek 的 options，交给 OpenAI 协议的视觉 client
-     * 是类型层面的错误。要调视觉参数请改 {@code ai.vision.*}。
+     * 是类型层面的错误。视觉参数请用 {@link #visionOptionsBuilder(SceneCode)}。
      */
     public ChatOptions.Builder<?> optionsBuilder(SceneCode scene) {
         if (scene.isRequiresVision()) {
             throw new IllegalArgumentException("场景 " + scene.getCode()
-                    + " 是视觉场景，参数应配置在 ai.vision.*（已烤进 vision client 的 defaultOptions），"
-                    + "不能通过请求级 options 传入");
+                    + " 是视觉场景，参数请走 visionOptionsBuilder(...)（OpenAI 协议），"
+                    + "不能通过请求级 DeepSeek options 传入");
         }
         SceneProperties config = aiProperties.scene(scene);
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        String modelCode = binding.hasModel() ? binding.modelCode() : config.getModelCode();
+        Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
+        Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : config.getMaxTokens();
+        Boolean thinking = binding.thinking() != null ? binding.thinking() : config.getThinking();
+
         DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder();
-        if (StringUtils.hasText(config.getModelCode())) {
-            AiModelSpec bound = runtimeConfig.specByModelCode(config.getModelCode());
+        if (StringUtils.hasText(modelCode)) {
+            AiModelSpec bound = runtimeConfig.specByModelCode(modelCode);
             if (bound != null) {
                 builder.model(bound.modelEndpoint());
             } else {
                 log.warn("场景 {} 绑定的模型编码 {} 不在运行时配置里（不存在或已停用），"
                                 + "本次不指定模型，交由通道默认模型处理",
-                        scene.getCode(), config.getModelCode());
+                        scene.getCode(), modelCode);
             }
         }
-        if (config.getTemperature() != null) {
-            builder.temperature(config.getTemperature());
+        if (temperature != null) {
+            builder.temperature(temperature);
         }
-        if (config.getMaxTokens() != null) {
-            builder.maxTokens(config.getMaxTokens());
+        if (maxTokens != null) {
+            builder.maxTokens(maxTokens);
         }
-        if (config.getThinking() != null) {
-            if (config.getThinking()) {
+        if (thinking != null) {
+            if (thinking) {
                 builder.enableThinking();
             } else {
                 builder.disableThinking();
             }
+        }
+        return builder;
+    }
+
+    /**
+     * 视觉场景的请求级参数（OpenAI 兼容协议）。
+     *
+     * @return 需要写进请求的 options；没有任何要写的参数时返回 {@code null}（保持模型自身的默认）
+     */
+    public ChatOptions.Builder<?> visionOptionsBuilder(SceneCode scene) {
+        if (!scene.isRequiresVision()) {
+            throw new IllegalArgumentException("场景 " + scene.getCode()
+                    + " 不是视觉场景，参数请走 optionsBuilder(...)（DeepSeek 协议）");
+        }
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
+        if (scene == SceneCode.MEAL_ANALYSIS) {
+            // 迁移前的行为原样保留：饮食分析用 ai.meal.* 的模型与大输出上限、温度 0.1
+            AIProperties.MealProperties meal = aiProperties.getMeal();
+            if (StringUtils.hasText(meal.getModel())) {
+                builder.model(meal.getModel());
+            }
+            Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : meal.getMaxTokens();
+            if (maxTokens != null) {
+                builder.maxCompletionTokens(maxTokens);
+            }
+            builder.temperature(binding.temperature() != null ? binding.temperature() : MEAL_DEFAULT_TEMPERATURE);
+            return builder;
+        }
+        if (binding.temperature() == null && binding.maxTokens() == null) {
+            // 其余视觉场景（看图描述、血糖识别）：默认继承视觉模型自身的参数，不额外发请求级 options
+            return null;
+        }
+        if (binding.temperature() != null) {
+            builder.temperature(binding.temperature());
+        }
+        if (binding.maxTokens() != null) {
+            builder.maxCompletionTokens(binding.maxTokens());
         }
         return builder;
     }

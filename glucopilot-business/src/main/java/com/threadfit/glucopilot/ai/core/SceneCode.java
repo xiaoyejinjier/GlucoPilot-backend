@@ -22,20 +22,22 @@ import java.util.Arrays;
 public enum SceneCode {
 
     /** 纯文本对话（接口 2.23 / 2.24 / 2.25），当前唯一已实现的场景。 */
-    CHAT("chat", false),
+    CHAT("chat", false, "对话（文本）"),
 
     /** 对话内发图片（接口 2.24 msgType=2）：视觉模型先识别，再交给文本模型组织回答。 */
-    CHAT_IMAGE("chat-image", true),
+    CHAT_IMAGE("chat-image", true, "对话内图片识别"),
 
     /** 饮食分析 / 拍照估糖（接口 2.20）：视觉模型 + 结构化输出。 */
-    MEAL_ANALYSIS("meal-analysis", true),
+    MEAL_ANALYSIS("meal-analysis", true, "饮食分析 / 拍照估糖"),
 
     /** 血糖仪读数识别（接口 2.21 / 2.22）：任务化 + 用户确认。 */
-    OCR_GLUCOSE("ocr-glucose", true);
+    OCR_GLUCOSE("ocr-glucose", true, "血糖仪读数识别");
 
     private final String configKey;
     /** 是否需要视觉（多模态）模型：true 的场景在视觉 provider 接入前不可用。 */
     private final boolean requiresVision;
+    /** 给运营看的中文名（后台页面直接展示，避免前端再维护一份映射）。 */
+    private final String displayName;
 
     /** 与接口文档 / 库表对齐的场景编码。 */
     public String getCode() {
@@ -47,5 +49,42 @@ public enum SceneCode {
                 .filter(scene -> scene.configKey.equals(configKey))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("未知的 AI 场景配置键：" + configKey));
+    }
+
+    /**
+     * 按库表 / 接口里的场景编码（{@link #getCode()}）查场景。
+     * <p>
+     * 与 {@link #fromConfigKey(String)} 的区别是<b>找不到时返回 null 而不是抛异常</b>：
+     * 运行时读库拿到一个不认识的 {@code scene_code} 应当记日志并跳过，
+     * 而不是让整个 AI 模块起不来（典型场景是回滚后库里留了新版才有的编码）。
+     */
+    public static SceneCode findByCode(String code) {
+        if (code == null) {
+            return null;
+        }
+        String trimmed = code.trim();
+        return Arrays.stream(values())
+                .filter(scene -> scene.name().equals(trimmed))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * 后台入参用的宽容查找：{@link #getCode()}（{@code CHAT}）与 {@link #getConfigKey()}
+     * （{@code chat}）都接受，大小写不敏感。
+     * <p>
+     * 之所以要宽容：契约里 {@code sceneCode} 是 {@code CHAT}，而页面 URL / yaml 用的是
+     * {@code chat}，前端很容易顺手传后者。若直接判为"未知场景"，表现出来的就是"配了不生效"。
+     */
+    public static SceneCode findByCodeOrConfigKey(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return Arrays.stream(values())
+                .filter(scene -> scene.name().equalsIgnoreCase(trimmed)
+                        || scene.configKey.equalsIgnoreCase(trimmed))
+                .findFirst()
+                .orElse(null);
     }
 }

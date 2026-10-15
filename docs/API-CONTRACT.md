@@ -2,6 +2,40 @@
 
 本文件是 `xiaoyejinjier/GlucoPilot-backend` 的权威契约。本文历史路径中的 `frontend/` 指独立仓库 `GlucoPilot-frontend` 根目录，`admin/` 指 `GlucoPilot-admin` 根目录，`backend/` 指本仓库根目录；拆仓不改变接口路径或响应格式。
 
+## 设备添加准备（2026-10-15，尚未接入真实设备）
+
+用户确认尚无具体设备型号。本次仅增加小程序页面、微信原生BLE发现、扫码/SN临时登记，不增加HTTP接口或后端DTO。登记数据仅保留在本次登录会话内存，统一标记“待适配”，不等于验证、绑定或连接成功；不写入glucose_record，不产生模拟血糖。
+
+后续须确认厂商型号、二维码/SN规则、BLE服务/特征UUID、授权配对、读数解码与单位/时间约定，再由接口负责人确认绑定和读数入库契约。不得把任意附近蓝牙设备当成已支持血糖仪，不得用名称或SN猜测读数；二维码只提取SN文本，绝不自动请求或打开其链接。
+
+## 高低血糖异常事件中心（2026-10-15）
+
+### 给用户的回复
+
+内部 `note` 仍只在管理端可见；新增 `userReply`（去空白后最多1000字），独立持久化到case与log（迁移 `V17__glucose_alert_user_reply.sql`），case另存 `repliedAt`。处理请求中省略/null保留回复，空字符串撤回，非空发布；历史内部备注不自动公开。
+
+管理端列表/详情返回 `userReply/repliedAt`，日志返回当次操作后的 `userReply`。回复改变才更新 `repliedAt`（撤回时置空）；仅改内部备注不改变回复时间。幂等及版本校验包含回复。已处理/已关闭事件可在状态和内部备注不变时补改公开回复，不得重开，追加审计日志。
+
+`GET /api/v1/glucose-alerts/replies?pageNum=1&pageSize=3`：C端登录，只查询当前用户的非空回复，按回复时间及case ID倒序，使用统一PageResult。调用方不得指定userId。白名单字段为 `{ id, recordId, recordDate, nodeCode, nodeName, glucoseValue, recordedAt, userReply, repliedAt }`，id为case ID；不返回内部备注、日志、操作人、手机号或他人数据。原记录/账号删除后不公开；原测量更正后，旧回复保留并明确关联旧快照，不附着到新测量。
+
+用户端仅提供紧凑消息入口，由用户点击打开提醒/回复弹窗，支持刷新、分页和重试。退出页面、账号变化和晚到请求不得泄漏旧账号回复；原录入、拍照、曲线和统计不变，无用户写操作或强制弹窗。
+
+### 异常事件查询及处理
+
+- 规则版本 `glucose-alert-v1`：有效实测 `(0,40)` 中 `<3.9` 为LOW，`>=10.0` 为HIGH，单位mmol/L。这是产品提醒阈值，不替代个人诊疗目标；缺失值和餐食预测不生成提醒，不改变原图表/达标率。
+- 来源为未删除的 `glucose_record` 六个非餐点节点，排除删除账号。当前事件id为血糖记录ID字符串，默认PENDING；运营跟进保存到 `gp_glucose_alert_case`，追加审计到 `gp_glucose_alert_log`（迁移V16），不改历史血糖。
+- `glucoseValue + recordedAt` 构成测量快照；重新测量或改值后新快照待处理，旧跟进不得覆盖新测量。原记录恢复正常或删除后退出当前异常列表，日志保留。
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| `GET /admin/v1/glucose-alerts` | `health:alert:view` | 参数 `startDate/endDate`（默认近30天，最多92天）、`keyword`（用户名/昵称，最多64字）、`alertType`（LOW/HIGH）、`status`、`pageNum/pageSize`；返回 `{ page, overview, lowThreshold, highThreshold }`，overview统计整个筛选范围而非当前页 |
+| `GET /admin/v1/glucose-alerts/{id}` | `health:alert:view` | 返回 `{ event, history }`，包括当前真实血糖、原备注、脱敏手机号和全部快照处理日志 |
+| `PUT /admin/v1/glucose-alerts/{id}/handling` | `health:alert:handle` | 请求 `{ glucoseValue, recordedAt, expectedVersion, status, note, userReply? }`；快照必填、版本从0开始、note去空白后1～1000字，返回当前事件 |
+
+状态：`PENDING → PROCESSING/RESOLVED/CLOSED`，`PROCESSING → PROCESSING/RESOLVED/CLOSED`；终态不得重开。RESOLVED仅表示运营跟进完成，不表示血糖恢复。记录操作人、时间、状态、快照与requestId；行锁及expectedVersion防止覆盖。相同操作人重复提交相同状态/备注/回复幂等返回，不增日志；过期快照/版本冲突返回40900提示刷新。PUT按状态和版本保证幂等，不依赖随机客户端key。
+
+查看权限继承已有健康档案查看角色，处理权限默认管理员；运维可另行分配。所有响应继续使用 `ApiResponse { code, message, data, requestId }`、成功码0、保留X-Request-Id，鉴权使用现有机制。不提供改删原血糖或用药剂量功能。
+
 ## 官方若依后端迁移约定（2026-10-09）
 
 后端改为官方 RuoYi-Vue 多模块工程，由 `ruoyi-admin` 启动。所有原有路径、普通响应成功码 0、分页字段和 SSE 事件继续保持。管理端登录返回的 accessToken 改为若依 JWT，登录状态由 Redis 管理；旧后台会话在切换时失效，小程序 user_session 保留。运营身份与 sys_user 通过 gp_ops_identity_map 关联，既有 opsId 和审计字段语义保留。系统资源适配接口调用官方系统服务，业务分组参数独立保存于 gp_app_config。
@@ -52,7 +86,7 @@
 
 运营端反馈列表按反馈 `id` 从小到大排序后执行分页，先提交的记录排在前面。页面只显示一列连续“序号”，计算方式为 `(pageNum - 1) * pageSize + 行索引 + 1`，翻页后继续编号；数据库 `id` 保留在接口中用于审批/回复，不另外显示为列表编号。
 
-管理端食品营养库默认每页 10 条，可选择 10/20/50/100 条、切换页码或跳页；表格内部滚动，分页栏保留在表格下方。每次翻页均调用 `/admin/v1/foods` 获取服务端分页结果，禁止对旧数组响应进行本地切片以冒充服务端分页。关键词、分类与上下架筛选提交后回到第一页，后续翻页保留已提交的筛选条件；新增食品回到第一页，删除或下架导致当前页超出总页数时自动回到最后一个有效页。
+管理端食品营养库按表格实际可用高度及行高自动计算每页条数（范围1～100），不固定22条；窗口/容器尺寸变化后重算容量并回到第一页，相同容量不重复请求。分页栏保留在表格下方，支持切换页码或跳页。每次翻页均调用 `/admin/v1/foods` 获取服务端分页结果，禁止对旧数组响应进行本地切片以冒充服务端分页。关键词、分类与上下架筛选提交后回到第一页，后续翻页保留已提交的筛选条件；新增食品回到第一页，删除或下架导致当前页超出总页数时自动回到最后一个有效页。
 
 反馈管理、用户管理和九时段用户每日明细使用同样的分页交互：默认 10 条、可选 10/20/50/100 条，表格内部滚动，分页栏展示总数、当前页和记录区间。页码与每页条数改变时重新请求各自服务端接口，筛选条件只在提交查询时生效并随翻页保留；反馈状态、用户状态变更或数据减少导致当前页越界时自动回退。九时段按“用户 + 日期”分页，`overview` 统计整个查询范围，不按当前页记录数计算，也不得随翻页丢失已提交的日期范围。
 

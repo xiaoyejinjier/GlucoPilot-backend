@@ -43,6 +43,13 @@
 
     <dependencies>
 
+        <!-- Isolated alert SQL/transaction regression tests; never a shared data source. -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-system</artifactId><version>3.9.2</version></dependency>
 <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-framework</artifactId><version>3.9.2</version></dependency>
 <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-quartz</artifactId><version>3.9.2</version></dependency>

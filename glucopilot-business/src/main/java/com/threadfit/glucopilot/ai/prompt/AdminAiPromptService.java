@@ -149,9 +149,19 @@ public class AdminAiPromptService {
 
         // 线上生效的版本不原地改：追加新版本，旧版本留在列表里用于回滚
         if (base.getIsEnabled() != null && base.getIsEnabled() == 1) {
-            int versionNo = request.getVersion() != null
-                    ? parseVersion(request.getVersion())
-                    : mapper.selectMaxVersionNo(scene.getCode()) + 1;
+            // ⚠️ 请求里的 version 若与**基线版本号相同**，语义上等于"没指定新版本号"：
+            // 编辑器打开时表单里就是被编辑那一版的号（v1），把它当成"新版本要叫 v1"会直接撞唯一键，
+            // 表现为"保存后什么都没发生"（实测 409「场景 CHAT 已存在版本 v1」）。这里按"自动分配下一个"处理。
+            //
+            // ⚠️ 比较必须用 equals 而不是 `==`：这里两端都是 Integer，`==` 比的是引用，
+            // 只在 -128..127 的 Integer 缓存区间里"碰巧"正确——v1 能过、v900 就 409，
+            // 是本次修复第一版就被 e2e 抓住的坑（单测当时只用 v1，正好落在缓存区间里没暴露）。
+            Integer requested = parseRequestedVersion(request.getVersion());
+            boolean sameAsBaseline = requested != null && base.getVersionNo() != null
+                    && base.getVersionNo().equals(requested);
+            int versionNo = (requested == null || sameAsBaseline)
+                    ? mapper.selectMaxVersionNo(scene.getCode()) + 1
+                    : requested;
             requireVersionFree(scene, versionNo);
 
             AiPromptTemplateEntity appended = new AiPromptTemplateEntity();
@@ -179,12 +189,19 @@ public class AdminAiPromptService {
         if (request.getConfigVersion() == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "缺少 configVersion（乐观锁），请刷新后重试");
         }
+        // 草稿允许改版本号（编辑器里那一栏是可编辑的）：只要求目标号在本场景内没被占用
+        Integer requested = parseRequestedVersion(request.getVersion());
+        int versionNo = base.getVersionNo();
+        if (requested != null && !requested.equals(base.getVersionNo())) {
+            requireVersionFreeExcept(scene, requested, id);
+            versionNo = requested;
+        }
         AiPromptTemplateEntity entity = new AiPromptTemplateEntity();
         entity.setId(id);
-        entity.setTemplateName(templateName(request, scene, base.getVersionNo()));
+        entity.setTemplateName(templateName(request, scene, versionNo));
         entity.setPromptBody(payload.promptText());
         entity.setVariablesJson(payload.variablesJson());
-        entity.setVersionNo(base.getVersionNo());
+        entity.setVersionNo(versionNo);
         entity.setIsEnabled(enable ? 1 : 0);
         entity.setChangeNote(request.getChangeNote());
         if (mapper.updateWithVersion(entity, request.getConfigVersion()) == 0) {
@@ -194,9 +211,9 @@ public class AdminAiPromptService {
             mapper.deactivateOthers(scene.getCode(), id);
             promptService.refreshNow();
         }
-        log.info("后台编辑提示词草稿 id={} scene={} version=v{} 启用={}",
-                id, scene.getCode(), base.getVersionNo(), enable);
-        return result(id, base.getVersionNo(), enable, false);
+        log.info("后台编辑提示词草稿 id={} scene={} version=v{}（原 v{}）启用={}",
+                id, scene.getCode(), versionNo, base.getVersionNo(), enable);
+        return result(id, versionNo, enable, false);
     }
 
     // ------------------------------------------------------------------ 启用（4.13）
@@ -323,6 +340,14 @@ public class AdminAiPromptService {
         return names;
     }
 
+    /**
+     * 解析请求里的版本号；<b>空白视为"未指定"（返回 null）而不是报错</b>——
+     * 前端把"留空"提交为 null 或空串都应当被同一套语义接住。
+     */
+    private static Integer parseRequestedVersion(String version) {
+        return StringUtils.hasText(version) ? parseVersion(version) : null;
+    }
+
     private static int parseVersion(String version) {
         String raw = version.trim();
         if (raw.startsWith("v") || raw.startsWith("V")) {
@@ -346,6 +371,18 @@ public class AdminAiPromptService {
         if (count != null && count > 0) {
             throw new BizException(ErrorCode.CONFLICT,
                     "场景 " + scene.getCode() + " 已存在版本 v" + versionNo + "，请换一个版本号（或直接编辑该版本）");
+        }
+    }
+
+    /** 草稿改版本号时用：排除自己，避免"改成原来的号"被判成冲突。 */
+    private void requireVersionFreeExcept(SceneCode scene, int versionNo, Long selfId) {
+        Long count = mapper.selectCount(new LambdaQueryWrapper<AiPromptTemplateEntity>()
+                .eq(AiPromptTemplateEntity::getSceneCode, scene.getCode())
+                .eq(AiPromptTemplateEntity::getVersionNo, versionNo)
+                .ne(AiPromptTemplateEntity::getId, selfId));
+        if (count != null && count > 0) {
+            throw new BizException(ErrorCode.CONFLICT,
+                    "场景 " + scene.getCode() + " 已存在版本 v" + versionNo + "，草稿不能改成该版本号");
         }
     }
 

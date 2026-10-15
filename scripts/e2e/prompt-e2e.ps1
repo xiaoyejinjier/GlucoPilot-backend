@@ -141,7 +141,7 @@ $beforeActiveLabel = (@($list.Body.data.scenes) | Where-Object { $_.sceneCode -e
 Write-Host "   当前生效版本：$($beforeActive.version)（id=$beforeActiveId，标签 $beforeActiveLabel）" -ForegroundColor Gray
 
 # 清理上一次运行留下的 E2E 版本（唯一键 uk_scene_ver_active 不允许同场景同版本重复）
-Invoke-E2eSql "DELETE FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no = $testVersion;" | Out-Null
+Invoke-E2eSql "DELETE FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1));" | Out-Null
 
 # ---------------------------------------------------------------- 2. 阻断式校验
 Write-Host "2) 阻断式校验（坏提示词不允许入库）" -ForegroundColor Gray
@@ -223,6 +223,38 @@ if ($userId) {
     Ng '定位 mock 用户' '未能在库里找到 mock 用户，跳过"下一条消息"验证'
 }
 
+# ---------------------------------------------------------------- 5.5 编辑"正在生效"的版本（回归）
+Write-Host "5.5) 编辑正在生效的版本（界面行为回归：回传自身版本号）" -ForegroundColor Gray
+# 背景：编辑器打开生效版本时，表单里的版本号就是被编辑那一版的号，前端会原样回传。
+# 后端若把它当成"新版本要叫 v900"，就会撞唯一键报 409，用户看到的现象是"保存后什么都没发生"。
+# 这里就用**界面完全一样的请求体**（带 version=v900）走一遍，钉住"同号 = 自动分配下一个"。
+$listBeforeEdit = Invoke-Api -Method GET -Url "$adminApi/ai-prompt-templates?sceneCode=$testScene" -Headers $adminHeaders -Tag 'prompt-list-4b'
+$activeRow = @($listBeforeEdit.Body.data.records) | Where-Object { $_.active -eq $true } | Select-Object -First 1
+$editedActive = Invoke-Api -Method PATCH -Url "$adminApi/ai-prompt-templates/$($activeRow.id)" -Headers $adminHeaders -Body @{
+    sceneCode    = $testScene
+    templateName = $activeRow.templateName
+    version      = $activeRow.version
+    promptText   = "$marker 编辑生效版本后的正文：你是控糖助手，用简洁中文回答用户关于血糖的问题，不做诊断、不给用药建议，涉及治疗与调整用药时请引导用户及时就医。"
+    variables    = @()
+    status       = 1
+    changeNote   = 'prompt-e2e：编辑生效版本'
+    configVersion = $activeRow.configVersion
+} -Tag 'edit-active'
+Check '编辑生效版本：回传自身版本号不再 409，且返回追加结果' `
+    ($editedActive.Code -eq 200 -and $editedActive.Body.data.appended -eq $true) `
+    "HTTP $($editedActive.Code) msg=$($editedActive.Body.message) appended=$($editedActive.Body.data.appended)"
+Check '追加出来的版本号是下一个（v901）' ($editedActive.Body.data.version -eq "v$($testVersion + 1)") `
+    "version=$($editedActive.Body.data.version)"
+Check '追加的新版本直接生效（列表里只有它 active）' `
+    (@(@(@(Invoke-Api -Method GET -Url "$adminApi/ai-prompt-templates?sceneCode=$testScene" -Headers $adminHeaders -Tag 'prompt-list-4c').Body.data.records) | Where-Object { $_.active -eq $true }).Count -eq 1) `
+    '启用版本不唯一'
+$chatAfterEdit = @(@(Invoke-Api -Method GET -Url "$adminApi/ai-prompt-templates?sceneCode=$testScene" -Headers $adminHeaders -Tag 'prompt-list-4d').Body.data.scenes) |
+    Where-Object { $_.sceneCode -eq $testScene } | Select-Object -First 1
+Check '运行态切到编辑后的新版本' ($chatAfterEdit.activeVersion -eq "chat@v$($testVersion + 1)") `
+    "activeVersion=$($chatAfterEdit.activeVersion)"
+$oldStillThere = Get-SqlScalar "SELECT CONCAT(COUNT(*), '/', COALESCE(MAX(is_enabled), -1)) FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no = $testVersion AND is_deleted = 0;"
+Check '被编辑的那一版仍在且已停用（可回滚）' ($oldStillThere -eq '1/0') "count/enabled=$oldStillThere"
+
 # ---------------------------------------------------------------- 6. 回滚
 Write-Host "6) 回滚到原版本" -ForegroundColor Gray
 $rollback = Invoke-Api -Method PATCH -Url "$adminApi/ai-prompt-templates/$beforeActiveId/activate" -Headers $adminHeaders -Tag 'rollback'
@@ -263,8 +295,9 @@ Check '清空覆盖（改回继承）成功' ($restored.Code -eq 200 -and $null 
 
 # ---------------------------------------------------------------- 8. 清理
 Write-Host "8) 清理 E2E 产生的数据" -ForegroundColor Gray
-Invoke-E2eSql "DELETE FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no = $testVersion;" | Out-Null
-$left = Get-SqlScalar "SELECT COUNT(*) FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no = $testVersion;"
+# 5.5 步会由后端自动追加出 v901，两个版本都要清掉
+Invoke-E2eSql "DELETE FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1));" | Out-Null
+$left = Get-SqlScalar "SELECT COUNT(*) FROM sugar_health.ai_prompt_template WHERE scene_code = '$testScene' AND version_no IN ($testVersion, $($testVersion + 1));"
 Check 'E2E 提示词版本已清理' ($left -eq '0') "left=$left"
 
 Write-Host ""

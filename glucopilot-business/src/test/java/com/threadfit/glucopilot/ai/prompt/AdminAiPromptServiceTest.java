@@ -207,6 +207,101 @@ class AdminAiPromptServiceTest {
 
     // ---------------------------------------------------------------- 编辑
 
+    /**
+     * 回归：编辑器打开生效版本时，表单里的版本号就是被编辑那一版的号（v1），
+     * 前端会原样回传。若把它当成"新版本要叫 v1"，就会撞唯一键报 409，
+     * 用户看到的现象是"保存后什么都没发生"。这里钉住"同号 = 未指定 = 自动分配下一个"。
+     */
+    @Test
+    void 编辑生效版本时回传自身版本号应自动追加下一个版本() {
+        when(mapper.selectById(7L)).thenReturn(entity(7L, "CHAT", 1, 1, VALID_CHAT_PROMPT, "[]"));
+        when(mapper.selectMaxVersionNo("CHAT")).thenReturn(1);
+        AdminAiPromptDtos.SaveRequest request = request(VALID_CHAT_PROMPT, 1);
+        request.setVersion("v1");
+
+        AdminAiPromptDtos.SaveResult result = service.update(7L, request);
+
+        assertTrue(result.getAppended());
+        assertEquals("v2", result.getVersion(), "回传自身版本号时必须自动分配下一个，而不是报 409");
+        ArgumentCaptor<AiPromptTemplateEntity> captor = ArgumentCaptor.forClass(AiPromptTemplateEntity.class);
+        verify(mapper).insert(captor.capture());
+        assertEquals(2, captor.getValue().getVersionNo());
+    }
+
+    /**
+     * 同一场景的**高位**版本号（不在 Integer 缓存区间内）。
+     * <p>
+     * 这条是被 e2e 抓出来的：第一版修复写成 `requested == base.getVersionNo()`，
+     * 比的是 Integer 引用，只有 -128..127 的缓存区间才"碰巧"相等 —— v1 过、v900 报 409。
+     * 单测当时只用 v1，正好落在缓存里，于是必须补一条高位版本号的用例把它钉死。
+     */
+    @Test
+    void 编辑生效版本时回传自身的高位版本号同样自动追加() {
+        when(mapper.selectById(30L)).thenReturn(entity(30L, "CHAT", 900, 1, VALID_CHAT_PROMPT, "[]"));
+        when(mapper.selectMaxVersionNo("CHAT")).thenReturn(900);
+        AdminAiPromptDtos.SaveRequest request = request(VALID_CHAT_PROMPT, 1);
+        request.setVersion("v900");
+
+        AdminAiPromptDtos.SaveResult result = service.update(30L, request);
+
+        assertTrue(result.getAppended());
+        assertEquals("v901", result.getVersion(), "高位版本号不能用 == 比较（Integer 缓存区间之外引用不等）");
+    }
+
+    @Test
+    void 编辑生效版本时显式指定空闲版本号会采用它() {
+        when(mapper.selectById(7L)).thenReturn(entity(7L, "CHAT", 1, 1, VALID_CHAT_PROMPT, "[]"));
+        AdminAiPromptDtos.SaveRequest request = request(VALID_CHAT_PROMPT, 1);
+        request.setVersion("v5");
+
+        AdminAiPromptDtos.SaveResult result = service.update(7L, request);
+
+        assertEquals("v5", result.getVersion());
+    }
+
+    @Test
+    void 编辑生效版本时撞上已占用的其它版本号仍然409() {
+        when(mapper.selectById(7L)).thenReturn(entity(7L, "CHAT", 1, 1, VALID_CHAT_PROMPT, "[]"));
+        when(mapper.selectCount(any())).thenReturn(1L);
+        AdminAiPromptDtos.SaveRequest request = request(VALID_CHAT_PROMPT, 1);
+        request.setVersion("v2");
+
+        BizException error = assertThrows(BizException.class, () -> service.update(7L, request));
+
+        assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
+        assertTrue(error.getMessage().contains("已存在版本 v2"));
+    }
+
+    @Test
+    void 草稿可以改版本号() {
+        when(mapper.selectById(9L)).thenReturn(entity(9L, "CHAT", 2, 0, VALID_CHAT_PROMPT, "[]"));
+        when(mapper.updateWithVersion(any(), eq(1L))).thenReturn(1);
+        AdminAiPromptDtos.SaveRequest request = request(VALID_CHAT_PROMPT, 0);
+        request.setVersion("v4");
+        request.setConfigVersion(1L);
+
+        AdminAiPromptDtos.SaveResult result = service.update(9L, request);
+
+        assertEquals("v4", result.getVersion());
+        ArgumentCaptor<AiPromptTemplateEntity> captor = ArgumentCaptor.forClass(AiPromptTemplateEntity.class);
+        verify(mapper).updateWithVersion(captor.capture(), eq(1L));
+        assertEquals(4, captor.getValue().getVersionNo());
+    }
+
+    @Test
+    void 草稿改成已占用的版本号被拒() {
+        when(mapper.selectById(9L)).thenReturn(entity(9L, "CHAT", 2, 0, VALID_CHAT_PROMPT, "[]"));
+        when(mapper.selectCount(any())).thenReturn(1L);
+        AdminAiPromptDtos.SaveRequest request = request(VALID_CHAT_PROMPT, 0);
+        request.setVersion("v7");
+        request.setConfigVersion(1L);
+
+        BizException error = assertThrows(BizException.class, () -> service.update(9L, request));
+
+        assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
+        verify(mapper, never()).updateWithVersion(any(), anyLong());
+    }
+
     @Test
     void 编辑已启用版本时追加新版本且旧版本保留() {
         when(mapper.selectById(7L)).thenReturn(entity(7L, "CHAT", 1, 1, VALID_CHAT_PROMPT, "[]"));

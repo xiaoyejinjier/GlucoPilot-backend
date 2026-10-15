@@ -31,9 +31,10 @@ public interface AiPromptTemplateMapper extends BaseMapper<AiPromptTemplateEntit
             + "WHERE scene_code = #{sceneCode} AND is_deleted = 0")
     int selectMaxVersionNo(@Param("sceneCode") String sceneCode);
 
-    /** 乐观锁更新（只更新内容相关字段）。 */
+    /** 乐观锁更新（内容字段 + {@code version_no}：草稿允许改版本号，见 AdminAiPromptService.update）。 */
     @Update("UPDATE ai_prompt_template SET template_name = #{e.templateName}, prompt_body = #{e.promptBody}, "
             + "variables_json = #{e.variablesJson}, model_code = #{e.modelCode}, "
+            + "version_no = #{e.versionNo}, "
             + "change_note = #{e.changeNote}, is_enabled = #{e.isEnabled}, "
             + "config_version = config_version + 1 "
             + "WHERE id = #{e.id} AND is_deleted = 0 AND config_version = #{expectedVersion}")

@@ -144,9 +144,13 @@ ai:
     window-messages: 20
     # 仓库一次最多捞多少条可回放消息（防御性上限）
     max-fetch: 200
-    # 滚动摘要：长度上限与单次输入上限（字符）
+    # 滚动摘要：长度上限、单次输入上限（字符）与输出 token 上限
     summary-max-chars: 800
-    summary-input-max-chars: 6000
+    # 输入上限从 6000 降到 3000 是实测结论：6000 字摘要在该通道上会读超时（ReadTimeoutException），
+    # 任务失败 → 摘要一直建不起来；摘要对"少一点原文"并不敏感
+    summary-input-max-chars: 3000
+    # 摘要正文只有几百字，封顶可杜绝"模型长篇发挥"拖长生成时间
+    summary-max-tokens: 600
     # 工具结果回放（B3 后半）：是否把最近工具调用的结果摘要注入上下文，以及条数/字符上限
     tool-replay-enabled: true
     tool-replay-max-items: 3

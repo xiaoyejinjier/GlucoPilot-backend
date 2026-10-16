@@ -44,6 +44,7 @@ default-character-set=utf8mb4
 | `cipher-e2e.ps1` | 密钥链路：保存密钥 → 密文落库 → `/test` 解密可用 → 换无效密钥必须 AUTH → 清空回落 yaml | `E2E_DEEPSEEK_KEY`、`E2E_MYSQL_CNF` |
 | `window-check.ps1` | 会话记忆窗口：连续多轮后检查送给模型的历史条数符合 `ai.memory.window-messages` | 后端在跑 |
 | `prompt-e2e.ps1` | 提示词管理 + 场景绑定：阻断式校验（3 个反例）→ 新增草稿 → 草稿原地编辑 + 乐观锁 409 → 启用 → **新会话落库的 `chat_session.system_prompt_ver` 变成新版**（端到端证明"下一条消息用新提示词"）→ 回滚 → 场景参数保存/乐观锁/清空覆盖 | 后端在跑、`E2E_MYSQL_CNF`（会改库：临时提示词版本与场景参数，脚本结束前自行清理/还原；不需 `E2E_DEEPSEEK_KEY`，全程不调模型） |
+| `session-e2e.ps1` | 会话生命周期：新建会话（旧会话必须被结束）→ 历史写入/读取/翻页 → 5.3 列表（排序/预览/状态过滤）→ 已结束会话禁止写入 → 置顶 → 5.4 删除（幂等 + 越权 404 + 消息一并逻辑删除） | 后端在跑、`E2E_MYSQL_CNF`（会改库：临时会话与消息，结束前逻辑删除还原；**不需 `E2E_DEEPSEEK_KEY`**，全程不调模型） |
 | `mock-data.ps1` | 生成近一个月的血糖/饮食/健康档案模拟数据（标记 `【模拟数据】`，便于清理） | `E2E_MYSQL_CNF` |
 
 示例：

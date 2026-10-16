@@ -10,6 +10,8 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.ai.support.SqlDuplicateKeys;
+import com.threadfit.glucopilot.file.entity.MediaFile;
+import com.threadfit.glucopilot.file.service.MediaFileService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -17,6 +19,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * 用户消息写入（对应接口 2.24）。
@@ -46,15 +53,20 @@ public class ChatMessageService {
     /** seq_no 撞唯一键后的重试次数：窗口是"两条 SQL 之间"的毫秒级，1 次重试即可覆盖正常并发。 */
     private static final int SEQ_NO_RETRY = 3;
 
+    /** 历史消息每页条数（默认与上限）。 */
+    private static final int DEFAULT_HISTORY_PAGE_SIZE = 20;
+    private static final int MAX_HISTORY_PAGE_SIZE = 100;
+
     private final ChatMessageMapper chatMessageMapper;
     private final ChatSessionMapper chatSessionMapper;
     private final ChatSessionService chatSessionService;
     private final OwnedMediaResolver ownedMediaResolver;
+    private final MediaFileService mediaFileService;
 
     @Transactional
     public ChatDtos.SendMessageResponse appendUserMessage(Long userId, Long sessionId, ChatDtos.SendMessageRequest request) {
-        // 归属校验：不属于当前用户按 404 处理
-        chatSessionService.requireOwned(userId, sessionId);
+        // 归属校验 + 状态校验：不属于当前用户按 404；已结束/已归档的会话不能继续写（见 requireActive 注释）
+        chatSessionService.requireActive(userId, sessionId);
         validatePayload(request);
         requireOwnedMedia(userId, request);
 
@@ -136,6 +148,83 @@ public class ChatMessageService {
                 .id(message.getId())
                 .seqNo(message.getSeqNo())
                 .build();
+    }
+
+    // ------------------------------------------------------------------ 会话内历史读取
+
+    /**
+     * 读会话内历史消息（契约外补充接口；2.23~2.25 之外，UI 打开历史会话必需）。
+     *
+     * <h2>与"记忆窗口"的区别（务必别混）</h2>
+     * 这里返回的是<b>全部历史</b>，与送进模型的最近 N 条（{@code ai.memory.window-messages}）无关：
+     * 用户能在界面上往上翻到很久以前的对话，而模型只看得到最近一小段。两者刻意不同——
+     * 让用户"看不到自己说过的话"是不可接受的，而把全部历史塞进 prompt 会烧钱且超上下文。
+     * 界面上如果出现"模型不记得但我明明看得见"，根因就在这里，不是 bug。
+     *
+     * <h2>分页</h2>
+     * 按 {@code seq_no} 倒序取 N 条再反转成正序返回（{@code beforeSeq} 传上一页最早那条的 seq_no），
+     * 复用 {@code uk_session_seq(session_id, seq_no)} 索引；{@code hasMore} 用"多取一条"判断，
+     * 不额外查总数（历史消息可能上万条，COUNT 没有意义）。
+     */
+    public ChatDtos.HistoryResponse readHistory(Long userId, Long sessionId, Integer pageSize, Integer beforeSeq) {
+        chatSessionService.requireOwned(userId, sessionId);
+        int limit = pageSize == null || pageSize <= 0 ? DEFAULT_HISTORY_PAGE_SIZE
+                : Math.min(pageSize, MAX_HISTORY_PAGE_SIZE);
+        int maxSeqNo = beforeSeq == null || beforeSeq <= 0 ? Integer.MAX_VALUE : beforeSeq - 1;
+
+        // 多取一条用于判断"还有更早的"，返回前丢掉
+        List<ChatMessage> rows = chatMessageMapper.selectRecent(sessionId, maxSeqNo, limit + 1);
+        boolean hasMore = rows.size() > limit;
+        if (hasMore) {
+            rows = rows.subList(0, limit);
+        }
+
+        Map<Long, String> mediaUrls = mediaUrls(userId, rows);
+        List<ChatDtos.HistoryMessage> records = new ArrayList<>(rows.size());
+        // 查询是倒序，反转成正序给前端（对话要按时间从上到下渲染）
+        for (int i = rows.size() - 1; i >= 0; i--) {
+            ChatMessage row = rows.get(i);
+            records.add(ChatDtos.HistoryMessage.builder()
+                    .id(row.getId())
+                    .seqNo(row.getSeqNo())
+                    .msgRole(row.getMsgRole())
+                    .msgType(row.getMsgType())
+                    .contentText(row.getContentText())
+                    .mediaId(row.getMediaId())
+                    .mediaUrl(row.getMediaId() == null ? null : mediaUrls.get(row.getMediaId()))
+                    .modelCode(row.getModelCode())
+                    .finishReason(row.getFinishReason())
+                    .createdAt(row.getGmtCreate())
+                    .build());
+        }
+        Integer nextBeforeSeq = rows.isEmpty() ? null : rows.get(rows.size() - 1).getSeqNo();
+        return ChatDtos.HistoryResponse.builder()
+                .records(records)
+                .hasMore(hasMore)
+                .nextBeforeSeq(nextBeforeSeq)
+                .build();
+    }
+
+    /**
+     * 批量取本页图片消息的可访问地址。
+     * <p>
+     * 只取一次（{@code listOwnedByIds}），不做逐条查询：一页 20 条里可能有几张图，
+     * 逐条查就是 N+1。取不到的（已删除/已过期）在响应里就是 null，前端按"图片已失效"渲染。
+     */
+    private Map<Long, String> mediaUrls(Long userId, List<ChatMessage> rows) {
+        List<Long> mediaIds = rows.stream()
+                .map(ChatMessage::getMediaId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (mediaIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> urls = new HashMap<>();
+        for (MediaFile media : mediaFileService.listOwnedByIds(mediaIds, userId, CodeEnum.MediaBizType.CHAT_IMAGE)) {
+            urls.put(media.getId(), media.getFileUrl());
+        }
+        return urls;
     }
 
     /**

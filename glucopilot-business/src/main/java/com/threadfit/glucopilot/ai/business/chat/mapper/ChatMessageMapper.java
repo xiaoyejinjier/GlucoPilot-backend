@@ -82,8 +82,32 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
     /**
      * 逻辑删除会话内全部消息（接口 5.4 删除会话）。
      * DDL 的 chk_cm_del_consistent 要求 is_deleted=1 时 deleted_at 非空，deleted_by 可空。
+     * <p>
+     * {@code deletedBy} 允许为 null：框架的记忆接口（{@code deleteByConversationId}）里拿不到
+     * 当前操作人，那条路径传 null；接口 5.4 走的是 {@code ChatSessionService.delete}，会传 userId。
      */
-    @Update("UPDATE chat_message SET is_deleted = 1, deleted_at = NOW(3) "
+    @Update("UPDATE chat_message SET is_deleted = 1, deleted_at = NOW(3), deleted_by = #{deletedBy} "
             + "WHERE session_id = #{sessionId} AND is_deleted = 0")
-    int logicDeleteBySession(@Param("sessionId") Long sessionId);
+    int logicDeleteBySession(@Param("sessionId") Long sessionId, @Param("deletedBy") Long deletedBy);
+
+    /**
+     * 列表页的"最后一条消息"预览：一次查询取回整页会话的最后一条可展示消息。
+     * <p>
+     * 用窗口函数在 SQL 里做分区取首，而不是"每个会话查一次"——后者是纯 N+1，
+     * 会话一多列表页就要发几十条 SQL。只取 1/2 角色、按 seq_no 倒序取第一条；
+     * 图片消息没有正文时用 {@code media_caption} 兜底（与记忆回放的兜底口径一致）。
+     *
+     * @return 行：{@code session_id} / {@code preview}（取不到时为 null，调用方按"暂无消息"展示）
+     */
+    @Select("<script>"
+            + "SELECT session_id AS sessionId, LEFT(COALESCE(NULLIF(content_text, ''), "
+            + "CONCAT('[图片] ', NULLIF(media_caption, ''))), 60) AS preview FROM ("
+            + "  SELECT session_id, content_text, media_caption, "
+            + "         ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq_no DESC, id DESC) AS rn "
+            + "    FROM chat_message WHERE is_deleted = 0 AND msg_role IN (1, 2) "
+            + "     AND session_id IN <foreach collection='sessionIds' item='sid' open='(' separator=',' close=')'>#{sid}</foreach>"
+            + ") t WHERE rn = 1"
+            + "</script>")
+    List<java.util.Map<String, Object>> selectLastMessagePerSession(
+            @Param("sessionIds") java.util.Collection<Long> sessionIds);
 }

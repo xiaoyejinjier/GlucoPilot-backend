@@ -44,6 +44,9 @@ public class AiToolRegistry {
     /** 直接以单个 ToolCallback 形式注册的工具。 */
     private final ObjectProvider<ToolCallback> singleCallbacks;
 
+    /** 工具调用元数据登记（B3）：给每个放行的工具套一层装饰器。 */
+    private final ToolCallTraceRecorder traceRecorder;
+
     /** 过滤后允许送给模型的工具清单。 */
     public List<ToolCallback> callbacks() {
         List<ToolCallback> registered = registered();
@@ -60,7 +63,11 @@ public class AiToolRegistry {
         Set<String> allowedNames = names(allowed);
         warnAboutMissingBeans(allowList, names(registered));
         log.info("AI 工具白名单生效：{}", allowedNames.isEmpty() ? "（无，模型不会收到任何工具）" : allowedNames);
-        return allowed;
+        // 统一套一层记账装饰器（B3）：模型能看到的每个工具都会被记下"调没调、成没成、多久"。
+        // 包在这里而不是各调用点：只此一处，新增工具自动获得同样的可观测性。
+        return allowed.stream()
+                .map(callback -> (ToolCallback) new TracingToolCallback(callback, traceRecorder))
+                .toList();
     }
 
     /** 汇总两条来源的工具，按名字去重（同名以先注册者为准，并告警）。 */

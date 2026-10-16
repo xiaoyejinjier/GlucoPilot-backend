@@ -44,10 +44,30 @@ public class AIProperties {
 
     private PromptProperties prompt = new PromptProperties();
 
+    private ChatProperties chat = new ChatProperties();
+
     @Data
     public static class MealProperties {
         private String model = "qwen3-vl-plus";
         private int maxTokens = 2048;
+    }
+
+    /**
+     * 会话生命周期参数（接口 5.3 列表 / 5.4 删除 / 2.23 新建）。
+     */
+    @Data
+    public static class ChatProperties {
+
+        /**
+         * 惰性归档阈值（天）：拉会话列表时，把"进行中但超过这么多天没有新消息"的会话置为 0 归档。
+         * <p>
+         * 为什么用惰性而不是定时任务：归档只影响列表展示，以及"下次进来是否接着上次那条会话说"，
+         * 不值得为它引入 quartz 任务的部署、多实例去重与失败重试成本。设为 0 表示关闭归档。
+         */
+        private int archiveIdleDays = 30;
+
+        /** 会话列表每页条数上限（防止前端传 pageSize=100000 把库拖垮）。 */
+        private int maxPageSize = 50;
     }
 
     /**

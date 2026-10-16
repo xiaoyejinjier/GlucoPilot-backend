@@ -1,7 +1,10 @@
 package com.threadfit.glucopilot.ai.business.chat.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatDtos;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
@@ -15,9 +18,24 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
- * 会话生命周期（对应接口 2.23）。L1 只做 get-or-create 与冗余列维护，不做列表/删除（二期）。
+ * 会话生命周期：2.23 取/建会话（含"新建"）、5.3 列表、5.4 删除、置顶、以及"能不能继续写"的状态校验。
+ * <p>
+ * <b>状态语义</b>（契约只写了 0/1/2 三个值，没定义区别，这里定死并在文档里写清）：
+ * <ul>
+ *   <li>{@code 1 进行中}：每用户至多一条（由 {@code uk_user_active} 保证），只有它能继续发消息；</li>
+ *   <li>{@code 2 已结束}：用户主动"新建对话"时把旧的那条置为它，历史会话默认按它展示；</li>
+ *   <li>{@code 0 归档}：太久没说话（{@code ai.chat.archive-idle-days}）由列表接口<b>惰性</b>标记，
+ *       列表默认折叠，语义是"不用再出现在最近列表里了"。</li>
+ * </ul>
  */
 @Slf4j
 @Service
@@ -28,8 +46,15 @@ public class ChatSessionService {
     public static final String DEFAULT_TITLE = "新对话";
     /** 标题截取长度 */
     private static final int TITLE_MAX = 20;
+    /** 状态：0 归档 / 1 进行中 / 2 已结束 */
+    private static final int STATUS_ARCHIVED = 0;
+    private static final int STATUS_ACTIVE = 1;
+    private static final int STATUS_ENDED = 2;
+    /** 列表页默认/最大条数 */
+    private static final int DEFAULT_PAGE_SIZE = 20;
 
     private final ChatSessionMapper chatSessionMapper;
+    private final ChatMessageMapper chatMessageMapper;
     private final AIProperties aiProperties;
     private final AiChatClientRegistry chatClientRegistry;
     private final AiPromptTemplateService promptTemplateService;
@@ -53,6 +78,26 @@ public class ChatSessionService {
         if (existing != null) {
             return existing;
         }
+        return insertNewSession(userId, sessionType);
+    }
+
+    /**
+     * 新建会话（2.23 的 {@code forceNew=true}，以及"上次会话太久没说话"时由惰性归档让路）。
+     * <p>
+     * <b>必须先结束旧的进行中会话，且在同一个事务里</b>：{@code uk_user_active} 建在生成列
+     * {@code active_user_id} 上（只有 {@code session_status = 1 AND is_deleted = 0} 时才等于 user_id），
+     * 不结束旧的就插新的必然撞 1062。这与 {@link #getOrCreate} 的错误语义<b>不同</b>：
+     * 那里撞 1062 是"并发建会话"，复用它是对的；这里撞 1062 只能是并发新建，回查返回并发方建的那条。
+     */
+    @Transactional
+    public ChatSession openNew(Long userId, Integer sessionType) {
+        int ended = chatSessionMapper.endActiveSessions(userId);
+        log.info("新建会话：先结束旧的进行中会话 userId={} ended={}", userId, ended);
+        return insertNewSession(userId, sessionType);
+    }
+
+    /** 插入一条进行中会话；撞 {@code uk_user_active} 时回查并发方建好的那条（与 getOrCreate 同一套收敛语义）。 */
+    private ChatSession insertNewSession(Long userId, Integer sessionType) {
         ChatSession session = new ChatSession();
         session.setUserId(userId);
         session.setTitle(DEFAULT_TITLE);
@@ -61,6 +106,8 @@ public class ChatSessionService {
         session.setModelCode(chatClientRegistry.modelCode(SceneCode.CHAT));
         // 落提示词版本标签（如 chat@v1），而不是文件名：换提示词内容但版本号不变时，历史消息仍可追溯
         session.setSystemPromptVer(promptTemplateService.versionTag(SceneCode.CHAT));
+        // V21 起这一列已废弃（读取侧只认 ai.memory.window-messages），仍然写上：
+        // 列是 NOT NULL 且带 CHECK(1..200)，写它比留默认值更能反映"创建当时的窗口配置"（追溯用）
         session.setWindowMsgCount(aiProperties.getMemory().getWindowMessages());
         session.setMsgCount(0);
         session.setIsPinned(CodeEnum.YesNo.NO.getCode());
@@ -80,6 +127,134 @@ public class ChatSessionService {
             log.info("并发建会话落败，复用已有进行中会话 userId={} sessionId={}", userId, winner.getId());
             return winner;
         }
+    }
+
+    // ------------------------------------------------------------------ 5.3 列表（含惰性归档）
+
+    /**
+     * 会话列表（接口 5.3）。
+     * <p>
+     * 排序 {@code is_pinned DESC, last_msg_at DESC, id DESC}：置顶在最前，
+     * 其次按最近消息时间，最后用 id 兜底保证分页稳定（否则同一时间的多条会话顺序会飘，
+     * 翻页时可能重复或漏掉）。{@code last_msg_at} 为 NULL 的空会话在 DESC 里自然排到最后。
+     * <p>
+     * 「最后一条消息预览」用一次窗口函数查询批量取回，不做 N+1。
+     */
+    public ChatDtos.SessionListResponse list(Long userId, Integer sessionStatus, Integer pageNum, Integer pageSize) {
+        archiveIdleSessions(userId);
+
+        int size = pageSize == null || pageSize <= 0 ? DEFAULT_PAGE_SIZE
+                : Math.min(pageSize, aiProperties.getChat().getMaxPageSize());
+        int page = pageNum == null || pageNum <= 0 ? 1 : pageNum;
+
+        LambdaQueryWrapper<ChatSession> wrapper = new LambdaQueryWrapper<ChatSession>()
+                .eq(ChatSession::getUserId, userId)
+                .eq(sessionStatus != null, ChatSession::getSessionStatus, sessionStatus)
+                .orderByDesc(ChatSession::getIsPinned)
+                .orderByDesc(ChatSession::getLastMsgAt)
+                .orderByDesc(ChatSession::getId);
+        Page<ChatSession> result = chatSessionMapper.selectPage(new Page<>(page, size), wrapper);
+
+        List<ChatSession> rows = result.getRecords();
+        Map<Long, String> previews = previews(rows);
+        List<ChatDtos.SessionRow> records = new ArrayList<>(rows.size());
+        for (ChatSession row : rows) {
+            records.add(ChatDtos.SessionRow.builder()
+                    .id(row.getId())
+                    .title(row.getTitle())
+                    .sessionStatus(row.getSessionStatus())
+                    .sessionType(row.getSessionType())
+                    .msgCount(row.getMsgCount())
+                    .isPinned(row.getIsPinned() != null && row.getIsPinned() == CodeEnum.YesNo.YES.getCode())
+                    .lastMsgAt(row.getLastMsgAt())
+                    .createdAt(row.getGmtCreate())
+                    .lastMessagePreview(previews.get(row.getId()))
+                    .build());
+        }
+        return ChatDtos.SessionListResponse.builder()
+                .records(records)
+                .total(result.getTotal())
+                .archiveIdleDays(aiProperties.getChat().getArchiveIdleDays())
+                .build();
+    }
+
+    /**
+     * 惰性归档：把该用户"进行中但太久没消息"的会话置为归档。
+     * <p>
+     * <b>失败只记日志</b>：归档是展示语义，不能因为一条清理语句失败就让用户看不到会话列表。
+     */
+    private void archiveIdleSessions(Long userId) {
+        int days = aiProperties.getChat().getArchiveIdleDays();
+        if (days <= 0) {
+            return;
+        }
+        try {
+            int archived = chatSessionMapper.archiveIdleSessions(userId, LocalDateTime.now().minusDays(days));
+            if (archived > 0) {
+                log.info("惰性归档会话 userId={} 条数={} 阈值={}天", userId, archived, days);
+            }
+        } catch (RuntimeException e) {
+            log.warn("惰性归档会话失败（不影响列表返回）userId={}", userId, e);
+        }
+    }
+
+    private Map<Long, String> previews(List<ChatSession> rows) {
+        List<Long> ids = rows.stream().map(ChatSession::getId).toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> previews = new HashMap<>();
+        for (Map<String, Object> row : chatMessageMapper.selectLastMessagePerSession(ids)) {
+            Object sessionId = row.get("sessionId");
+            Object preview = row.get("preview");
+            if (sessionId != null && preview != null) {
+                previews.put(((Number) sessionId).longValue(), String.valueOf(preview).trim());
+            }
+        }
+        return previews;
+    }
+
+    // ------------------------------------------------------------------ 5.4 删除 / 置顶
+
+    /**
+     * 删除会话（接口 5.4）：会话与其消息<b>同事务</b>逻辑删除。
+     * <p>
+     * 幂等语义（三态区分，靠 {@link ChatSessionMapper#selectByIdIncludingDeleted}）：
+     * <ul>
+     *   <li>从不存在 → 404；</li>
+     *   <li>存在但不是自己的 → 404（与其它接口一致，不用 403 泄露"该会话存在"）；</li>
+     *   <li>是自己的且已经删过 → 直接成功（重试/双击不该弹错）。</li>
+     * </ul>
+     * 删掉的如果是进行中会话：`/current` 下次会新建一条（不需要在这里补建）。
+     */
+    @Transactional
+    public void delete(Long userId, Long sessionId) {
+        ChatSession session = chatSessionMapper.selectByIdIncludingDeleted(sessionId);
+        if (session == null || !userId.equals(session.getUserId())) {
+            throw new BizException(ErrorCode.NOT_FOUND, "会话不存在或不属于当前用户");
+        }
+        if (session.getIsDeleted() != null && session.getIsDeleted() == CodeEnum.YesNo.YES.getCode()) {
+            log.debug("会话已是删除状态，按幂等成功返回 userId={} sessionId={}", userId, sessionId);
+            return;
+        }
+        int messages = chatMessageMapper.logicDeleteBySession(sessionId, userId);
+        if (chatSessionMapper.logicDeleteSession(sessionId, userId) == 0) {
+            // 会话在本次事务里被别人删掉了（或状态变了）：消息已删，这里当作幂等成功
+            log.info("删除会话时发现它已被并发删除 userId={} sessionId={} 消息已删 {} 条", userId, sessionId, messages);
+            return;
+        }
+        log.info("删除会话 userId={} sessionId={} 一并逻辑删除消息 {} 条", userId, sessionId, messages);
+    }
+
+    /** 置顶/取消置顶（契约只给了 is_pinned 字段，没有接口，这里补最小写接口）。 */
+    public void setPinned(Long userId, Long sessionId, boolean pinned) {
+        requireOwned(userId, sessionId);
+        int updated = chatSessionMapper.updatePinned(sessionId, userId,
+                pinned ? CodeEnum.YesNo.YES.getCode() : CodeEnum.YesNo.NO.getCode());
+        if (updated == 0) {
+            throw new BizException(ErrorCode.NOT_FOUND, "会话不存在或不属于当前用户");
+        }
+        log.info("会话置顶状态更新 userId={} sessionId={} isPinned={}", userId, sessionId, pinned);
     }
 
     /**
@@ -104,6 +279,27 @@ public class ChatSessionService {
             title = title.substring(0, TITLE_MAX);
         }
         chatSessionMapper.renameIfDefault(sessionId, title, DEFAULT_TITLE);
+    }
+
+    /**
+     * 校验"这个会话还能继续写"（2.24 / 2.25 用）。
+     * <p>
+     * <b>为什么要挡</b>：归档/已结束的会话代表"这段对话已经翻篇"。若允许继续往里写，
+     * 就会出现两种分裂：① 用户在小程序里打开历史会话发消息，消息进了老会话，
+     * 而 `/current` 返回的却是另一条新会话（下一次刷新历史就找不到了）；
+     * ② 被归档的会话因为一条新消息又"活"过来，但 {@code session_status} 仍是归档，
+     * 列表里它既不在"最近"也不在"进行中"，彻底说不清。
+     * 因此这里明确拒绝，并让前端提示"该会话已结束，请新建对话"。
+     */
+    public ChatSession requireActive(Long userId, Long sessionId) {
+        ChatSession session = requireOwned(userId, sessionId);
+        if (session.getSessionStatus() == null || session.getSessionStatus() != STATUS_ACTIVE) {
+            throw new BizException(ErrorCode.BIZ_REJECTED,
+                    session.getSessionStatus() != null && session.getSessionStatus() == STATUS_ARCHIVED
+                            ? "该会话已归档，不能继续发送消息：请新建对话"
+                            : "该会话已结束，不能继续发送消息：请新建对话");
+        }
+        return session;
     }
 
     public ChatDtos.SessionResponse toResponse(ChatSession session) {

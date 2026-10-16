@@ -9,7 +9,12 @@ import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.memory.ChatMemoryAdvisorParams;
+import com.threadfit.glucopilot.ai.memory.ChatSummaryService;
+import com.threadfit.glucopilot.ai.memory.TokenEstimator;
+import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.tool.AiToolContext;
+import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
@@ -128,6 +133,19 @@ public class ChatCompletionService {
     /** 单飞 key 前缀；key 用用户消息 id（全局唯一），因此不需要再拼 sessionId。 */
     private static final String ROUND_KEY_PREFIX = "chat-round:";
 
+    /**
+     * 固定开销里"消息骨架 + 工具调用协议"的粗略常量（② 期）。
+     * <p>
+     * 系统提示词与工具定义之外的额外开销：每条消息的 role 标记、工具调用的 JSON 包装等。
+     * 取一个偏小的常量即可——它只用于让预算估算别太乐观，具体误差由校准环节吸收。
+     */
+    private static final int FIXED_OVERHEAD_MESSAGE_SKELETON = 64;
+
+    /** 固定开销估算的缓存（按提示词指纹失效），volatile：多个请求线程会读。 */
+    private volatile int fixedOverheadCache;
+
+    private volatile int fixedOverheadFingerprint = Integer.MIN_VALUE;
+
     private final AiChatClientRegistry chatClientRegistry;
     private final ChatMessageMapper chatMessageMapper;
     private final ChatSessionService chatSessionService;
@@ -137,6 +155,13 @@ public class ChatCompletionService {
     private final EnglishPreambleGuard englishPreambleGuard;
     private final ChatRoundGuard roundGuard;
     private final JsonUtils jsonUtils;
+    /** ② 期：固定开销估算要用它（系统提示词），校准要用它（估算 token）。 */
+    private final AiPromptTemplateService promptTemplateService;
+    /** ② 期：工具定义本身也吃 token，估算固定开销时要把工具名与描述算进去。 */
+    private final AiToolRegistry toolRegistry;
+    private final TokenEstimator tokenEstimator;
+    /** ② 期：本轮落库后按需触发异步摘要。 */
+    private final ChatSummaryService chatSummaryService;
 
     public Flux<ServerSentEvent<byte[]>> complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
         // 同步校验：这些异常在返回 Flux 之前抛出，客户端拿到的仍是标准 JSON 错误响应
@@ -198,9 +223,17 @@ public class ChatCompletionService {
         // 单飞键就是 chat-round:<userMsgId>，工具元数据与日志用同一个键，排障时能直接对上
         toolContext.put(AiToolContext.CALL_COUNTER, new AtomicInteger());
 
+        // ② 期：记忆装配要按 token 预算裁剪，因此需要"固定开销"与"估算回写槽"。
+        // 两者都通过 advisor 参数传进去（Advisor 回调不在请求线程上，只能这样传）。
+        int fixedOverhead = estimateFixedOverhead();
+        AtomicInteger promptEstimate = new AtomicInteger();
+
         ChatClient.ChatClientRequestSpec promptSpec = chatClientRegistry.textClient()
                 .prompt()
-                .advisors(advisors -> advisors.param(ChatMemory.CONVERSATION_ID, sessionId.toString()))
+                .advisors(advisors -> advisors
+                        .param(ChatMemory.CONVERSATION_ID, sessionId.toString())
+                        .param(ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS, fixedOverhead)
+                        .param(ChatMemoryAdvisorParams.PROMPT_ESTIMATE, promptEstimate))
                 // 工具上下文：当前用户身份由服务端注入，模型看不到也伪造不了。
                 // 缺了这一步，工具一旦被调用就会因取不到 userId 而失败（见 AiToolContext）。
                 .toolContext(toolContext)
@@ -222,10 +255,17 @@ public class ChatCompletionService {
                     if (finishReason == null) {
                         finishReason = CodeEnum.ChatFinishReason.NORMAL.getCode();
                     }
+                    // ② 期：装配器把本轮估算写回了这个槽（同一个对象引用），落库前取回，
+                    // 供"用真实 prompt_tokens 校准估算器"使用
+                    state.estimatedPromptTokens = promptEstimate.get();
                     ChatMessage saved = persist(userId, sessionId, target, input, state, finishReason, latencyMs);
+                    calibrateEstimate(state);
                     log.info("流式补全完成 userId={} sessionId={} assistantMsgId={} latencyMs={} tokens={}/{} finish={}",
                             userId, sessionId, saved.getId(), latencyMs,
                             state.promptTokens, state.completionTokens, finishReason);
+                    // ② 期：本轮已落库 → 若已有消息落在窗口之外，异步把它们压缩进滚动摘要
+                    // （不阻塞、失败只记日志，绝不影响这一轮已经成功的回复）
+                    chatSummaryService.maybeSummarizeAsync(userId, sessionId);
                     return doneEvent(saved);
                 })
                 .subscribeOn(Schedulers.boundedElastic());
@@ -358,6 +398,56 @@ public class ChatCompletionService {
                 (int) Math.min(latencyMs, Integer.MAX_VALUE));
         writeBackCaption(target, input);
         return saved;
+    }
+
+    /**
+     * 固定开销（系统提示词 + 工具定义）的估算 token（② 期）。
+     * <p>
+     * 为什么必须扣掉它：装配器只知道"历史 + 摘要"要花多少，而真实 prompt 里还有一大块固定内容
+     * ——实测一轮几乎空的对话（系统提示词 1651 字 + 6 个工具定义）就已经 5012 prompt tokens。
+     * 不扣掉就会系统性超预算，预算形同虚设。
+     * <p>
+     * 只估算一次并缓存：这些内容在一次请求内不会变，而估算要遍历 JSON schema（不便宜）。
+     * 缓存按"提示词文本 + 工具定义文本"的指纹失效——后台改完提示词会立即重算。
+     */
+    private int estimateFixedOverhead() {
+        String system = promptTemplateService.systemPrompt(SceneCode.CHAT);
+        StringBuilder tools = new StringBuilder();
+        for (org.springframework.ai.tool.ToolCallback callback : toolRegistry.callbacks()) {
+            tools.append(callback.getToolDefinition().name())
+                    .append(callback.getToolDefinition().description())
+                    .append(callback.getToolDefinition().inputSchema());
+        }
+        int estimate = tokenEstimator.estimateMessage(system) + tokenEstimator.estimate(tools.toString());
+        // 加上每轮消息骨架（role/分隔符）与工具调用协议开销的粗略常量
+        estimate += FIXED_OVERHEAD_MESSAGE_SKELETON;
+        cacheFixedOverhead(system.hashCode(), estimate);
+        return estimate;
+    }
+
+    private void cacheFixedOverhead(int promptFingerprint, int estimate) {
+        if (this.fixedOverheadFingerprint == promptFingerprint) {
+            return;
+        }
+        this.fixedOverheadFingerprint = promptFingerprint;
+        this.fixedOverheadCache = estimate;
+        log.debug("固定开销估算缓存更新：promptFingerprint={} tokens={}", promptFingerprint, estimate);
+    }
+
+    /**
+     * 用厂商返回的真实用量校准估算器（② 期）。
+     * <p>
+     * 这是整套 token 预算唯一能"自我纠正"的地方：估算器只是启发式，真实值每轮都有
+     * （{@code chat_message.prompt_tokens}），把两者的比例反馈回去，几轮之后估算就贴近实际。
+     */
+    private void calibrateEstimate(StreamState state) {
+        if (state.promptTokens == null || state.promptTokens <= 0 || state.estimatedPromptTokens <= 0) {
+            return;
+        }
+        tokenEstimator.calibrate(state.promptTokens, state.estimatedPromptTokens);
+        // 用 INFO 打：估算器是否在收敛，是"预算有没有真正起作用"的唯一可观测证据（DEBUG 线上看不到）
+        log.info("记忆估算校准：真实prompt_tokens={} 估算={} 当前系数={}",
+                state.promptTokens, state.estimatedPromptTokens, String.format("%.2f", tokenEstimator.factor()));
     }
 
     /**
@@ -515,5 +605,7 @@ public class ChatCompletionService {
         private String providerFinishReason;
         /** 本轮是否已落库：防止「落库失败 → 错误分支再落一次」造成重复行。 */
         private boolean persisted;
+        /** ② 期：记忆装配器对本轮 prompt 的估算（用于与真实 prompt_tokens 比对校准）。 */
+        private int estimatedPromptTokens;
     }
 }

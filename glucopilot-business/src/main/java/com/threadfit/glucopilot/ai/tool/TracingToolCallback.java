@@ -43,10 +43,12 @@ public class TracingToolCallback implements ToolCallback {
         long startNanos = System.nanoTime();
         try {
             String result = delegate.call(toolInput, toolContext);
-            recorder.record(toolContext, name(), true, elapsedMs(startNanos), null);
+            // 结果原文只在这个装饰器里过一手：压缩成关键字段摘要后落库（② 期），
+            // 完整返回不落库（那是用户健康数据，多存一份就多一份责任）。
+            recorder.record(toolContext, name(), true, elapsedMs(startNanos), null, result);
             return result;
         } catch (RuntimeException e) {
-            recorder.record(toolContext, name(), false, elapsedMs(startNanos), e.getClass().getSimpleName());
+            recorder.record(toolContext, name(), false, elapsedMs(startNanos), e.getClass().getSimpleName(), null);
             throw e;
         }
     }

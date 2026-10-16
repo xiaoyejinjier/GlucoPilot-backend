@@ -53,6 +53,14 @@ public class ChatToolCall {
     /** 失败时的异常类名（只记类名，不记消息正文，避免把用户数据写进库）。 */
     private String errorType;
 
+    /**
+     * 工具结果的**关键字段摘要**（≤512 字，② 期新增）。
+     * <p>
+     * 用于会话记忆回放：让模型能引用"上一轮查到的数据"，而不是重新调工具。
+     * 刻意只存摘要、不存完整返回——完整返回是用户的血糖/饮食原始数据，多存一份就多一份隐私责任。
+     */
+    private String resultDigest;
+
     /** 由 DDL 的 DEFAULT CURRENT_TIMESTAMP(3) 填充，代码不写。 */
     private LocalDateTime gmtCreate;
 }

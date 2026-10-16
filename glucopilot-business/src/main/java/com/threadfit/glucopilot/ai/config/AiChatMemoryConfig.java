@@ -1,5 +1,7 @@
 package com.threadfit.glucopilot.ai.config;
 
+import com.threadfit.glucopilot.ai.memory.ChatContextReader;
+import com.threadfit.glucopilot.ai.memory.ChatHistoryAssembler;
 import com.threadfit.glucopilot.ai.memory.ChatMemoryReadAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
@@ -18,8 +20,8 @@ import org.springframework.context.annotation.Configuration;
  * <b>⚠️ 窗口裁剪不在这里的 {@code maxMessages} 上（2026-10-12 修正）</b>：核对框架字节码后确认
  * {@code MessageWindowChatMemory.get()} 是<b>纯透传</b>、不做裁剪，裁剪只发生在 {@code add()} 路径上；
  * 而本项目从不走 {@code add()} 写记忆（{@code saveAll()} 主动抛异常，写入由业务 Service 显式完成）。
- * 也就是说 {@code maxMessages} 在当前实现下<b>不产生任何效果</b>——真正决定"送多少条进 prompt"的是
- * {@link ChatMemoryReadAdvisor} 里的 {@code keepLastWindow(...)}。
+ * 也就是说 {@code maxMessages} 在当前实现下<b>不产生任何效果</b>——真正决定"送多少进 prompt"的是
+ * {@link ChatMemoryReadAdvisor}（② 期起改为按 token 预算装配，见 {@code ChatHistoryAssembler}）。
  * 这里仍显式设置 {@code maxMessages}，是为了让"窗口语义"在读/写两侧都指向同一个配置项，
  * 避免将来一旦启用框架的写路径时窗口悄悄退化成框架默认值。
  * <p>
@@ -38,8 +40,10 @@ public class AiChatMemoryConfig {
     }
 
     @Bean
-    public ChatMemoryReadAdvisor chatMemoryReadAdvisor(ChatMemory chatMemory, AIProperties aiProperties) {
-        // 窗口条数显式传进去：它只影响"读"，与本类的 maxMessages（只影响"写"）是两回事
-        return new ChatMemoryReadAdvisor(chatMemory, aiProperties.getMemory().getWindowMessages());
+    public ChatMemoryReadAdvisor chatMemoryReadAdvisor(ChatMemory chatMemory,
+                                                       ChatHistoryAssembler chatHistoryAssembler,
+                                                       ChatContextReader chatContextReader) {
+        // ② 期起窗口由装配器按 token 预算决定（读侧），与本类的 maxMessages（只影响写）是两回事
+        return new ChatMemoryReadAdvisor(chatMemory, chatHistoryAssembler, chatContextReader);
     }
 }

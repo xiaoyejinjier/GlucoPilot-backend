@@ -212,4 +212,31 @@ public class SceneModelResolver {
         }
         return builder;
     }
+
+    /**
+     * 摘要场景的请求级参数（② 期）。
+     * <p>
+     * 与普通文本场景的差别，都是为了"别让摘要本身把预算与时延吃掉"：
+     * <ul>
+     *   <li><b>关掉思维链</b>：摘要是压缩原文而不是推理，开思维链只会让首 token 更慢
+     *       ——实测 6000 字输入叠加思维链会直接读超时，任务失败、摘要一直建不起来；</li>
+     *   <li><b>输出封顶</b>（{@code ai.memory.summary-max-tokens}）：摘要正文只有几百字，
+     *       给上限可以杜绝"模型长篇发挥"拖长生成时间；</li>
+     *   <li>温度取场景配置（后台 {@code ai_scene_config} 优先，其次 yaml）：要稳定复述而不是发挥。</li>
+     * </ul>
+     * 模型本身不在这里指定：它由 SUMMARY 场景的绑定/通道默认决定，因此管理员可以在后台给这个场景
+     * 单独绑一个更便宜的模型（这正是"把摘要做成独立场景"的价值之一）。
+     */
+    public ChatOptions.Builder<?> summaryOptionsBuilder() {
+        SceneCode scene = SceneCode.SUMMARY;
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        SceneProperties config = aiProperties.scene(scene);
+        DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder().disableThinking();
+        Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
+        if (temperature != null) {
+            builder.temperature(temperature);
+        }
+        builder.maxTokens(aiProperties.getMemory().getSummaryMaxTokens());
+        return builder;
+    }
 }

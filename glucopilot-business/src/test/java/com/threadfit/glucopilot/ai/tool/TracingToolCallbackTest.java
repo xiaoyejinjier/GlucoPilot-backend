@@ -61,7 +61,7 @@ class TracingToolCallbackTest {
         String result = traced.call("{}", context);
 
         assertEquals("{\"avg\":6.8}", result);
-        verify(recorder).record(eq(context), eq("query_glucose_range"), eq(true), anyLong(), isNull());
+        verify(recorder).record(eq(context), eq("query_glucose_range"), eq(true), anyLong(), isNull(), eq("{\"avg\":6.8}"));
     }
 
     @Test
@@ -76,8 +76,9 @@ class TracingToolCallbackTest {
         IllegalStateException error = assertThrows(IllegalStateException.class, () -> traced.call("{}", context));
 
         assertEquals("工具调用缺少 userId", error.getMessage());
+        // 失败时没有"结果"可摘要，最后一个参数必须是 null（② 期新增）
         verify(recorder).record(eq(context), eq("query_glucose_range"), eq(false), anyLong(),
-                eq("IllegalStateException"));
+                eq("IllegalStateException"), isNull());
     }
 
     @Test
@@ -88,6 +89,6 @@ class TracingToolCallbackTest {
 
         assertEquals("ok", traced.call("{}"));
 
-        verify(recorder, never()).record(any(), any(), anyBoolean(), anyLong(), any());
+        verify(recorder, never()).record(any(), any(), anyBoolean(), anyLong(), any(), any());
     }
 }

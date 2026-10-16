@@ -220,6 +220,9 @@ class AdminAiSceneServiceTest {
     @Test
     void 列表同时给出后台值与yaml兜底值与实际生效模型() {
         when(mapper.selectOne(any())).thenReturn(null);
+        // ② 期新增 SUMMARY 场景（会话摘要）：它也走文本通道。本用例只关心 CHAT 与视觉场景，
+        // 因此给文本通道一个兜底规格，避免新增场景把列表接口打挂（这本身也是个回归点）
+        when(runtimeConfig.textSpec(any())).thenReturn(spec("flash", "yaml"));
         when(runtimeConfig.textSpec(SceneCode.CHAT)).thenReturn(spec("flash", "yaml"));
         when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "db"));
         AiModelConfigEntity model = new AiModelConfigEntity();
@@ -232,7 +235,8 @@ class AdminAiSceneServiceTest {
 
         AdminAiSceneDtos.SceneList list = service.list();
 
-        assertEquals(4, list.getRecords().size());
+        // ② 期起场景有 5 个（新增 SUMMARY：会话摘要压缩）
+        assertEquals(5, list.getRecords().size());
         assertEquals(1, list.getModels().size());
         assertEquals("DeepSeek Flash", list.getModels().get(0).getName());
         assertEquals("DeepSeek（自研 SDK）", list.getModels().get(0).getProviderName());

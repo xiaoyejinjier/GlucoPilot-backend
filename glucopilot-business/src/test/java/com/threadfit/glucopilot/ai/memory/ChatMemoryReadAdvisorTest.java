@@ -1,5 +1,7 @@
 package com.threadfit.glucopilot.ai.memory;
 
+import com.threadfit.glucopilot.ai.config.AIProperties;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -8,12 +10,14 @@ import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,61 +26,46 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 记忆注入的两件事：<b>窗口裁剪</b>与<b>合并去重</b>。
+ * 记忆注入（② 期：token 预算装配 + 摘要/工具摘要注入 + 去重）。
  * <p>
- * 裁剪这组用例是 2026-10-12 补的：此前断言"窗口由框架的 {@code MessageWindowChatMemory} 负责"，
- * 而框架的 {@code get()} 实际是纯透传（裁剪只在 {@code add()} 路径，本项目不走），
- * 于是 {@code window-messages=20} 形同虚设、每轮实际送进模型的是 {@code max-fetch=200} 条。
- * 所以这里既测静态裁剪函数，也测<b>顾问层</b>真正注入 prompt 的条数——
- * 后者才是"配置是否生效"的唯一判据。
- * <p>
- * 去重那组对应另一个坑：调用补全接口之前本轮用户消息<b>已经落库</b>（2.24 先写消息、2.25 再开流），
- * 历史末尾会带上它；请求里也带同一条时直接拼接就会把同一句话送两遍。
+ * 这里断言的是<b>顾问层真正注入 prompt 的消息列表</b>——"配置是否生效"的唯一判据。
+ * 装配规则本身（预算、保底、附件）在 {@code ChatHistoryAssemblerTest} 里用纯函数覆盖，
+ * 本类负责"接线是否正确"：
+ * <ol>
+ *   <li>会话 ID → 装哪条会话的历史；</li>
+ *   <li>固定开销与估算回写槽通过 advisor 参数传递（不能靠 ThreadLocal：回调不在请求线程上）；</li>
+ *   <li>历史末尾与本轮重复的用户消息要被去掉（2.24 先落库、2.25 再开流，必然重复一次）。</li>
+ * </ol>
  */
 class ChatMemoryReadAdvisorTest {
 
     private static final long SESSION_ID = 9L;
 
-    // ---------- 窗口裁剪：静态函数 ----------
+    private AIProperties properties;
 
-    @Test
-    void 历史超过窗口时只保留最近若干条() {
-        List<Message> history = messages(1, 25);
+    private ChatHistoryAssembler assembler;
 
-        List<Message> kept = ChatMemoryReadAdvisor.keepLastWindow(history, 20);
+    private ChatContextReader contextReader;
 
-        assertEquals(20, kept.size());
-        // 保留的是"最近"，即末尾，不是开头
-        assertEquals("m5", kept.get(0).getText());
-        assertEquals("m24", kept.get(19).getText());
+    @BeforeEach
+    void setUp() {
+        properties = new AIProperties();
+        assembler = new ChatHistoryAssembler(properties, new TokenEstimator());
+        contextReader = mock(ChatContextReader.class);
     }
 
-    @Test
-    void 历史不超窗口时原样返回() {
-        List<Message> history = messages(1, 6);   // m1..m5，共 5 条
-
-        assertEquals(5, ChatMemoryReadAdvisor.keepLastWindow(history, 20).size());
+    private ChatMemoryReadAdvisor advisor(ChatMemory chatMemory) {
+        return new ChatMemoryReadAdvisor(chatMemory, assembler, contextReader);
     }
-
-    @Test
-    void 窗口配置非法时不裁剪而不是静默清空历史() {
-        List<Message> history = messages(1, 6);   // 5 条
-
-        // window<=0 属于配错：构造器会 WARN；这里的行为选择是"不裁剪"，
-        // 因为静默把历史清空比带上过多历史更难排查
-        assertEquals(5, ChatMemoryReadAdvisor.keepLastWindow(history, 0).size());
-        assertEquals(5, ChatMemoryReadAdvisor.keepLastWindow(history, -1).size());
-    }
-
-    // ---------- 窗口裁剪：顾问层（真正决定送进 prompt 的条数）----------
 
     @Test
     void 顾问注入的历史条数不应超过窗口配置() {
         ChatMemory chatMemory = mock(ChatMemory.class);
         when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 80));
-        ChatMemoryReadAdvisor advisor = new ChatMemoryReadAdvisor(chatMemory, 20);
+        when(contextReader.summary(SESSION_ID)).thenReturn(null);
+        when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
 
-        List<Message> injected = injectedMessages(advisor, new UserMessage("那我晚饭呢"));
+        List<Message> injected = injectedMessages(advisor(chatMemory), new UserMessage("那我晚饭呢"));
 
         assertEquals(21, injected.size(), "窗口 20 条历史 + 本轮 1 条");
         assertEquals("m60", injected.get(0).getText(), "应保留最近 20 条历史");
@@ -87,17 +76,98 @@ class ChatMemoryReadAdvisorTest {
     void 窗口内历史不足时全部注入() {
         ChatMemory chatMemory = mock(ChatMemory.class);
         when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 4));   // 3 条
-        ChatMemoryReadAdvisor advisor = new ChatMemoryReadAdvisor(chatMemory, 20);
+        when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
 
-        List<Message> injected = injectedMessages(advisor, new UserMessage("你好"));
+        List<Message> injected = injectedMessages(advisor(chatMemory), new UserMessage("你好"));
 
         assertEquals(4, injected.size(), "3 条历史 + 本轮 1 条");
     }
 
     @Test
+    void 历史末尾与本轮用户消息重复时应去重() {
+        ChatMemory chatMemory = mock(ChatMemory.class);
+        List<Message> history = new ArrayList<>();
+        history.add(new UserMessage("早餐前血糖 6.8 正常吗"));
+        history.add(new AssistantMessage("在正常范围内……"));
+        history.add(new UserMessage("那我晚饭呢"));   // 本轮这条已经落库，历史末尾会带上它
+        when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(history);
+        when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
+
+        List<Message> injected = injectedMessages(advisor(chatMemory), new UserMessage("那我晚饭呢"));
+
+        assertEquals(List.of("早餐前血糖 6.8 正常吗", "在正常范围内……", "那我晚饭呢"),
+                texts(injected), "同一句话不能送两遍");
+    }
+
+    @Test
+    void 历史末尾是助手消息时不去重() {
+        ChatMemory chatMemory = mock(ChatMemory.class);
+        List<Message> history = new ArrayList<>();
+        history.add(new UserMessage("那我晚饭呢"));
+        history.add(new AssistantMessage("晚饭建议……"));
+        when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(history);
+        when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
+
+        // 文本相同但角色不同（助手说过同样的话），不该当成重复删掉
+        List<Message> injected = injectedMessages(advisor(chatMemory), new UserMessage("晚饭建议……"));
+
+        assertEquals(3, injected.size());
+    }
+
+    @Test
+    void 摘要与工具摘要作为附加上下文注入且标注不是原话() {
+        ChatMemory chatMemory = mock(ChatMemory.class);
+        when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 3));
+        when(contextReader.summary(SESSION_ID)).thenReturn("用户早餐前血糖 6.8，希望餐后控制到 8 以内");
+        when(contextReader.recentToolDigests(SESSION_ID))
+                .thenReturn(List.of("query_glucose_range → {avg:6.8,count:5}"));
+
+        List<Message> injected = injectedMessages(advisor(chatMemory), new UserMessage("那我晚饭呢"));
+
+        assertTrue(injected.get(0) instanceof SystemMessage, "附加上下文必须是 system 消息，放在历史之前");
+        String context = injected.get(0).getText();
+        assertTrue(context.contains("更早对话的摘要"), "摘要要标注来源：" + context);
+        assertTrue(context.contains("不是你刚才说的话"), "摘要要明确不是原话，避免模型当成用户新说的：" + context);
+        assertTrue(context.contains("最近查询到的数据摘要"), "工具摘要要单独标注：" + context);
+        assertEquals("那我晚饭呢", injected.get(injected.size() - 1).getText());
+    }
+
+    @Test
+    void 预算紧张时仍保留最近若干条且不丢本轮消息() {
+        properties.getMemory().setMaxPromptTokens(60);   // 极小预算
+        properties.getMemory().setKeepRecentMessages(4);
+        ChatMemory chatMemory = mock(ChatMemory.class);
+        when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 20));
+        when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
+
+        List<Message> injected = injectedMessages(advisor(chatMemory), new UserMessage("本轮问题"));
+
+        assertTrue(injected.size() >= 5, "保底 4 条历史 + 本轮至少 1 条，实际=" + injected.size());
+        assertEquals("本轮问题", injected.get(injected.size() - 1).getText(), "本轮消息永不被裁");
+        assertTrue(texts(injected).contains("m19"), "最近的历史必须保住");
+    }
+
+    @Test
+    void 估算会写回调用方持有的槽位() {
+        ChatMemory chatMemory = mock(ChatMemory.class);
+        when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 3));
+        when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
+        AtomicInteger slot = new AtomicInteger();
+        ChatClientRequest request = new ChatClientRequest(
+                new Prompt(List.of(new UserMessage("你好"))),
+                Map.of(ChatMemory.CONVERSATION_ID, String.valueOf(SESSION_ID),
+                        ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS, 1000,
+                        ChatMemoryAdvisorParams.PROMPT_ESTIMATE, slot));
+
+        advisor(chatMemory).withMemoryForTest(request);
+
+        assertTrue(slot.get() > 1000, "估算应含固定开销并写回槽位，实际=" + slot.get());
+    }
+
+    @Test
     void 未传会话ID时不注入任何历史() {
         ChatMemory chatMemory = mock(ChatMemory.class);
-        ChatMemoryReadAdvisor advisor = new ChatMemoryReadAdvisor(chatMemory, 20);
+        ChatMemoryReadAdvisor advisor = advisor(chatMemory);
         List<ChatClientRequest> captured = new ArrayList<>();
 
         advisor.adviseCall(new ChatClientRequest(new Prompt(List.of(new UserMessage("你好"))), Map.of()),
@@ -106,52 +176,8 @@ class ChatMemoryReadAdvisorTest {
         assertEquals(1, captured.get(0).prompt().getInstructions().size());
     }
 
-    // ---------- 合并与去重 ----------
-
-    @Test
-    void 历史末尾与本轮用户消息重复时应去重() {
-        List<Message> history = List.of(
-                new UserMessage("早餐前血糖 6.8 正常吗"),
-                new AssistantMessage("在正常范围内……"),
-                new UserMessage("那我晚饭呢"));
-        List<Message> current = List.of(new UserMessage("那我晚饭呢"));
-
-        assertEquals(List.of("早餐前血糖 6.8 正常吗", "在正常范围内……", "那我晚饭呢"),
-                texts(ChatMemoryReadAdvisor.merge(history, current)));
-    }
-
-    @Test
-    void 历史末尾与本轮不同时应完整拼接() {
-        List<Message> history = List.of(
-                new UserMessage("早餐前血糖 6.8 正常吗"),
-                new AssistantMessage("在正常范围内……"));
-        List<Message> current = List.of(new UserMessage("那我晚饭呢"));
-
-        assertEquals(List.of("早餐前血糖 6.8 正常吗", "在正常范围内……", "那我晚饭呢"),
-                texts(ChatMemoryReadAdvisor.merge(history, current)));
-    }
-
-    @Test
-    void 历史末尾是助手消息时不去重() {
-        List<Message> history = List.of(
-                new UserMessage("那我晚饭呢"),
-                new AssistantMessage("晚饭建议……"));
-        List<Message> current = List.of(new UserMessage("晚饭建议……"));
-
-        assertEquals(List.of("那我晚饭呢", "晚饭建议……", "晚饭建议……"),
-                texts(ChatMemoryReadAdvisor.merge(history, current)));
-    }
-
-    @Test
-    void 无历史时只保留本轮消息() {
-        List<Message> current = List.of(new UserMessage("你好"));
-
-        assertEquals(List.of("你好"), texts(ChatMemoryReadAdvisor.merge(List.of(), current)));
-    }
-
     // ---------- 辅助 ----------
 
-    /** 走一遍顾问，返回真正被送进链路的 prompt 消息列表。 */
     private static List<Message> injectedMessages(ChatMemoryReadAdvisor advisor, Message currentMessage) {
         List<ChatClientRequest> captured = new ArrayList<>();
         ChatClientRequest request = new ChatClientRequest(
@@ -164,7 +190,6 @@ class ChatMemoryReadAdvisorTest {
         return captured.get(0).prompt().getInstructions();
     }
 
-    /** 一个只负责"记下流过去的请求"的链尾桩：三个抽象方法都要实现，接口不是函数式接口。 */
     private static CallAdvisorChain captureChain(List<ChatClientRequest> captured) {
         return new CallAdvisorChain() {
             @Override

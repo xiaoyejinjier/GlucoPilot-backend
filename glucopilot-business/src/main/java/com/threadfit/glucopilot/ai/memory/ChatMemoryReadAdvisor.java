@@ -10,41 +10,34 @@ import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 只读的会话记忆 Advisor：把 {@link ChatMemory} 里的历史消息按窗口裁剪后注入本轮请求。
- * <p>
- * <b>为什么不用框架自带的 {@code MessageChatMemoryAdvisor}</b>：它会<b>写</b>记忆
- * （调用 {@code ChatMemory.add}），而本项目的助手消息必须等流式结束、拿到完整正文与
- * token / finish_reason / latency 之后才落库——两者会写出重复且残缺的数据，还会让
- * 「按 reply_to_msg_id 幂等重放」失效。所以这里只复用它「读」的语义：
- * 由自定义 Advisor 注入历史，写入仍由 {@code ChatCompletionService} 显式完成。
- * <p>
- * <b>⚠️ 窗口裁剪为什么在这一层（2026-10-12 修正）</b>：原先的注释断言「窗口语义由框架的
- * {@code MessageWindowChatMemory} 负责」，核对框架字节码后发现那只对<b>写入路径</b>成立：
- * {@code MessageWindowChatMemory.get()} 是<b>纯透传</b>（直接 {@code return repository.findByConversationId(id)}，
- * 没有任何裁剪），裁剪只发生在私有方法 {@code process(...)} 里、而它只被 {@code add(...)} 调用。
- * 本项目从不走 {@code add()}（{@code saveAll()} 主动抛异常，写入由业务 Service 完成），
- * 于是 {@code maxMessages} 成了死配置，实际上送进模型的是仓库的 {@code LIMIT}（{@code ai.memory.max-fetch}=200），
- * 而不是 {@code ai.memory.window-messages}=20——配置、字段注释与真实行为三者不一致。
- * 所以窗口只能在<b>读取侧的我们这层</b>施加：仓库负责"最多捞多少"（防御性上限），
- * 这里负责"送多少进 prompt"。
- * <p>
- * 挂载方式：作为 {@code ChatClient} 的 default advisor，请求侧通过
- * {@code .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))} 传会话 ID。
- * 未传会话 ID 时直接放行（无状态调用，例如冒烟/一次性推理）。
- * <p>
- * ⚠️ Advisor 回调<b>不在请求线程上</b>（框架用 {@code BaseAdvisor.DEFAULT_SCHEDULER} 调度），
- * 因此这里绝不能碰 {@code RequestContext}（ThreadLocal）——所需标识必须在进入流式之前取好。
- * （实测：本类直接实现 {@code CallAdvisor}/{@code StreamAdvisor}、没有 {@code getScheduler()} 那层间接，
- * 所以当前跑在请求线程上；但这条警告仍然成立——不能依赖它。）
+ * 只读的会话记忆 Advisor：按 <b>token 预算</b>裁剪历史并注入本轮请求（② 期改造）。
+ *
+ * <h2>为什么不用框架自带的 {@code MessageChatMemoryAdvisor}</h2>
+ * 它会<b>写</b>记忆（调用 {@code ChatMemory.add}），而本项目的助手消息必须等流式结束、
+ * 拿到完整正文与 token / finish_reason / latency 之后才落库——两者会写出重复且残缺的数据，
+ * 还会让「按 reply_to_msg_id 幂等重放」失效。所以这里只复用它「读」的语义。
+ *
+ * <h2>⚠️ 裁剪为什么在这一层</h2>
+ * 核对框架字节码后确认 {@code MessageWindowChatMemory.get()} 是<b>纯透传</b>，裁剪只在 {@code add()}
+ * 路径上，而本项目从不走 {@code add()}。因此窗口只能在读取侧施加：仓库负责"最多捞多少"
+ * （{@code ai.memory.max-fetch}，防御性上限），这里负责"送多少进 prompt"。
+ *
+ * <h2>② 期：从"条数"改成"token 预算"</h2>
+ * 实测一轮几乎空的对话（系统提示词 1651 字 + 6 个工具定义）就已经 5012 prompt tokens，
+ * 而单条助手回复上限 20 000 字、回放时不做逐条截断——"20 条"能装的内容量可以差两个数量级。
+ * 现在由 {@link ChatHistoryAssembler} 按预算装配（先扣固定开销 → 从最近往回装 → 保底条数），
+ * 并把**滚动摘要**与**最近工具结果摘要**作为一条附加上下文注入。
+ *
+ * <h2>回调线程</h2>
+ * ⚠️ Advisor 回调<b>不在请求线程上</b>（框架用调度器），因此这里绝不能碰 {@code RequestContext}；
+ * 所需标识（会话 ID、固定开销、估算回写槽）都通过 advisor 参数在进入流式之前放好。
  */
 @Slf4j
 public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
@@ -54,18 +47,16 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
 
     private final ChatMemory chatMemory;
 
-    /** 送入模型的最近原文消息条数上限（{@code ai.memory.window-messages}）。 */
-    private final int windowMessages;
+    private final ChatHistoryAssembler assembler;
 
-    public ChatMemoryReadAdvisor(ChatMemory chatMemory, int windowMessages) {
+    private final ChatContextReader contextReader;
+
+    public ChatMemoryReadAdvisor(ChatMemory chatMemory,
+                                 ChatHistoryAssembler assembler,
+                                 ChatContextReader contextReader) {
         this.chatMemory = chatMemory;
-        this.windowMessages = windowMessages;
-        if (windowMessages <= 0) {
-            // 静默把窗口当 0 会一句话都不带、把当"不裁剪"又会把 max-fetch 全塞进 prompt，
-            // 两种猜测都可能让线上表现莫名变化，所以显式告警并选择"不裁剪"这个可解释的行为
-            log.warn("ai.memory.window-messages={} 非法（应为正整数），窗口裁剪已禁用："
-                    + "将把仓库返回的全部历史（上限 max-fetch）送入模型", windowMessages);
-        }
+        this.assembler = assembler;
+        this.contextReader = contextReader;
     }
 
     @Override
@@ -89,83 +80,69 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
     }
 
     private ChatClientRequest withMemory(ChatClientRequest request) {
-        String conversationId = conversationId(request);
-        if (conversationId == null) {
-            return request;
-        }
-        // 窗口在这里施加：框架的 ChatMemory.get() 不裁剪（见类注释），仓库只负责"最多捞多少"
-        List<Message> history = keepLastWindow(chatMemory.get(conversationId), windowMessages);
-        if (history.isEmpty()) {
-            return request;
-        }
+        Long sessionId = sessionId(request);
         List<Message> current = request.prompt().getInstructions();
-        List<Message> merged = merge(history, current);
-        log.debug("注入会话记忆 conversationId={} history={} 条（窗口上限 {}）",
-                conversationId, history.size(), windowMessages);
+        if (sessionId == null) {
+            // 未传会话 ID（无状态调用，例如摘要压缩自己）：不注入任何历史
+            return request;
+        }
+        List<Message> history = chatMemory.get(sessionId.toString());
+        String summary = contextReader.summary(sessionId);
+        List<String> toolDigests = contextReader.recentToolDigests(sessionId);
+        int fixedOverhead = fixedOverhead(request);
+
+        ChatHistoryAssembler.Assembled assembled = assembler.assemble(history, current, summary, toolDigests, fixedOverhead);
+        ChatHistoryAssembler.Stats stats = assembled.stats();
+        if (stats.droppedHistory() > 0 || stats.summaryUsed() || stats.toolDigestUsed()) {
+            log.info("会话记忆装配 sessionId={} 保留历史={} 裁剪={} 估算token={} 预算={} 摘要={} 工具摘要={}"
+                            + (stats.budgetExceeded() ? "（超预算：保底条数优先）" : ""),
+                    sessionId, stats.keptHistory(), stats.droppedHistory(), stats.estimatedTokens(),
+                    stats.budgetTokens(), stats.summaryUsed(), stats.toolDigestUsed());
+        } else {
+            log.debug("会话记忆装配 sessionId={} 保留历史={} 估算token={}", sessionId,
+                    stats.keptHistory(), stats.estimatedTokens());
+        }
+        writeBackEstimate(request, stats);
+
         return request.mutate()
-                .prompt(new Prompt(merged, request.prompt().getOptions()))
+                .prompt(new Prompt(assembled.messages(), request.prompt().getOptions()))
                 .context(request.context())
                 .build();
     }
 
-    /**
-     * 只保留最近 {@code window} 条（历史是时间正序，所以取末尾）。
-     * <p>
-     * {@code window <= 0} 视为"未配置/配错"，原样返回（不裁剪）——与之配套的告警在构造器里，
-     * 这样行为可解释，也不会因为一个错配置把历史静默清空。
-     * 包级可见，便于单测直接覆盖。
-     */
-    static List<Message> keepLastWindow(List<Message> history, int window) {
-        if (window <= 0 || history.size() <= window) {
-            return history;
-        }
-        // 复制一份而不是返回 subList 视图：视图会跟着原列表走，并让"已裁剪"这件事变得不直观
-        return new ArrayList<>(history.subList(history.size() - window, history.size()));
-    }
-
-    /** 合并历史与本轮消息（顺序：历史 → 本轮）。包级可见，便于单测直接覆盖去重逻辑。 */
-    static List<Message> merge(List<Message> history, List<Message> current) {
-        List<Message> merged = new ArrayList<>(history.size() + current.size());
-        merged.addAll(dropTrailingDuplicate(history, current));
-        merged.addAll(current);
-        return merged;
-    }
-
-    private static String conversationId(ChatClientRequest request) {
+    /** 会话 ID：框架的 advisor 参数里带（{@code ChatCompletionService} 注入）。 */
+    private static Long sessionId(ChatClientRequest request) {
         Object value = request.context().get(ChatMemory.CONVERSATION_ID);
         if (value == null) {
             return null;
         }
-        String id = String.valueOf(value);
-        return id.isBlank() ? null : id;
+        try {
+            return Long.valueOf(String.valueOf(value).trim());
+        } catch (NumberFormatException e) {
+            log.warn("非法的 conversationId（应为 chat_session.id）：{}", value);
+            return null;
+        }
+    }
+
+    /** 固定开销（系统提示词 + 工具定义）的估算：调用方算好放在 advisor 参数里，缺省 0。 */
+    private static int fixedOverhead(ChatClientRequest request) {
+        Object value = request.context().get(ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS);
+        return value instanceof Number number ? Math.max(number.intValue(), 0) : 0;
     }
 
     /**
-     * 本轮用户消息在调用补全接口之前<b>已经落库</b>（接口 2.24 先写消息，2.25 再开流），
-     * 因此历史末尾会包含本轮这条用户消息；若请求里也带了同一条，会造成重复送入。
-     * 这里按「文本相同」去掉历史末尾这一条。
+     * 把本轮估算写回调用方持有的槽位，供其在落库后与厂商返回的真实 {@code prompt_tokens} 比对校准。
+     * 槽位是调用方放进 advisor 参数的一个 {@link AtomicInteger}（同一个对象引用）。
      */
-    private static List<Message> dropTrailingDuplicate(List<Message> history, List<Message> current) {
-        if (history.isEmpty() || current.isEmpty()) {
-            return history;
+    private static void writeBackEstimate(ChatClientRequest request, ChatHistoryAssembler.Stats stats) {
+        Object holder = request.context().get(ChatMemoryAdvisorParams.PROMPT_ESTIMATE);
+        if (holder instanceof AtomicInteger slot) {
+            slot.set(stats.estimatedTokens());
         }
-        Message lastHistory = history.get(history.size() - 1);
-        if (!(lastHistory instanceof UserMessage lastUser)) {
-            return history;
-        }
-        String lastHistoryText = lastUser.getText();
-        if (lastHistoryText == null) {
-            return history;
-        }
-        boolean duplicated = current.stream()
-                .filter(UserMessage.class::isInstance)
-                .map(UserMessage.class::cast)
-                .map(UserMessage::getText)
-                .filter(Objects::nonNull)
-                .anyMatch(lastHistoryText::equals);
-        if (!duplicated) {
-            return history;
-        }
-        return history.subList(0, history.size() - 1);
+    }
+
+    /** 供单测直接调用（不经过 client）。 */
+    ChatClientRequest withMemoryForTest(ChatClientRequest request) {
+        return withMemory(request);
     }
 }

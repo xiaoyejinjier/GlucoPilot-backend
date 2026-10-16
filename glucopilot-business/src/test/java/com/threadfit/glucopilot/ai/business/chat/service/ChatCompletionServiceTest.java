@@ -7,7 +7,11 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.memory.ChatSummaryService;
+import com.threadfit.glucopilot.ai.memory.TokenEstimator;
+import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
+import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
@@ -87,6 +91,10 @@ class ChatCompletionServiceTest {
     private final ChatMessageService chatMessageService = mock(ChatMessageService.class);
     private final OwnedMediaResolver ownedMediaResolver = mock(OwnedMediaResolver.class);
     private final VisionAnalyzer visionAnalyzer = mock(VisionAnalyzer.class);
+    /** ② 期新增依赖：固定开销估算要用提示词与工具定义，落库后要触发异步摘要。 */
+    private final AiPromptTemplateService promptTemplateService = mock(AiPromptTemplateService.class);
+    private final AiToolRegistry toolRegistry = mock(AiToolRegistry.class);
+    private final ChatSummaryService chatSummaryService = mock(ChatSummaryService.class);
 
     private ChatCompletionService service;
 
@@ -94,7 +102,10 @@ class ChatCompletionServiceTest {
     void setUp() {
         service = new ChatCompletionService(registry, chatMessageMapper, chatSessionService,
                 chatMessageService, ownedMediaResolver, visionAnalyzer, new EnglishPreambleGuard(),
-                new ChatRoundGuard(), new JsonUtils(new ObjectMapper()));
+                new ChatRoundGuard(), new JsonUtils(new ObjectMapper()), promptTemplateService,
+                toolRegistry, new TokenEstimator(), chatSummaryService);
+        when(promptTemplateService.systemPrompt(any())).thenReturn("system prompt");
+        when(toolRegistry.callbacks()).thenReturn(List.of());
 
         when(chatSessionService.requireOwned(anyLong(), anyLong())).thenReturn(new ChatSession());
         when(registry.hasOverrides(SceneCode.CHAT)).thenReturn(false);

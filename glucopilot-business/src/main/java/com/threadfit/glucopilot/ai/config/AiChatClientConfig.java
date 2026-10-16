@@ -9,7 +9,9 @@ import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -84,6 +86,24 @@ public class AiChatClientConfig {
                 // 这条装配路径已由 AiToolCallingWiringTest 端到端验证（假 ChatModel 返回 tool_calls
                 // 回合 → 断言工具真的执行、结果真的回喂），并顺带钉住「白名单名字 ↔ 真实工具名」一致。
                 .defaultTools(toolRegistry.callbacks().toArray())
+                .build();
+    }
+
+    /**
+     * 摘要专用 ChatClient（② 期）。
+     * <p>
+     * <b>为什么不复用 {@code textChatClient}</b>：那个 client 上挂着记忆注入 Advisor、
+     * CHAT 场景的提示词 Advisor 与全部工具。用它做摘要会同时发生三件坏事：
+     * ① 把整段历史再塞一遍（摘要自己又变成了对话）；② 把"控糖助手"人设与医疗安全约束注入摘要输入；
+     * ③ 摘要过程中模型可能去调工具查数据，而摘要的语义是"只压缩已发生的原文"。
+     * 所以这里和视觉链路一样**手搓**一个 client：同一个文本模型通道（因此"换模型"仍然只改一处），
+     * 但不带工具、不带 Advisor，系统提示词由 {@code ChatSummaryService} 按请求取 SUMMARY 场景的。
+     */
+    @Bean
+    public ChatClient summaryChatClient(@Qualifier("glucopilotTextChatModel") ChatModel textChatModel,
+                                        AiPromptTemplateService promptTemplateService) {
+        return ChatClient.builder(textChatModel)
+                .defaultTemplateRenderer(promptTemplateService.renderer())
                 .build();
     }
 

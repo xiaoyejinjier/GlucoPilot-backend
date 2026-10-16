@@ -87,4 +87,32 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
             + "WHERE id = #{sessionId} AND user_id = #{userId} AND is_deleted = 0")
     int updatePinned(@Param("sessionId") Long sessionId, @Param("userId") Long userId,
                      @Param("pinned") int pinned);
+
+    // ------------------------------------------------------------------ 滚动摘要（② 期）
+
+    /**
+     * 只取滚动摘要正文（不取整行）。
+     * <p>
+     * {@code context_summary} 是 MEDIUMTEXT，只在装配上下文时读一次；单独取列避免把整行
+     * （含 title 等无关字段、以及将来可能的其它大列）都拉回来。
+     */
+    @Select("SELECT context_summary FROM chat_session WHERE id = #{sessionId} AND is_deleted = 0")
+    String selectContextSummary(@Param("sessionId") Long sessionId);
+
+    /** 摘要已覆盖到哪条消息（null = 还没摘要过）：摘要任务据此只压缩"还没被覆盖"的原文。 */
+    @Select("SELECT summary_upto_msg_id FROM chat_session WHERE id = #{sessionId} AND is_deleted = 0")
+    Long selectSummaryUptoMsgId(@Param("sessionId") Long sessionId);
+
+    /**
+     * 写入滚动摘要并推进"摘要已覆盖到哪条消息"。
+     * <p>
+     * <b>只允许前进，不允许回退</b>（{@code summary_upto_msg_id < #{uptoMsgId}}）：摘要任务是异步的，
+     * 慢任务可能后完成；没有这个条件的话，一次晚到的写入会把已经覆盖更多的指针拉回去，
+     * 下一轮就会把已经压缩过的内容再压一遍（重复且越压越糊）。
+     */
+    @Update("UPDATE chat_session SET context_summary = #{summary}, summary_upto_msg_id = #{uptoMsgId} "
+            + "WHERE id = #{sessionId} AND is_deleted = 0 "
+            + "AND (summary_upto_msg_id IS NULL OR summary_upto_msg_id < #{uptoMsgId})")
+    int updateSummary(@Param("sessionId") Long sessionId, @Param("summary") String summary,
+                      @Param("uptoMsgId") Long uptoMsgId);
 }

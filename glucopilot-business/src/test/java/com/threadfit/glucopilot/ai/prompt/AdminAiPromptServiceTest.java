@@ -482,7 +482,8 @@ class AdminAiPromptServiceTest {
         assertEquals(1, active.getStatus());
         assertTrue(active.getActive());
         assertEquals(List.of("foodText"), active.getVariables());
-        assertEquals(4, list.getScenes().size());
+        // 场景枚举里现在有 5 个（② 期新增 SUMMARY：会话摘要压缩）
+        assertEquals(5, list.getScenes().size());
         // 未连库 → 运行时会用 classpath 内置提示词，接口必须如实汇报来源
         AdminAiPromptDtos.SceneOption chat = list.getScenes().stream()
                 .filter(option -> "CHAT".equals(option.getSceneCode())).findFirst().orElseThrow();

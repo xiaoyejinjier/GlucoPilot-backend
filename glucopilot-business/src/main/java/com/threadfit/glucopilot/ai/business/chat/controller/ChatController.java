@@ -12,6 +12,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -47,6 +49,14 @@ public class ChatController {
         Integer sessionType = request == null ? null : request.getSessionType();
         ChatSession session = chatSessionService.getOrCreate(userId, sessionType);
         return ApiResponse.ok(chatSessionService.toResponse(session));
+    }
+
+    @GetMapping("/{sessionId}/messages")
+    public ApiResponse<ChatDtos.HistoryResponse> history(@PathVariable Long sessionId,
+            @RequestParam(required = false) Integer beforeSeqNo,
+            @RequestParam(defaultValue = "50") int pageSize) {
+        return ApiResponse.ok(chatMessageService.history(
+                RequestContext.requireUserId(), sessionId, beforeSeqNo, pageSize));
     }
 
     /** 2.24 发送聊天消息（clientMsgId 幂等）。 */

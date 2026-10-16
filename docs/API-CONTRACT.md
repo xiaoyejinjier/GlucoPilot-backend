@@ -270,10 +270,13 @@
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
 | `POST /api/v1/chat-sessions/current` | C 端登录 | 获取或创建当前会话（2.23） |
+| `GET /api/v1/chat-sessions/{sessionId}/messages` | C 端登录 | 按游标读取当前用户的历史消息 |
 | `POST /api/v1/chat-sessions/{sessionId}/messages` | C 端登录 | 写入用户消息（2.24）；`clientMsgId` 必填且幂等 |
 | `POST /api/v1/chat-sessions/{sessionId}/completions` | C 端登录 | SSE 流式补全（2.25） |
 
 `msgType` 语义：`1` 文本 / `2` 图片 / `3` 语音。
+
+历史查询参数：`pageSize` 默认 50，范围 1–100；`beforeSeqNo` 可选正整数，表示仅取该序号之前的消息。首次不传游标，读取最新一页。返回 `data={records,hasMore,nextBeforeSeqNo}`，每页 `records` 按 `seqNo` 升序，向前翻页使用 `nextBeforeSeqNo`。仅返回当前用户拥有的会话中未删除的用户、助手消息，不返回系统提示词；会话不存在或不属于当前用户统一返回 404。记录字段为 `id,seqNo,msgRole,msgType,contentText,mediaId,voiceMediaId,fileUrl,createdAt,finishReason`，Long ID 仍为字符串。`fileUrl` 仅对仍可用且归属匹配的图片返回，媒体不可用时为 null，文本历史仍保留。重新进入页面时先恢复历史，再在末尾显示本次进入的欢迎语；欢迎语仅用于展示，不写库、不触发模型调用。
 
 - `msgType=1`：必填 `contentText`；
 - `msgType=2`：必填 `mediaId`；`contentText` 可同时携带用户随图片一起发的文字，也允许为空（纯图片）；

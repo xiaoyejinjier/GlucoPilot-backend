@@ -17,6 +17,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * 用户消息写入（对应接口 2.24）。
@@ -50,6 +53,36 @@ public class ChatMessageService {
     private final ChatSessionMapper chatSessionMapper;
     private final ChatSessionService chatSessionService;
     private final OwnedMediaResolver ownedMediaResolver;
+
+    public ChatDtos.HistoryResponse history(Long userId, Long sessionId, Integer beforeSeqNo, int pageSize) {
+        chatSessionService.requireOwned(userId, sessionId);
+        if (pageSize < 1 || pageSize > 100 || (beforeSeqNo != null && beforeSeqNo < 1)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "pageSize 应为 1–100，beforeSeqNo 应为正整数");
+        }
+        List<ChatMessage> rows = chatMessageMapper.selectHistory(userId, sessionId, beforeSeqNo, pageSize + 1);
+        boolean hasMore = rows.size() > pageSize;
+        List<ChatMessage> page = new ArrayList<>(rows.subList(0, Math.min(pageSize, rows.size())));
+        Collections.reverse(page);
+        List<ChatDtos.HistoryMessageResponse> records = page.stream().map(row ->
+                ChatDtos.HistoryMessageResponse.builder()
+                        .id(row.getId()).seqNo(row.getSeqNo()).msgRole(row.getMsgRole()).msgType(row.getMsgType())
+                        .contentText(row.getContentText()).mediaId(row.getMediaId()).voiceMediaId(row.getVoiceMediaId())
+                        .fileUrl(historyImageUrl(userId, row)).createdAt(row.getGmtCreate())
+                        .finishReason(row.getFinishReason()).build()).toList();
+        return ChatDtos.HistoryResponse.builder().records(records).hasMore(hasMore)
+                .nextBeforeSeqNo(hasMore ? page.getFirst().getSeqNo() : null).build();
+    }
+
+    private String historyImageUrl(Long userId, ChatMessage row) {
+        if (!Integer.valueOf(2).equals(row.getMsgType()) || row.getMediaId() == null) return null;
+        try {
+            return ownedMediaResolver.require(row.getMediaId(), userId, CodeEnum.MediaBizType.CHAT_IMAGE).getFileUrl();
+        } catch (BizException ex) {
+            // 媒体已删除时仍可查看其余对话，不回传无权访问的文件地址。
+            if (ex.getErrorCode() != ErrorCode.BIZ_REJECTED) throw ex;
+            return null;
+        }
+    }
 
     @Transactional
     public ChatDtos.SendMessageResponse appendUserMessage(Long userId, Long sessionId, ChatDtos.SendMessageRequest request) {

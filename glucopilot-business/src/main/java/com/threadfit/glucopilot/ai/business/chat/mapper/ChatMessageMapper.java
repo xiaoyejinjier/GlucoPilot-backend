@@ -16,6 +16,16 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
     /** 会话内顺序号唯一键（V11 新增）：并发插入撞号时靠它暴露冲突，应用侧重算重试。 */
     String UK_SESSION_SEQ = "uk_session_seq";
 
+    /** 展示历史独立于模型记忆窗口，保留纯图片消息，并在 SQL 层限制归属。 */
+    @Select("<script>SELECT * FROM chat_message WHERE session_id = #{sessionId} "
+            + "AND user_id = #{userId} AND is_deleted = 0 AND msg_role IN (1, 2) "
+            + "<if test='beforeSeqNo != null'>AND seq_no &lt; #{beforeSeqNo} </if>"
+            + "ORDER BY seq_no DESC, id DESC LIMIT #{limit}</script>")
+    List<ChatMessage> selectHistory(@Param("userId") Long userId,
+                                    @Param("sessionId") Long sessionId,
+                                    @Param("beforeSeqNo") Integer beforeSeqNo,
+                                    @Param("limit") Integer limit);
+
     /**
      * 会话内下一个顺序号。
      * <p>

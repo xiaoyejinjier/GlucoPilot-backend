@@ -8,6 +8,8 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
+import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 对话接口出入参，对应《接口设计文档》2.23 / 2.24 / 2.25。
@@ -72,6 +74,29 @@ public final class ChatDtos {
     public static class SendMessageResponse {
         private Long id;
         private Integer seqNo;
+    }
+
+    @Data
+    @Builder
+    public static class HistoryResponse {
+        private List<HistoryMessageResponse> records;
+        private boolean hasMore;
+        private Integer nextBeforeSeqNo;
+    }
+
+    @Data
+    @Builder
+    public static class HistoryMessageResponse {
+        private Long id;
+        private Integer seqNo;
+        private Integer msgRole;
+        private Integer msgType;
+        private String contentText;
+        private Long mediaId;
+        private Long voiceMediaId;
+        private String fileUrl;
+        private LocalDateTime createdAt;
+        private Integer finishReason;
     }
 
     /** 2.25 AI 流式补全 */

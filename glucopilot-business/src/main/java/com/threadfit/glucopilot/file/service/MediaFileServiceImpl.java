@@ -21,6 +21,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 @Service
@@ -116,6 +118,19 @@ public class MediaFileServiceImpl implements MediaFileService {
                 .eq(MediaFile::getBizType, bizType.getCode())
                 .eq(MediaFile::getFileStatus, FILE_STATUS_AVAILABLE)
                 .last("LIMIT 1"));
+    }
+
+    @Override
+    public List<MediaFile> listOwnedByIds(Collection<Long> mediaIds, Long userId, MediaBizType bizType) {
+        if (mediaIds == null || mediaIds.isEmpty()) {
+            // 空集合直接返回，不发一条 `IN ()` 的废查询
+            return List.of();
+        }
+        return mediaFileMapper.selectList(new LambdaQueryWrapper<MediaFile>()
+                .in(MediaFile::getId, mediaIds)
+                .eq(MediaFile::getUserId, userId)
+                .eq(MediaFile::getBizType, bizType.getCode())
+                .eq(MediaFile::getFileStatus, FILE_STATUS_AVAILABLE));
     }
 
     /**

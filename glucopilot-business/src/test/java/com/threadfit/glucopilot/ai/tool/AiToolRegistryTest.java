@@ -91,7 +91,9 @@ class AiToolRegistryTest {
     private static AiToolRegistry registry(List<String> allowList, ToolCallbackProvider... providers) {
         AIProperties properties = new AIProperties();
         properties.getTools().setAllowList(allowList);
-        return new AiToolRegistry(properties, objectProvider(providers), objectProvider());
+        // 记账装饰器（B3）只做观测，不改变白名单与工具身份；这里传 null 表示"不关心记账"
+        return new AiToolRegistry(properties, objectProvider(providers), objectProvider(),
+                mock(ToolCallTraceRecorder.class));
     }
 
     private static ToolCallbackProvider provider(String... names) {

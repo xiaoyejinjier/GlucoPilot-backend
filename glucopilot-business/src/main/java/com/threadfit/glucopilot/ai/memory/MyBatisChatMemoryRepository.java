@@ -92,7 +92,9 @@ public class MyBatisChatMemoryRepository implements ChatMemoryRepository {
 
     /**
      * 逻辑删除会话内全部消息（供接口 5.4 删除会话使用）。
-     * DDL 的 {@code chk_cm_del_consistent} 只要求 is_deleted=1 时 deleted_at 非空，deleted_by 可空。
+     * DDL 的 {@code chk_cm_del_consistent} 只要求 is_deleted=1 时 deleted_at 非空，deleted_by 可空；
+     * 这条框架路径拿不到当前操作人，因此 deleted_by 传 null（接口 5.4 走 ChatSessionService.delete，
+     * 那里会写入操作人）。
      */
     @Override
     public void deleteByConversationId(String conversationId) {
@@ -100,7 +102,7 @@ public class MyBatisChatMemoryRepository implements ChatMemoryRepository {
         if (sessionId == null) {
             return;
         }
-        int deleted = chatMessageMapper.logicDeleteBySession(sessionId);
+        int deleted = chatMessageMapper.logicDeleteBySession(sessionId, null);
         log.info("会话记忆逻辑删除 sessionId={} rows={}", sessionId, deleted);
     }
 

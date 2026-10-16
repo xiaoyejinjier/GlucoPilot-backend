@@ -9,6 +9,7 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.file.entity.MediaFile;
+import com.threadfit.glucopilot.file.service.MediaFileService;
 import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
 import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.session.Configuration;
@@ -26,31 +27,32 @@ class ChatHistoryTest {
     private final ChatMessageMapper mapper = mock(ChatMessageMapper.class);
     private final ChatSessionService sessions = mock(ChatSessionService.class);
     private final OwnedMediaResolver media = mock(OwnedMediaResolver.class);
-    private final ChatMessageService service = new ChatMessageService(mapper, mock(ChatSessionMapper.class), sessions, media);
+    private final MediaFileService files = mock(MediaFileService.class);
+    private final ChatMessageService service = new ChatMessageService(mapper, mock(ChatSessionMapper.class), sessions, media, files);
 
     @Test
     void latestPageIsChronologicalWithExclusiveOlderCursor() {
         when(mapper.selectHistory(1L, 9L, null, 3)).thenReturn(List.of(row(5), row(4), row(3)));
-        ChatDtos.HistoryResponse page = service.history(1L, 9L, null, 2);
-        assertEquals(List.of(4, 5), page.getRecords().stream().map(ChatDtos.HistoryMessageResponse::getSeqNo).toList());
-        assertTrue(page.isHasMore());
-        assertEquals(4, page.getNextBeforeSeqNo());
+        ChatDtos.HistoryResponse page = service.readHistory(1L, 9L, 2, null);
+        assertEquals(List.of(4, 5), page.getRecords().stream().map(ChatDtos.HistoryMessage::getSeqNo).toList());
+        assertTrue(page.getHasMore());
+        assertEquals(4, page.getNextBeforeSeq());
         when(mapper.selectHistory(1L, 9L, 4, 3)).thenReturn(List.of(row(3), row(1)));
-        ChatDtos.HistoryResponse older = service.history(1L, 9L, 4, 2);
-        assertEquals(List.of(1, 3), older.getRecords().stream().map(ChatDtos.HistoryMessageResponse::getSeqNo).toList());
-        assertFalse(older.isHasMore());
-        assertNull(older.getNextBeforeSeqNo());
+        ChatDtos.HistoryResponse older = service.readHistory(1L, 9L, 2, 4);
+        assertEquals(List.of(1, 3), older.getRecords().stream().map(ChatDtos.HistoryMessage::getSeqNo).toList());
+        assertFalse(older.getHasMore());
+        assertEquals(1, older.getNextBeforeSeq());
     }
 
     @Test
     void emptyHistoryAndInvalidPagination() {
         when(mapper.selectHistory(1L, 9L, null, 51)).thenReturn(List.of());
-        assertTrue(service.history(1L, 9L, null, 50).getRecords().isEmpty());
+        assertTrue(service.readHistory(1L, 9L, 50, null).getRecords().isEmpty());
         for (int size : new int[]{0, -1, 101}) {
             assertEquals(ErrorCode.BAD_REQUEST, assertThrows(BizException.class,
-                    () -> service.history(1L, 9L, null, size)).getErrorCode());
+                    () -> service.readHistory(1L, 9L, size, null)).getErrorCode());
         }
-        assertThrows(BizException.class, () -> service.history(1L, 9L, 0, 50));
+        assertThrows(BizException.class, () -> service.readHistory(1L, 9L, 50, 0));
         verify(mapper, times(1)).selectHistory(anyLong(), anyLong(), any(), anyInt());
     }
 
@@ -58,7 +60,7 @@ class ChatHistoryTest {
     void unownedOrMissingSessionIsRejectedBeforeReadingMessages() {
         when(sessions.requireOwned(1L, 9L)).thenThrow(new BizException(ErrorCode.NOT_FOUND));
         assertEquals(ErrorCode.NOT_FOUND, assertThrows(BizException.class,
-                () -> service.history(1L, 9L, null, 50)).getErrorCode());
+                () -> service.readHistory(1L, 9L, 50, null)).getErrorCode());
         verifyNoInteractions(mapper, media);
     }
 
@@ -69,12 +71,13 @@ class ChatHistoryTest {
         image.setMediaId(99L);
         when(mapper.selectHistory(1L, 9L, null, 51)).thenReturn(List.of(image));
         MediaFile file = new MediaFile();
+        file.setId(99L);
         file.setFileUrl("https://example.invalid/owned-image.jpg");
-        when(media.require(99L, 1L, MediaBizType.CHAT_IMAGE)).thenReturn(file);
-        assertEquals(file.getFileUrl(), service.history(1L, 9L, null, 50).getRecords().getFirst().getFileUrl());
-        when(media.require(99L, 1L, MediaBizType.CHAT_IMAGE)).thenThrow(new BizException(ErrorCode.BIZ_REJECTED));
-        var unavailable = service.history(1L, 9L, null, 50).getRecords().getFirst();
-        assertNull(unavailable.getFileUrl());
+        when(files.listOwnedByIds(List.of(99L), 1L, MediaBizType.CHAT_IMAGE)).thenReturn(List.of(file));
+        assertEquals(file.getFileUrl(), service.readHistory(1L, 9L, 50, null).getRecords().getFirst().getMediaUrl());
+        when(files.listOwnedByIds(List.of(99L), 1L, MediaBizType.CHAT_IMAGE)).thenReturn(List.of());
+        var unavailable = service.readHistory(1L, 9L, 50, null).getRecords().getFirst();
+        assertNull(unavailable.getMediaUrl());
         assertEquals("message 1", unavailable.getContentText());
     }
 

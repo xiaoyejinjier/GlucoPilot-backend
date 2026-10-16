@@ -276,7 +276,9 @@
 
 `msgType` 语义：`1` 文本 / `2` 图片 / `3` 语音。
 
-历史查询参数：`pageSize` 默认 50，范围 1–100；`beforeSeqNo` 可选正整数，表示仅取该序号之前的消息。首次不传游标，读取最新一页。返回 `data={records,hasMore,nextBeforeSeqNo}`，每页 `records` 按 `seqNo` 升序，向前翻页使用 `nextBeforeSeqNo`。仅返回当前用户拥有的会话中未删除的用户、助手消息，不返回系统提示词；会话不存在或不属于当前用户统一返回 404。记录字段为 `id,seqNo,msgRole,msgType,contentText,mediaId,voiceMediaId,fileUrl,createdAt,finishReason`，Long ID 仍为字符串。`fileUrl` 仅对仍可用且归属匹配的图片返回，媒体不可用时为 null，文本历史仍保留。重新进入页面时先恢复历史，再在末尾显示本次进入的欢迎语；欢迎语仅用于展示，不写库、不触发模型调用。
+历史查询参数：`pageSize` 默认 20，范围 1–100；`beforeSeq` 可选正整数，表示仅取该序号之前的消息。首次不传游标，读取最新一页。返回 `data={records,hasMore,nextBeforeSeq}`，每页 `records` 按 `seqNo` 升序，向前翻页使用 `nextBeforeSeq`，以 `hasMore` 判断是否需要继续。仅返回当前用户拥有的会话中未删除的用户、助手消息，不返回系统提示词；会话不存在或不属于当前用户统一返回 404。记录字段包括 `id,seqNo,msgRole,msgType,contentText,mediaId,voiceMediaId,mediaUrl,modelCode,createdAt,finishReason`，Long ID 仍为字符串。`mediaUrl` 仅对仍可用且归属匹配的图片返回，媒体不可用时为 null，文本历史仍保留。重新进入当前会话时先恢复历史，再在末尾显示本次完整欢迎卡片；欢迎卡片仅用于展示，不写库、不触发模型调用。已结束或归档会话只读，历史可继续分页。
+
+会话列表使用 `GET /api/v1/chat-sessions`，删除使用 `DELETE /api/v1/chat-sessions/{sessionId}`，置顶使用 `PATCH /api/v1/chat-sessions/{sessionId}/pinned`（`isPinned`），新对话复用 `/current` 并传 `forceNew=true`。这些接口与 V21 会话生命周期更新保持一致。
 
 - `msgType=1`：必填 `contentText`；
 - `msgType=2`：必填 `mediaId`；`contentText` 可同时携带用户随图片一起发的文字，也允许为空（纯图片）；

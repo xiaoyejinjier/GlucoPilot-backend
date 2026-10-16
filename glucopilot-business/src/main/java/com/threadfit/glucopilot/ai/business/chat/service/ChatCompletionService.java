@@ -33,8 +33,10 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * AI 流式补全（对应接口 2.25）。
@@ -138,7 +140,8 @@ public class ChatCompletionService {
 
     public Flux<ServerSentEvent<byte[]>> complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
         // 同步校验：这些异常在返回 Flux 之前抛出，客户端拿到的仍是标准 JSON 错误响应
-        chatSessionService.requireOwned(userId, sessionId);
+        // 归属 + 状态：已结束/已归档的会话不能再往里写（否则消息进了老会话、/current 却指着新会话）
+        chatSessionService.requireActive(userId, sessionId);
         ChatMessage target = resolveTargetMessage(sessionId, request.getReplyToMsgId());
 
         // 幂等：本轮已生成过回复则重放 done，既避免重复扣费，也避免前端重试拿到两条助手消息。
@@ -185,12 +188,22 @@ public class ChatCompletionService {
 
         // 会话历史由 ChatMemory 注入：这里只传「本轮用户消息 + 会话 ID」。
         // 图片轮次同样走 textClient()——两阶段里的阶段 2 就是一次普通文本对话。
+        //
+        // toolContext 用**可变** HashMap（不是 Map.of）：工具调用元数据（B3）的计数器要放在
+        // 这份"每轮一个"的上下文里（见 AiToolContext.CALL_COUNTER），不可变 map 放不进去。
+        Map<String, Object> toolContext = new HashMap<>();
+        toolContext.put(AiToolContext.USER_ID, userId);
+        toolContext.put(AiToolContext.SESSION_ID, sessionId);
+        toolContext.put(AiToolContext.USER_MSG_ID, target.getId());
+        // 单飞键就是 chat-round:<userMsgId>，工具元数据与日志用同一个键，排障时能直接对上
+        toolContext.put(AiToolContext.CALL_COUNTER, new AtomicInteger());
+
         ChatClient.ChatClientRequestSpec promptSpec = chatClientRegistry.textClient()
                 .prompt()
                 .advisors(advisors -> advisors.param(ChatMemory.CONVERSATION_ID, sessionId.toString()))
                 // 工具上下文：当前用户身份由服务端注入，模型看不到也伪造不了。
                 // 缺了这一步，工具一旦被调用就会因取不到 userId 而失败（见 AiToolContext）。
-                .toolContext(Map.of(AiToolContext.USER_ID, userId))
+                .toolContext(toolContext)
                 .user(input.promptText());
         if (chatClientRegistry.hasOverrides(SceneCode.CHAT)) {
             promptSpec = promptSpec.options(chatClientRegistry.optionsBuilder(SceneCode.CHAT));

@@ -3,9 +3,10 @@
 param([string]$Base = "http://127.0.0.1:8080", [long]$SessionId = 55, [string]$Code = "mock-glucose-demo")
 
 $ErrorActionPreference = "Stop"
-$api = "$Base/api/v1"
 . "$PSScriptRoot\_common.ps1"
 if (-not $PSBoundParameters.ContainsKey('Base')) { $Base = Get-E2eBaseUrl }
+# ⚠️ $api 必须在 $Base 定稿之后才算：否则 E2E_BASE_URL 会被忽略、请求打到默认的 8080（实测踩过）
+$api = "$Base/api/v1"
 $outDir = "$PSScriptRoot\..\..\target\e2e"
 function Save-Json([string]$Path, $Object) {
     [System.IO.File]::WriteAllText($Path, ($Object | ConvertTo-Json -Compress -Depth 6), (New-Object System.Text.UTF8Encoding($false)))

@@ -8,11 +8,13 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
+
 import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 对话接口出入参，对应《接口设计文档》2.23 / 2.24 / 2.25。
+ * 对话接口出入参，对应《接口设计文档》2.23 / 2.24 / 2.25，以及 5.3 / 5.4（会话列表与删除）
+ * 和"会话内历史读取"这条契约外补充接口。
  * Long 由全局 Jackson 配置序列化为字符串（防前端精度丢失），无需逐字段标注。
  */
 public final class ChatDtos {
@@ -27,6 +29,15 @@ public final class ChatDtos {
         @Min(1)
         @Max(3)
         private Integer sessionType;
+
+        /**
+         * 是否强制新建会话（默认 false）。
+         * <p>
+         * 契约里没有"新建会话"这条接口，而产品必须有"新对话"——所以在 2.23 上加这个开关，
+         * 而不是新开一个路径：不传时行为与以前完全一致（复用进行中会话），传 true 时
+         * 事务内"结束旧会话 + 建新会话"。这样老客户端不受影响，也不必改契约。
+         */
+        private Boolean forceNew;
     }
 
     @Data
@@ -76,29 +87,6 @@ public final class ChatDtos {
         private Integer seqNo;
     }
 
-    @Data
-    @Builder
-    public static class HistoryResponse {
-        private List<HistoryMessageResponse> records;
-        private boolean hasMore;
-        private Integer nextBeforeSeqNo;
-    }
-
-    @Data
-    @Builder
-    public static class HistoryMessageResponse {
-        private Long id;
-        private Integer seqNo;
-        private Integer msgRole;
-        private Integer msgType;
-        private String contentText;
-        private Long mediaId;
-        private Long voiceMediaId;
-        private String fileUrl;
-        private LocalDateTime createdAt;
-        private Integer finishReason;
-    }
-
     /** 2.25 AI 流式补全 */
     @Data
     public static class CompletionRequest {
@@ -141,5 +129,73 @@ public final class ChatDtos {
     public static class ErrorEvent {
         private Integer code;
         private String message;
+    }
+
+    // ------------------------------------------------------------------ 会话生命周期（5.3 / 5.4 与历史读取）
+
+    /** 5.3 会话列表出参（契约字段：title/last_msg_at/msg_count/is_pinned，另补 id 与状态供前端判断）。 */
+    @Data
+    @Builder
+    public static class SessionListResponse {
+        private List<SessionRow> records;
+        private Long total;
+
+        /** 归档阈值（天），前端据此解释"为什么这条被归档了"；与 ai.chat.archive-idle-days 同源。 */
+        private Integer archiveIdleDays;
+    }
+
+    @Data
+    @Builder
+    public static class SessionRow {
+        private Long id;
+        private String title;
+        /** 0 归档 1 进行中 2 已结束 */
+        private Integer sessionStatus;
+        private Integer sessionType;
+        private Integer msgCount;
+        private Boolean isPinned;
+        private LocalDateTime lastMsgAt;
+        private LocalDateTime createdAt;
+        /** 最近一条消息的摘要（列表展示用；取不到时为 null，不影响列表）。 */
+        private String lastMessagePreview;
+    }
+
+    /** 会话内历史的一条消息（读的是**全部历史**，与送进模型的记忆窗口无关，见服务层注释）。 */
+    @Data
+    @Builder
+    public static class HistoryMessage {
+        private Long id;
+        private Integer seqNo;
+        /** 1 用户 2 助手 3 系统 */
+        private Integer msgRole;
+        /** 1 文本 2 图片 3 语音 */
+        private Integer msgType;
+        private String contentText;
+        private Long mediaId;
+        /** 图片消息的可访问地址（由服务端解析，前端直接渲染；文本消息为 null）。 */
+        private String mediaUrl;
+        private Long voiceMediaId;
+        private String modelCode;
+        /** 1 正常 2 长度截断 3 内容过滤 4 错误 */
+        private Integer finishReason;
+        private LocalDateTime createdAt;
+    }
+
+    /** 历史分页出参。 */
+    @Data
+    @Builder
+    public static class HistoryResponse {
+        private List<HistoryMessage> records;
+        /** 是否还有更早的消息（前端据此决定要不要继续上拉）。 */
+        private Boolean hasMore;
+        /** 本页最早一条的 seq_no，下一页的 beforeSeq 传它。 */
+        private Integer nextBeforeSeq;
+    }
+
+    /** 置顶/取消置顶（契约只给了 is_pinned 字段，没有接口，这里补一个最小写接口）。 */
+    @Data
+    public static class PinnedRequest {
+        @NotNull(message = "isPinned 不能为空")
+        private Boolean isPinned;
     }
 }

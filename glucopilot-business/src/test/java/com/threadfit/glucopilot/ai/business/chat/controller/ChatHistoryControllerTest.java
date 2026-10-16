@@ -21,24 +21,24 @@ class ChatHistoryControllerTest {
 
     @Test
     void getHistoryUsesAuthenticatedUserAndSerializesPagingContract() throws Exception {
-        var page = ChatDtos.HistoryResponse.builder().records(List.of(ChatDtos.HistoryMessageResponse.builder()
+        var page = ChatDtos.HistoryResponse.builder().records(List.of(ChatDtos.HistoryMessage.builder()
                 .id(18L).seqNo(18).msgRole(2).msgType(1).contentText("小语之前的回复").build()))
-                .hasMore(true).nextBeforeSeqNo(18).build();
-        when(messages.history(2L, 9L, 20, 10)).thenReturn(page);
-        when(messages.history(2L, 9L, null, 50)).thenReturn(page);
+                .hasMore(true).nextBeforeSeq(18).build();
+        when(messages.readHistory(2L, 9L, 10, 20)).thenReturn(page);
+        when(messages.readHistory(2L, 9L, 20, null)).thenReturn(page);
         var mvc = MockMvcBuilders.standaloneSetup(controller).build();
         RequestContext.setUserId(2L);
         try {
             var response = mvc.perform(get("/api/v1/chat-sessions/9/messages")
-                    .param("beforeSeqNo", "20").param("pageSize", "10")).andReturn().getResponse();
+                    .param("beforeSeq", "20").param("pageSize", "10")).andReturn().getResponse();
             assertEquals(200, response.getStatus());
             var json = new ObjectMapper().readTree(response.getContentAsByteArray());
             assertEquals(0, json.get("code").asInt());
             assertTrue(json.get("data").get("hasMore").asBoolean());
-            assertEquals(18, json.get("data").get("nextBeforeSeqNo").asInt());
+            assertEquals(18, json.get("data").get("nextBeforeSeq").asInt());
             assertEquals("小语之前的回复", json.get("data").get("records").get(0).get("contentText").asText());
             assertEquals(200, mvc.perform(get("/api/v1/chat-sessions/9/messages")).andReturn().getResponse().getStatus());
-            verify(messages).history(2L, 9L, null, 50);
+            verify(messages).readHistory(2L, 9L, 20, null);
         } finally {
             RequestContext.clear();
         }
@@ -47,7 +47,7 @@ class ChatHistoryControllerTest {
     @Test
     void missingAuthenticationCannotReachHistoryService() {
         RequestContext.clear();
-        assertThrows(BizException.class, () -> controller.history(9L, null, 50));
+        assertThrows(BizException.class, () -> controller.history(9L, 20, null));
         verifyNoInteractions(messages);
     }
 }

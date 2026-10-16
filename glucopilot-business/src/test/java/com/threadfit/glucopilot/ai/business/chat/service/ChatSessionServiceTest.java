@@ -41,6 +41,8 @@ class ChatSessionServiceTest {
     @Mock
     private ChatSessionMapper chatSessionMapper;
     @Mock
+    private com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper chatMessageMapper;
+    @Mock
     private AiChatClientRegistry chatClientRegistry;
     @Mock
     private AiPromptTemplateService promptTemplateService;
@@ -49,7 +51,7 @@ class ChatSessionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ChatSessionService(chatSessionMapper, new AIProperties(),
+        service = new ChatSessionService(chatSessionMapper, chatMessageMapper, new AIProperties(),
                 chatClientRegistry, promptTemplateService);
     }
 

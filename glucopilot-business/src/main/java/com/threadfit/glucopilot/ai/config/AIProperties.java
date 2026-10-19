@@ -184,6 +184,20 @@ public class AIProperties {
 
         /** 工具结果摘要（chat_tool_call.result_digest）的字符上限。 */
         private int toolDigestMaxChars = 512;
+
+        // ---------------- ③ 期：长期记忆 ----------------
+
+        /** 注入上下文的最多记忆条数（按置信度降序取）；0 = 不注入。 */
+        private int injectMaxItems = 8;
+
+        /** 抽取时最多回看多少条消息（长期记忆只要稳定事实，不需要整段历史）。 */
+        private int memoryExtractMaxMessages = 60;
+
+        /** 抽取输入的字符上限（超长只取最近的部分）。 */
+        private int memoryExtractInputMaxChars = 3000;
+
+        /** 抽取输出的 token 上限（只输出 JSON）。 */
+        private int memoryExtractMaxTokens = 500;
     }
 
     /**

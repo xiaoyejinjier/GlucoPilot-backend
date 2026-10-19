@@ -8,7 +8,7 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +39,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
+import com.threadfit.glucopilot.ai.business.chat.service.impl.ChatSessionServiceImpl;
 
 /**
  * 会话生命周期闭环（5.3 列表 / 5.4 删除 / 2.23 新建 / 置顶 / 状态校验）。
@@ -67,6 +69,10 @@ class ChatSessionLifecycleTest {
     @Mock
     private AiPromptTemplateService promptTemplateService;
 
+    /** ③ 期：会话结束时的长期记忆抽取（旁路依赖）。 */
+    @Mock
+    private com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService userChatMemoryService;
+
     private AIProperties properties;
 
     private ChatSessionService service;
@@ -74,8 +80,8 @@ class ChatSessionLifecycleTest {
     @BeforeEach
     void setUp() {
         properties = new AIProperties();
-        service = new ChatSessionService(chatSessionMapper, chatMessageMapper, properties,
-                chatClientRegistry, promptTemplateService);
+        service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, properties,
+                chatClientRegistry, promptTemplateService, userChatMemoryService);
     }
 
     private static ChatSession session(Long id, int status, boolean deleted, boolean pinned) {
@@ -200,6 +206,68 @@ class ChatSessionLifecycleTest {
                 .thenThrow(duplicateOf("uk_something_else"));
 
         assertThrows(DuplicateKeyException.class, () -> service.openNew(USER_ID, 3));
+    }
+
+    // ---------------------------------------------------------------- ③ 期：会话结束触发记忆抽取
+
+    /**
+     * 旧会话被结束时，要对<b>那条旧会话</b>抽一次长期记忆。
+     * <p>
+     * 顺序要求：读到旧会话的 ID 必须在 {@code endActiveSessions} <b>之前</b>
+     * （结束之后按 {@code uk_user_active} 的条件就查不到了），而抽取调用在插入新会话<b>之后</b>
+     * （新建都没成功，就不该白花一次模型调用）。
+     */
+    @Test
+    void 结束旧会话后对旧会话触发记忆抽取() {
+        ChatSession previous = session(47L, 1, false, false);
+        when(chatSessionMapper.selectActiveByUserId(USER_ID)).thenReturn(previous);
+        when(chatSessionMapper.endActiveSessions(USER_ID)).thenReturn(1);
+        when(chatClientRegistry.modelCode(SceneCode.CHAT)).thenReturn("deepseek-v4-pro");
+        when(promptTemplateService.versionTag(SceneCode.CHAT)).thenReturn("chat@v2");
+
+        service.openNew(USER_ID, 3);
+
+        InOrder inOrder = inOrder(chatSessionMapper);
+        inOrder.verify(chatSessionMapper).selectActiveByUserId(USER_ID);
+        inOrder.verify(chatSessionMapper).endActiveSessions(USER_ID);
+        inOrder.verify(chatSessionMapper).insert(any(ChatSession.class));
+        // 抽的是旧会话，不是刚建出来的那条（新会话还没有任何对话可抽）
+        verify(userChatMemoryService).extractAsync(USER_ID, 47L, "session-ended");
+    }
+
+    @Test
+    void 本来就没有进行中会话时不触发记忆抽取() {
+        when(chatSessionMapper.selectActiveByUserId(USER_ID)).thenReturn(null);
+        when(chatSessionMapper.endActiveSessions(USER_ID)).thenReturn(0);
+        when(chatClientRegistry.modelCode(SceneCode.CHAT)).thenReturn("deepseek-v4-pro");
+        when(promptTemplateService.versionTag(SceneCode.CHAT)).thenReturn("chat@v2");
+
+        service.openNew(USER_ID, 3);
+
+        verify(userChatMemoryService, never()).extractAsync(anyLong(), anyLong(), any());
+    }
+
+    /**
+     * 抽取提交失败（线程池拒绝、下游实现换人后抛异常……）绝不能把新建会话拖下水。
+     * <p>
+     * {@code openNew} 在 {@code @Transactional} 里：一次"记忆抽取失败"如果冒上来，
+     * 用户刚点出来的新会话会跟着回滚，表现成"点了新对话没反应"。这条用例把
+     * "记忆是增强项、新建会话是功能本身"落成断言。
+     */
+    @Test
+    void 记忆抽取提交失败不影响新建会话() {
+        ChatSession previous = session(47L, 1, false, false);
+        when(chatSessionMapper.selectActiveByUserId(USER_ID)).thenReturn(previous);
+        when(chatSessionMapper.endActiveSessions(USER_ID)).thenReturn(1);
+        when(chatClientRegistry.modelCode(SceneCode.CHAT)).thenReturn("deepseek-v4-pro");
+        when(promptTemplateService.versionTag(SceneCode.CHAT)).thenReturn("chat@v2");
+        org.mockito.Mockito.doThrow(new IllegalStateException("executor saturated"))
+                .when(userChatMemoryService).extractAsync(anyLong(), anyLong(), any());
+
+        ChatSession created = service.openNew(USER_ID, 3);
+
+        assertEquals(1, created.getSessionStatus(), "新会话照常建成");
+        verify(chatSessionMapper).insert(any(ChatSession.class));
     }
 
     // ---------------------------------------------------------------- 5.4 删除

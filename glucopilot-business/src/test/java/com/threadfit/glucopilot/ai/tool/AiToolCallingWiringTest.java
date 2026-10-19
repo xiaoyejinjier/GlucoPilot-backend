@@ -54,6 +54,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.threadfit.glucopilot.ai.business.chat.service.ChatCompletionService;
 
 /**
  * <b>工具装配路径的端到端验证</b>——这是 {@code AiChatClientConfig} 里长期标注的「未验证项」。

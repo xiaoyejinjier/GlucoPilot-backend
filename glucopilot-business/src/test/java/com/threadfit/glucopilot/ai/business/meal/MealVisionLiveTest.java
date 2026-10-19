@@ -4,9 +4,9 @@ import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiVisionClientConfig;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.model.AiModelSpec;
-import com.threadfit.glucopilot.ai.model.ChatModelFactory;
-import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
+import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
+import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import com.threadfit.glucopilot.file.entity.MediaFile;
@@ -28,6 +28,8 @@ import java.io.ByteArrayOutputStream;
 import java.time.Duration;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
+import com.threadfit.glucopilot.ai.prompt.service.impl.AiPromptTemplateServiceImpl;
+import com.threadfit.glucopilot.ai.business.meal.dto.MealAnalysisDtos;
 
 /**
  * 显式启用的真实提供方连通性测试，仅发送空白测试图，不读用户照片。
@@ -55,7 +57,7 @@ class MealVisionLiveTest {
             props.getScenes().put(scene.getConfigKey(), configured);
         }
         // mapper=null：live 测试只用 classpath 内置提示词，不连库（见 AiPromptTemplateService 构造器）
-        AiPromptTemplateService prompts = new AiPromptTemplateService(props, null);
+        AiPromptTemplateService prompts = new AiPromptTemplateServiceImpl(props, null);
         ReflectionTestUtils.invokeMethod(prompts, "init");
 
         // 规格取自 ai.vision.*（等价于 yaml 兜底那一份），provider=2 → OpenAI 兼容协议

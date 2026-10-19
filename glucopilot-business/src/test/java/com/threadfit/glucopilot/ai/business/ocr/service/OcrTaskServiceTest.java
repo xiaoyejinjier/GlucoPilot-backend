@@ -28,6 +28,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.threadfit.glucopilot.ai.business.ocr.service.impl.OcrTaskServiceImpl;
 
 class OcrTaskServiceTest {
 
@@ -42,7 +43,7 @@ class OcrTaskServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new OcrTaskService(taskMapper, mediaFileService, visionAnalyzer,
+        service = new OcrTaskServiceImpl(taskMapper, mediaFileService, visionAnalyzer,
                 jsonUtils, idempotencyStore, directExecutor);
     }
 

@@ -1,8 +1,8 @@
 package com.threadfit.glucopilot.ai.config;
 
-import com.threadfit.glucopilot.ai.model.AiRuntimeConfigService;
-import com.threadfit.glucopilot.ai.model.ChatModelFactory;
-import com.threadfit.glucopilot.ai.model.DynamicChatModel;
+import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
+import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
+import com.threadfit.glucopilot.ai.model.runtime.DynamicChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;

@@ -1,13 +1,14 @@
 package com.threadfit.glucopilot.ai.config;
 
-import com.threadfit.glucopilot.ai.memory.ChatContextReader;
-import com.threadfit.glucopilot.ai.memory.ChatHistoryAssembler;
-import com.threadfit.glucopilot.ai.memory.ChatMemoryReadAdvisor;
+import com.threadfit.glucopilot.ai.memory.advisor.ChatContextReader;
+import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
+import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryReadAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import com.threadfit.glucopilot.ai.memory.repository.MyBatisChatMemoryRepository;
 
 /**
  * 会话记忆装配。

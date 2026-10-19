@@ -48,3 +48,5 @@ docker build -t glucopilot-api:local .
 无 AI Key 部署：服务器 .env 设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false`，不填写虚假 API Key。实际调用文本 AI 返回业务拒绝；其他功能仍需数据库、Redis 和登录签名密钥。恢复 AI 时设置 `SPRING_AI_MODEL_CHAT=deepseek` 和真实 Key，重建容器。
 
 课程演示无需开通 OSS：设置服务器 `.env` 中 `STORAGE_PROVIDER=disabled`，不创建对象存储客户端，也不需要 OSS 凭据。上传及对象读取明确拒绝，不返回模拟成功。AI 仍需单独设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false` 关闭。恢复存储时选择已有 provider 并填写真实配置，重建容器。
+
+本机联调内容/食物图片可用 MinIO：`docker compose -f compose.minio.yaml up -d`，在控制台创建桶（默认名 `glucopilot`），`.env` 设 `STORAGE_PROVIDER=minio` 与 `MINIO_*`（见 `.env.example`）。未起 MinIO 时保持 `STORAGE_PROVIDER=local` 即可。

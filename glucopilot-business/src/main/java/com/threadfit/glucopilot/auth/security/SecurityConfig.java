@@ -79,7 +79,9 @@ public class SecurityConfig {
                         HttpMethod.POST,
                         "/api/v1/auth/wechat/sessions",
                         "/api/v1/auth/sms/codes",
-                        "/api/v1/auth/phone/sessions")
+                        "/api/v1/auth/phone/sessions",
+                        "/api/v1/auth/email/codes",
+                        "/api/v1/auth/email/sessions")
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.GET,
@@ -90,6 +92,7 @@ public class SecurityConfig {
                         "/api/v1/foods",
                         "/api/v1/foods/*",
                         "/api/v1/foods/images/*",
+                        "/api/v1/cms/images/*",
                         "/api/v1/dict/**",
                         "/api/v1/app-config",
                         "/api/v1/media-files/local-objects")

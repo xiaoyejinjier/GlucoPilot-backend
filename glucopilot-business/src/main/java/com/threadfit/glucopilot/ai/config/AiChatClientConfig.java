@@ -2,9 +2,9 @@ package com.threadfit.glucopilot.ai.config;
 
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.guard.MedicalGuardAdvisor;
-import com.threadfit.glucopilot.ai.memory.ChatMemoryReadAdvisor;
-import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.prompt.DynamicPromptAdvisor;
+import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryReadAdvisor;
+import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.prompt.advisor.DynamicPromptAdvisor;
 import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,6 +19,7 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
 
 /**
  * AI ChatClient 装配：把提示词、Advisor 链、工具白名单一次性挂好。

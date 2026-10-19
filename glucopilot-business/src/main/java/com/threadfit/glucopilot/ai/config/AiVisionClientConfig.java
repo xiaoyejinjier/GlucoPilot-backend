@@ -1,12 +1,14 @@
 package com.threadfit.glucopilot.ai.config;
 
-import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
+import com.threadfit.glucopilot.ai.model.runtime.DynamicChatModel;
 
 /**
  * 视觉 provider（阿里云百炼 qwen-vl，OpenAI 兼容协议）的 {@code ChatClient} 装配。

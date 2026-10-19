@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.tool;
 
 import org.springframework.ai.chat.model.ToolContext;
+import com.threadfit.glucopilot.ai.business.chat.service.ChatCompletionService;
 
 /**
  * 工具上下文的键与取值约定。

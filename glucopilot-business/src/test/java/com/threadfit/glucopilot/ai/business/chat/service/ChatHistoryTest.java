@@ -22,13 +22,14 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import com.threadfit.glucopilot.ai.business.chat.service.impl.ChatMessageServiceImpl;
 
 class ChatHistoryTest {
     private final ChatMessageMapper mapper = mock(ChatMessageMapper.class);
     private final ChatSessionService sessions = mock(ChatSessionService.class);
     private final OwnedMediaResolver media = mock(OwnedMediaResolver.class);
     private final MediaFileService files = mock(MediaFileService.class);
-    private final ChatMessageService service = new ChatMessageService(mapper, mock(ChatSessionMapper.class), sessions, media, files);
+    private final ChatMessageService service = new ChatMessageServiceImpl(mapper, mock(ChatSessionMapper.class), sessions, media, files);
 
     @Test
     void latestPageIsChronologicalWithExclusiveOlderCursor() {

@@ -7,9 +7,9 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
-import com.threadfit.glucopilot.ai.memory.ChatSummaryService;
-import com.threadfit.glucopilot.ai.memory.TokenEstimator;
-import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
+import com.threadfit.glucopilot.ai.memory.assembly.TokenEstimator;
+import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
@@ -55,6 +55,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import org.mockito.InOrder;
+import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
+import com.threadfit.glucopilot.ai.business.chat.service.impl.ChatCompletionServiceImpl;
 
 /**
  * 流式补全的收尾语义。
@@ -96,15 +98,15 @@ class ChatCompletionServiceTest {
     private final AiToolRegistry toolRegistry = mock(AiToolRegistry.class);
     private final ChatSummaryService chatSummaryService = mock(ChatSummaryService.class);
     /** ③ 期新增依赖：显式"记住……"时抽长期记忆；落库后写分片元数据。 */
-    private final com.threadfit.glucopilot.ai.memory.UserChatMemoryService userChatMemoryService =
-            mock(com.threadfit.glucopilot.ai.memory.UserChatMemoryService.class);
+    private final com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService userChatMemoryService =
+            mock(com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService.class);
     private final ChatContextRecorder chatContextRecorder = mock(ChatContextRecorder.class);
 
     private ChatCompletionService service;
 
     @BeforeEach
     void setUp() {
-        service = new ChatCompletionService(registry, chatMessageMapper, chatSessionService,
+        service = new ChatCompletionServiceImpl(registry, chatMessageMapper, chatSessionService,
                 chatMessageService, ownedMediaResolver, visionAnalyzer, new EnglishPreambleGuard(),
                 new ChatRoundGuard(), new JsonUtils(new ObjectMapper()), promptTemplateService,
                 toolRegistry, new TokenEstimator(), chatSummaryService,

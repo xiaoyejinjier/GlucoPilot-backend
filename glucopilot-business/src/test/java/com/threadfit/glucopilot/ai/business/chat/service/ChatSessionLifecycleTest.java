@@ -8,7 +8,7 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +39,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
+import com.threadfit.glucopilot.ai.business.chat.service.impl.ChatSessionServiceImpl;
 
 /**
  * 会话生命周期闭环（5.3 列表 / 5.4 删除 / 2.23 新建 / 置顶 / 状态校验）。
@@ -69,7 +71,7 @@ class ChatSessionLifecycleTest {
 
     /** ③ 期：会话结束时的长期记忆抽取（旁路依赖）。 */
     @Mock
-    private com.threadfit.glucopilot.ai.memory.UserChatMemoryService userChatMemoryService;
+    private com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService userChatMemoryService;
 
     private AIProperties properties;
 
@@ -78,7 +80,7 @@ class ChatSessionLifecycleTest {
     @BeforeEach
     void setUp() {
         properties = new AIProperties();
-        service = new ChatSessionService(chatSessionMapper, chatMessageMapper, properties,
+        service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, properties,
                 chatClientRegistry, promptTemplateService, userChatMemoryService);
     }
 

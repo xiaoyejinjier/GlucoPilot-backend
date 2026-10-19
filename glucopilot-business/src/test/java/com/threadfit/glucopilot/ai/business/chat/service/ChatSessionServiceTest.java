@@ -5,7 +5,7 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +24,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.threadfit.glucopilot.ai.business.chat.service.impl.ChatSessionServiceImpl;
 
 /**
  * 2.23 get-or-create 的并发语义。
@@ -51,8 +52,8 @@ class ChatSessionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ChatSessionService(chatSessionMapper, chatMessageMapper, new AIProperties(),
-                chatClientRegistry, promptTemplateService, org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.UserChatMemoryService.class));
+        service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, new AIProperties(),
+                chatClientRegistry, promptTemplateService, org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService.class));
     }
 
     @Test

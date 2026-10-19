@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.threadfit.glucopilot.common.model.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.service.ChatContextRecorder;
 
 /**
  * 一轮 prompt 的分片审计（对应 chat_context，③ 期起开始写入）。

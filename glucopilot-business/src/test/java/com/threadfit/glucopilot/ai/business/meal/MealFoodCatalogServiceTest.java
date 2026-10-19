@@ -15,12 +15,15 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+import com.threadfit.glucopilot.ai.business.meal.dto.MealAnalysisDtos;
+import com.threadfit.glucopilot.ai.business.meal.service.MealFoodCatalogService;
+import com.threadfit.glucopilot.ai.business.meal.service.impl.MealFoodCatalogServiceImpl;
 
 @ExtendWith(MockitoExtension.class)
 class MealFoodCatalogServiceTest {
     @Mock private FoodNutritionMapper foods;
     @Mock private FoodCategoryMapper categories;
-    @InjectMocks private MealFoodCatalogService service;
+    @InjectMocks private MealFoodCatalogServiceImpl service;
 
     @Test void libraryNutritionOverridesModelEstimatesWithoutChangingLibrary() {
         FoodNutrition rice = row(1L, "米饭", 1, "MANUAL");

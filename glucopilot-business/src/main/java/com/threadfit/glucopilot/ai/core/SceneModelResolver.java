@@ -2,15 +2,17 @@ package com.threadfit.glucopilot.ai.core;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AIProperties.SceneProperties;
-import com.threadfit.glucopilot.ai.model.AiModelSpec;
-import com.threadfit.glucopilot.ai.model.AiRuntimeConfigService;
-import com.threadfit.glucopilot.ai.scene.AiSceneBindingService;
+import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
+import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
+import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
+import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
+import com.threadfit.glucopilot.ai.model.runtime.DynamicChatModel;
 
 /**
  * 场景 → 模型编码 / 请求级参数的解析器。

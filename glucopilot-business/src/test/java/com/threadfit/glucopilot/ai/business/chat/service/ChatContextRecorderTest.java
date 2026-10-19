@@ -9,7 +9,7 @@ import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerIntercept
 import com.baomidou.mybatisplus.spring.MybatisSqlSessionFactoryBean;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatContextEntity;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatContextMapper;
-import com.threadfit.glucopilot.ai.memory.ChatContextShard;
+import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
 import com.threadfit.glucopilot.common.mybatis.AuditMetaObjectHandler;
 import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
 import org.apache.ibatis.session.SqlSession;
@@ -31,6 +31,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import com.threadfit.glucopilot.ai.business.chat.service.impl.ChatContextRecorderImpl;
 
 /**
  * 分片元数据落库（③ 期）的语义。
@@ -71,7 +72,7 @@ class ChatContextRecorderTest {
     void 每条分片落一行且两个内容列为空() {
         ChatContextMapper mapper = mock(ChatContextMapper.class);
 
-        new ChatContextRecorder(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
+        new ChatContextRecorderImpl(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
                 "deepseek-v4-pro", 3, shards());
 
         ArgumentCaptor<ChatContextEntity> captor = ArgumentCaptor.forClass(ChatContextEntity.class);
@@ -106,7 +107,7 @@ class ChatContextRecorderTest {
     void 空分片时一次库都不写() {
         ChatContextMapper mapper = mock(ChatContextMapper.class);
 
-        new ChatContextRecorder(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
+        new ChatContextRecorderImpl(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
                 "m", 1, List.of());
 
         verify(mapper, never()).insert(any(ChatContextEntity.class));
@@ -116,7 +117,7 @@ class ChatContextRecorderTest {
     @Test
     void 缺用户或会话时跳过写入() {
         ChatContextMapper mapper = mock(ChatContextMapper.class);
-        ChatContextRecorder recorder = new ChatContextRecorder(mapper);
+        ChatContextRecorder recorder = new ChatContextRecorderImpl(mapper);
 
         recorder.record(null, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID, "m", 1, shards());
         recorder.record(USER_ID, null, TRIGGER_MSG_ID, ASSISTANT_MSG_ID, "m", 1, shards());
@@ -134,7 +135,7 @@ class ChatContextRecorderTest {
         doThrow(new IllegalStateException("chat_context 表不可用"))
                 .when(mapper).insert(any(ChatContextEntity.class));
 
-        assertDoesNotThrow(() -> new ChatContextRecorder(mapper)
+        assertDoesNotThrow(() -> new ChatContextRecorderImpl(mapper)
                 .record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID, "m", 1, shards()));
 
         verify(mapper).insert(any(ChatContextEntity.class));
@@ -163,7 +164,7 @@ class ChatContextRecorderTest {
             createContextTable(session.getConnection(), false);
             ChatContextMapper mapper = session.getMapper(ChatContextMapper.class);
 
-            new ChatContextRecorder(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
+            new ChatContextRecorderImpl(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
                     "deepseek-v4-pro", 2, shards());
 
             List<ChatContextEntity> rows = mapper.selectList(new LambdaQueryWrapper<ChatContextEntity>()
@@ -195,7 +196,7 @@ class ChatContextRecorderTest {
             ChatContextMapper mapper = session.getMapper(ChatContextMapper.class);
 
             // Recorder 吞异常，所以这里不会抛：只能靠"一行都没写进去"暴露失败
-            new ChatContextRecorder(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
+            new ChatContextRecorderImpl(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
                     "m", 1, shards());
 
             assertEquals(0, mapper.selectCount(new LambdaQueryWrapper<ChatContextEntity>()

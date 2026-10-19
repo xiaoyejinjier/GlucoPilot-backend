@@ -1,5 +1,7 @@
 -- ③ 期：AI 长期记忆与合规（管理端 4.14/4.15 权限点与菜单 + 审计查询页入口）。
 --
+-- 版本号：原为 V24，合并远端（同号 V24__auth_email_code）后改为 V26，以免 Flyway 版本撞车。
+--
 -- 三张表**都已存在**（V1 建的），本次只补"权限与菜单"，不重建表：
 --   * chat_user_memory —— 跨会话长期记忆（memory_key/memory_text/confidence/source_session_id）；
 --   * ops_audit_log    —— 运营操作审计（只追加，无 gmt_modified）；
@@ -69,6 +71,6 @@ SELECT 'MEMORY', '长期记忆抽取提示', '# 角色：长期记忆抽取器
 - 没有可提取内容时输出 {"memories":[]}；
 - 每条 text 不超过 60 字，用陈述句，主语是用户（例："对花生过敏"而不是"用户说他对花生过敏"）；
 - 同一个 key 只输出**最可靠的一条**（如果已有记忆与新内容冲突，输出新的那条，并在 text 里写明更正后的说法）；
-- 不要输出花括号以外的多余符号，不要用 Markdown。', '[]', NULL, 1, 1, 'V24：③ 期长期记忆抽取场景的初始版本', 1
+- 不要输出花括号以外的多余符号，不要用 Markdown。', '[]', NULL, 1, 1, 'V26：③ 期长期记忆抽取场景的初始版本', 1
  WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_template
                     WHERE BINARY scene_code = 'MEMORY' AND version_no = 1 AND is_deleted = 0);

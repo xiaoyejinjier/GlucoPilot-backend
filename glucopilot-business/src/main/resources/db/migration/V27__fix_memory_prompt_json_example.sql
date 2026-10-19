@@ -1,6 +1,6 @@
--- 修 V24 播种的 MEMORY 提示词：正文里的 JSON 示例含成对花括号与方括号，被 ST 模板当成表达式 → 启动即失败。
+-- 修 V26 播种的 MEMORY 提示词：正文里的 JSON 示例含成对花括号与方括号，被 ST 模板当成表达式 → 启动即失败。
 --
--- 事故经过（2026-10-16，第三次同族问题）：V24 把 prompts/memory/extract.md 原样播种进 ai_prompt_template，
+-- 事故经过（2026-10-16，第三次同族问题）：V26 把 prompts/memory/extract.md 原样播种进 ai_prompt_template，
 -- 而那份提示词为了"讲清输出格式"写了一个 JSON 示例（memories 数组 + 对象），
 -- 于是 AiPromptTemplateService 启动校验时 StTemplateRenderer 报 `27:12: '[' came as a complete surprise to me`，
 -- classpath 那份同样有问题 → 应用直接起不来。
@@ -12,6 +12,8 @@
 --   所以下一步要补一条"启动前把所有 classpath 提示词按真实 yaml 配置全量校验一遍"的测试。
 --
 -- BINARY 比较：scene_code 排序规则大小写不敏感，匹配必须 BINARY（V20 的教训）。
+--
+-- 版本号：原为 V25，合并远端（同号 V25__user_device）后改为 V27。
 
 UPDATE ai_prompt_template
    SET prompt_body = '# 角色：长期记忆抽取器
@@ -52,6 +54,6 @@ evidence 取"吃了花生会起疹子"，即表示记下一条"对花生过敏"�
 - 没有可提取内容时输出一个空数组的 memories 字段（即该字段为空列表）；
 - 同一个 key 只输出**最可靠的一条**（如果已有记忆与新内容冲突，输出更正后的说法）；
 - 不要输出多余符号，不要用 Markdown，也不要输出上面示例之外的解释。',
-       change_note = 'V25：修正 V24 播种正文里的 JSON 示例（花括号/方括号会导致启动校验失败）',
+       change_note = 'V27：修正 V26 播种正文里的 JSON 示例（花括号/方括号会导致启动校验失败）',
        config_version = config_version + 1
  WHERE BINARY scene_code = 'MEMORY' AND version_no = 1 AND is_deleted = 0;

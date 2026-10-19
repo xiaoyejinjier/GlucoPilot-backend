@@ -74,7 +74,7 @@ public class ChatContextRecorder {
                 row.setContextRound(round);
                 row.setContextType(shard.contextType());
                 row.setContextKey(truncate(shard.contextKey(), CONTEXT_KEY_MAX));
-                // 两个内容列恒为 NULL（只记元数据）：见 ChatContextEntity 类注释与 V26 迁移
+                // 两个内容列恒为 NULL（只记元数据）：见 ChatContextEntity 类注释与 V28 迁移
                 row.setContentText(null);
                 row.setContentJson(null);
                 row.setTokenEstimate(Math.max(shard.tokenEstimate(), 0));

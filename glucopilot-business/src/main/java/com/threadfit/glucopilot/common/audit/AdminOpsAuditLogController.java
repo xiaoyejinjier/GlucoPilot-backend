@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 从备份里捞，而不是让人在页面上点两下。
  *
  * <h2>权限为什么是 {@code ai:audit:view}</h2>
- * 与运营菜单（V24 的 2032）用同一个权限串。审计里会出现"谁在什么时候看了哪个用户的数据"，
+ * 与运营菜单（V26 的 2032）用同一个权限串。审计里会出现"谁在什么时候看了哪个用户的数据"，
  * 这本身就是敏感信息；`ai:audit:view` 只授予超管与运营，且与 `ai:memory:view`（看记忆正文）分开——
  * 能看操作台账不该顺带等于能看健康内容。
  *

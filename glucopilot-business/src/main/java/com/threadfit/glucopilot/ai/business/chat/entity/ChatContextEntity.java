@@ -18,7 +18,7 @@ import lombok.EqualsAndHashCode;
  * 且写入量随对话量线性膨胀。要定位内容，用 {@code trigger_msg_id} / {@code assistant_msg_id}
  * 回查即可。
  * <p>
- * 因此 V26 迁移<b>删掉了 {@code chk_cc_payload}（"内容必须非空"）这条 CHECK</b>：
+ * 因此 V28 迁移<b>删掉了 {@code chk_cc_payload}（"内容必须非空"）这条 CHECK</b>：
  * 它是"这张表用来存整包窗口"那个旧设想的产物，与"只记元数据"的新约定直接冲突
  * （两个内容列都是 NULL 时会被数据库拒绝）。删的是约束，不是数据。
  *

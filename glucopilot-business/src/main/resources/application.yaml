@@ -11,6 +11,25 @@
 #    shell 与 IDE 都不读，所以本机开发需要 export 该变量，或写进 application-local.yaml
 #    （该文件放在本目录，见 backend/README.md）。
 spring:
+  mail:
+    host: ${MAIL_HOST:smtp.qq.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          connectiontimeout: ${MAIL_SMTP_CONNECTION_TIMEOUT:5000}
+          timeout: ${MAIL_SMTP_TIMEOUT:8000}
+          writetimeout: ${MAIL_SMTP_WRITE_TIMEOUT:8000}
+          quitwait: false
+          ssl:
+            enable: ${MAIL_SSL_ENABLED:false}
+          starttls:
+            enable: ${MAIL_STARTTLS_ENABLED:true}
+            required: ${MAIL_STARTTLS_REQUIRED:true}
   application:
     name: GlucoPilot Backend
   messages:
@@ -277,6 +296,10 @@ ai:
       version: v1
       temperature: 0.1
 
+
+glucopilot:
+  mail:
+    from: ${MAIL_FROM:}
 
 # Official RuoYi framework settings; secrets supplied by deployment environment.
 ruoyi:

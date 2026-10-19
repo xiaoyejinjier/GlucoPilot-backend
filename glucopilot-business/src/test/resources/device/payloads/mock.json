@@ -1,0 +1,11 @@
+{
+  "readings": [
+    {
+      "recordDate": "2026-10-14",
+      "nodeCode": "before_breakfast",
+      "value": 5.6,
+      "unit": "MMOL_L",
+      "externalRecordId": "mock-1"
+    }
+  ]
+}

@@ -36,6 +36,16 @@ public class AuthController {
         return ApiResponse.ok(authService.loginByPhone(request));
     }
 
+    @PostMapping("/email/codes")
+    public ApiResponse<AuthDtos.EmailCodeResponse> sendEmail(@Valid @RequestBody AuthDtos.EmailCodeRequest request) {
+        return ApiResponse.ok(authService.sendEmailCode(request));
+    }
+
+    @PostMapping("/email/sessions")
+    public ApiResponse<AuthDtos.SessionResponse> emailLogin(@Valid @RequestBody AuthDtos.EmailLoginRequest request) {
+        return ApiResponse.ok(authService.loginByEmail(request));
+    }
+
     @DeleteMapping("/sessions/current")
     public ApiResponse<Void> logout(HttpServletRequest request) {
         authService.logout(resolveBearer(request));

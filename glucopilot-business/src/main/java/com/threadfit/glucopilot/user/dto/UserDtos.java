@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.user.dto;
 import com.threadfit.glucopilot.profile.health.dto.HealthDtos.HealthView;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -52,6 +53,7 @@ public final class UserDtos {
     public static class MeResponse {
         private Integer accountStatus;
         private String phoneMasked;
+        private String emailMasked;
         private ProfileView profile;
         private HealthView health;
         private SettingsView settings;
@@ -112,5 +114,22 @@ public final class UserDtos {
     @Builder
     public static class PhoneBindResult {
         private String phoneMasked;
+    }
+
+    @Data
+    public static class EmailBindRequest {
+        @NotBlank
+        @Email(message = "邮箱格式不正确")
+        @Size(max = 128)
+        private String email;
+        @NotBlank
+        @Pattern(regexp = "^\\d{6}$", message = "验证码为 6 位数字")
+        private String verifyCode;
+    }
+
+    @Data
+    @Builder
+    public static class EmailBindResult {
+        private String emailMasked;
     }
 }

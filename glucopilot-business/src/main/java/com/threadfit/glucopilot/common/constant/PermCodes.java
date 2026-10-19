@@ -16,6 +16,8 @@ public final class PermCodes {
     public static final String FEEDBACK_REPLY = "feedback:reply";
     public static final String EXPORT_TASK_MANAGE = "export:task:manage";
     public static final String USER_MANAGE = "user:manage";
+
+    public static final String DEVICE_MANAGE = "device:manage";
     public static final String HEALTH_ARCHIVE_VIEW = "health:archive:view";
     public static final String MESSAGE_PUSH_MANAGE = "message:push:manage";
     public static final String AI_CONFIG_MANAGE = "ai:config:manage";

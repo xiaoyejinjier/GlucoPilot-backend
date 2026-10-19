@@ -90,6 +90,20 @@
 
 反馈管理、用户管理和九时段用户每日明细使用同样的分页交互：默认 10 条、可选 10/20/50/100 条，表格内部滚动，分页栏展示总数、当前页和记录区间。页码与每页条数改变时重新请求各自服务端接口，筛选条件只在提交查询时生效并随翻页保留；反馈状态、用户状态变更或数据减少导致当前页越界时自动回退。九时段按“用户 + 日期”分页，`overview` 统计整个查询范围，不按当前页记录数计算，也不得随翻页丢失已提交的日期范围。
 
+## 管理端内容媒体（资讯/轮播）
+
+媒体素材页管理资讯配图与轮播图：上传 JPG/PNG（单张 1 字节至 5MB），走对象存储「凭证 → PUT → 登记」。开发可选用 `STORAGE_PROVIDER=local` 或 `minio`；生产为阿里云 OSS。稳定访问地址为 `/api/v1/cms/images/{id}`（服务端读私有对象，不把预签名 URL 写入 CMS 表）。
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| `GET /admin/v1/cms-media?purpose=` | `content:media:manage` | `purpose` 可选 `news` / `banner` / 省略（全部）；返回素材列表 |
+| `POST /admin/v1/cms-media/upload-credentials` | `content:media:manage` | 请求 `{ purpose, bizType: 5, mimeType, sizeBytes }` |
+| `POST /admin/v1/cms-media` | `content:media:manage` | 请求 `{ purpose, bizType: 5, storageKey, mimeType, sizeBytes }`；建议带 `X-Idempotency-Key` |
+| `DELETE /admin/v1/cms-media/{id}` | `content:media:manage` | 软删除（`file_status=0`），仅本人运营账号上传的素材 |
+| `GET /api/v1/cms/images/{id}` | 公开 | 返回已登记 CMS 图片二进制 |
+
+`media_file` 使用 `biz_type=CMS(5)`，`biz_id=CONTENT_NEWS` 或 `CONTENT_BANNER`，`ops_id` 为当前运营，`user_id` 为空。Banner `image` / 资讯 `coverUrl` 可填上述稳定相对路径。
+
 ## 管理端食物图片
 
 新增与编辑食物可选择内置图片或已上传的食物图片，也可上传新的 JPG/PNG 图片（单张 1 字节至 5MB）。上传采用现有对象存储的“凭证 → PUT 文件字节 → 登记”流程，不将 base64 或浏览器临时地址写入食品表。

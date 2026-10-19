@@ -1,6 +1,4 @@
-# 通用配置（任意 p  mail:
-    from: ${MAIL_FROM:}
-rofile 都生效）。
+# 通用配置（任意 profile 都生效）。
 # profile 约定：
 #   application.yaml        公共配置 + 本机默认可跑通的默认值
 #   application-dev.yaml    开发环境差异（profile=dev）
@@ -291,6 +289,10 @@ ai:
       version: v1
       temperature: 0.1
 
+
+glucopilot:
+  mail:
+    from: ${MAIL_FROM:}
 
 # Official RuoYi framework settings; secrets supplied by deployment environment.
 ruoyi:

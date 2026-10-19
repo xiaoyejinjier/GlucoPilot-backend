@@ -3,8 +3,11 @@ package com.threadfit.glucopilot.auth.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.auth.client.WechatAuthClient;
 import com.threadfit.glucopilot.auth.dto.AuthDtos;
+import com.threadfit.glucopilot.auth.entity.AuthEmailCode;
 import com.threadfit.glucopilot.auth.entity.AuthSmsCode;
+import com.threadfit.glucopilot.auth.mail.EmailCodeMailSender;
 import com.threadfit.glucopilot.auth.entity.UserSession;
+import com.threadfit.glucopilot.auth.mapper.AuthEmailCodeMapper;
 import com.threadfit.glucopilot.auth.mapper.AuthSmsCodeMapper;
 import com.threadfit.glucopilot.auth.mapper.UserSessionMapper;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
@@ -19,6 +22,7 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.common.util.EmailUtils;
 import com.threadfit.glucopilot.common.util.IdUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -36,6 +40,8 @@ public class AuthService {
     public static final long C_TOKEN_SECONDS = 7L * 24 * 3600;
     private static final int SMS_EXPIRE_SECONDS = 300;
     private static final long SMS_COOLDOWN_MS = 60_000L;
+    private static final int EMAIL_EXPIRE_SECONDS = 300;
+    private static final long EMAIL_COOLDOWN_MS = 60_000L;
 
     private final WechatAuthClient wechatAuthClient;
     private final UserAccountMapper userAccountMapper;
@@ -44,9 +50,13 @@ public class AuthService {
     private final UserSettingMapper userSettingMapper;
     private final UserSessionMapper userSessionMapper;
     private final AuthSmsCodeMapper authSmsCodeMapper;
+    private final AuthEmailCodeMapper authEmailCodeMapper;
+    private final EmailCodeMailSender emailCodeMailSender;
 
     /** 短信发送冷却：phone -> 上次发送时间戳（进程内内存，重启清空） */
     private final ConcurrentHashMap<String, AtomicLong> smsCooldown = new ConcurrentHashMap<>();
+    /** 邮箱发送冷却：email -> 上次发送时间戳（进程内内存，重启清空） */
+    private final ConcurrentHashMap<String, AtomicLong> emailCooldown = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
 
     @Transactional
@@ -118,6 +128,59 @@ public class AuthService {
         return toSessionResponse(session, account, isNew);
     }
 
+    public AuthDtos.EmailCodeResponse sendEmailCode(AuthDtos.EmailCodeRequest request) {
+        String scene = request.getScene().trim().toLowerCase();
+        if (!"login".equals(scene) && !"bind".equals(scene)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind");
+        }
+        String email = EmailUtils.normalize(request.getEmail());
+        long now = System.currentTimeMillis();
+        AtomicLong last = emailCooldown.computeIfAbsent(email, k -> new AtomicLong(0));
+        long prev = last.get();
+        if (prev > 0 && now - prev < EMAIL_COOLDOWN_MS) {
+            throw new BizException(ErrorCode.TOO_MANY_REQUESTS, "发送过于频繁，请稍后再试");
+        }
+        if (!last.compareAndSet(prev, now)) {
+            throw new BizException(ErrorCode.TOO_MANY_REQUESTS, "发送过于频繁，请稍后再试");
+        }
+
+        emailCodeMailSender.ensureConfigured();
+
+        String code = String.format("%06d", random.nextInt(1_000_000));
+        AuthEmailCode row = new AuthEmailCode();
+        row.setEmail(email);
+        row.setVerifyCode(code);
+        row.setExpireAt(LocalDateTime.now().plusSeconds(EMAIL_EXPIRE_SECONDS));
+        row.setIsUsed(0);
+        row.setClientIp(RequestContext.getClientIp());
+        authEmailCodeMapper.insert(row);
+
+        emailCodeMailSender.sendCodeAsync(email, code, () -> last.set(0));
+
+        return AuthDtos.EmailCodeResponse.builder().expireIn(EMAIL_EXPIRE_SECONDS).build();
+    }
+
+    @Transactional
+    public AuthDtos.SessionResponse loginByEmail(AuthDtos.EmailLoginRequest request) {
+        String email = EmailUtils.normalize(request.getEmail());
+        consumeEmailCode(email, request.getEmailCode());
+        UserAccount account = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
+                .eq(UserAccount::getEmail, email)
+                .last("LIMIT 1"));
+        boolean isNew = false;
+        if (account == null) {
+            account = createUserWithOpenid("email_" + IdUtils.uuid().substring(0, 16), null);
+            account.setEmail(email);
+            userAccountMapper.updateById(account);
+            isNew = true;
+        } else {
+            assertAccountUsable(account);
+        }
+        touchLogin(account);
+        UserSession session = createSession(account.getId(), CodeEnum.LoginType.EMAIL.getCode());
+        return toSessionResponse(session, account, isNew);
+    }
+
     @Transactional
     public void logout(String accessToken) {
         if (accessToken == null || accessToken.isBlank()) {
@@ -161,6 +224,24 @@ public class AuthService {
         }
         row.setIsUsed(1);
         authSmsCodeMapper.updateById(row);
+    }
+
+    /** 登录与绑定邮箱共用：校验并消费最近一条未使用验证码。 */
+    public void consumeEmailCode(String email, String emailCode) {
+        String normalized = EmailUtils.normalize(email);
+        AuthEmailCode row = authEmailCodeMapper.selectOne(new LambdaQueryWrapper<AuthEmailCode>()
+                .eq(AuthEmailCode::getEmail, normalized)
+                .eq(AuthEmailCode::getIsUsed, 0)
+                .orderByDesc(AuthEmailCode::getId)
+                .last("LIMIT 1"));
+        if (row == null
+                || row.getExpireAt() == null
+                || row.getExpireAt().isBefore(LocalDateTime.now())
+                || !emailCode.equals(row.getVerifyCode())) {
+            throw new BizException(ErrorCode.BIZ_REJECTED, "验证码错误或已失效");
+        }
+        row.setIsUsed(1);
+        authEmailCodeMapper.updateById(row);
     }
 
     private UserAccount createUserWithOpenid(String openid, String unionId) {

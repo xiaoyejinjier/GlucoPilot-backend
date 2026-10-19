@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.auth.service.AuthService;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.Asserts;
+import com.threadfit.glucopilot.common.util.EmailUtils;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.file.service.MediaFileService;
 import com.threadfit.glucopilot.profile.health.service.HealthProfileService;
@@ -40,6 +41,7 @@ public class UserAccountService {
         return UserDtos.MeResponse.builder()
                 .accountStatus(account.getAccountStatus())
                 .phoneMasked(PhoneUtils.mask(account.getPhone()))
+                .emailMasked(EmailUtils.mask(account.getEmail()))
                 .profile(toProfileView(requireProfile(userId)))
                 .health(healthProfileService.healthViewOf(userId))
                 .settings(userSettingService.settingsOf(userId))
@@ -120,6 +122,26 @@ public class UserAccountService {
         userAccountMapper.updateById(account);
         return UserDtos.PhoneBindResult.builder().phoneMasked(PhoneUtils.mask(account.getPhone())).build();
     }
+
+    public UserDtos.EmailBindResult bindEmail(Long userId, UserDtos.EmailBindRequest request) {
+        String email = EmailUtils.normalize(request.getEmail());
+        authService.consumeEmailCode(email, request.getVerifyCode());
+        UserAccount account = requireAccount(userId);
+        if (email.equals(account.getEmail())) {
+            return UserDtos.EmailBindResult.builder().emailMasked(EmailUtils.mask(account.getEmail())).build();
+        }
+        UserAccount occupied = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
+                .eq(UserAccount::getEmail, email)
+                .ne(UserAccount::getId, userId)
+                .last("LIMIT 1"));
+        if (occupied != null) {
+            throw new BizException(ErrorCode.CONFLICT, "邮箱已被占用");
+        }
+        account.setEmail(email);
+        userAccountMapper.updateById(account);
+        return UserDtos.EmailBindResult.builder().emailMasked(EmailUtils.mask(account.getEmail())).build();
+    }
+
 
     public UserAccount requireAccount(Long userId) {
         UserAccount account = userAccountMapper.selectById(userId);

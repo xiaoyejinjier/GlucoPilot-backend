@@ -111,7 +111,13 @@ class ConfigFilesTest {
     void 对象存储配置应能绑定到StorageProperties() throws IOException {
         StorageProperties props = bindFrom("application-dev.yaml", "glucopilot.storage", StorageProperties.class);
 
-        assertEquals("local", props.getProvider(), "开发环境应使用免配置的本地存储");
+        // 本测试只做 yaml→Bean 键名绑定，不解析环境变量占位符。
+        // 开发默认仍是 local；也可设 STORAGE_PROVIDER=minio 切换，故允许字面量或占位符两种写法。
+        String provider = props.getProvider();
+        assertTrue(
+                "local".equals(provider)
+                        || (provider != null && provider.contains("STORAGE_PROVIDER") && provider.contains("local")),
+                "开发环境默认应为 local，或 ${STORAGE_PROVIDER:local}（当前值=" + provider + ")");
         assertTrue(StringUtils.hasText(props.getLocalDir()), "glucopilot.storage.local-dir 未绑定");
     }
 

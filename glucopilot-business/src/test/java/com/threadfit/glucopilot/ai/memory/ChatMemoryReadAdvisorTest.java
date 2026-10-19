@@ -18,10 +18,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -174,6 +176,56 @@ class ChatMemoryReadAdvisorTest {
                 captureChain(captured));
 
         assertEquals(1, captured.get(0).prompt().getInstructions().size());
+    }
+
+    // ---------- ③ 期：分片元数据的回传 ----------
+
+    /**
+     * 分片元数据要通过 advisor 参数里的槽位交回给调用方（③ 期）。
+     * <p>
+     * 为什么必须"槽位"而不是返回值：Advisor 的返回值是 {@code ChatClientRequest}，
+     * 为传一组统计值去改这个契约要动整条链；而这里需要的正是"装配阶段算好、落库阶段才用"
+     * 的一份数据——与 {@code PROMPT_ESTIMATE} 完全同构，所以复用同一个套路。
+     * <p>
+     * 另一条纪律也钉在这里：advisor <b>不做二次估算</b>，交出去的必须是装配器算好的那一份，
+     * 否则日志里的 token 与 {@code chat_context} 里的会各说各话。
+     */
+    @Test
+    void 分片元数据写回调用方持有的槽位() {
+        ChatMemory chatMemory = mock(ChatMemory.class);
+        when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 3));
+        when(contextReader.summary(SESSION_ID)).thenReturn("用户早餐前血糖 6.8");
+        when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of("query_glucose_range → 6.8"));
+        when(contextReader.longTermMemory(any())).thenReturn(
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "对花生过敏", 95)));
+        AtomicReference<List<ChatContextShard>> slot = new AtomicReference<>(List.of());
+        ChatClientRequest request = new ChatClientRequest(
+                new Prompt(List.of(new UserMessage("那我晚饭呢"))),
+                Map.of(ChatMemory.CONVERSATION_ID, String.valueOf(SESSION_ID),
+                        ChatMemoryAdvisorParams.USER_ID, 7L,
+                        ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS, 800,
+                        ChatMemoryAdvisorParams.CONTEXT_SHARDS, slot));
+
+        advisor(chatMemory).withMemoryForTest(request);
+
+        List<ChatContextShard> shards = slot.get();
+        assertEquals(List.of(ChatContextShard.KEY_SYSTEM_PROMPT, ChatContextShard.KEY_LONG_TERM_MEMORY,
+                        ChatContextShard.KEY_CONTEXT_SUMMARY, ChatContextShard.KEY_TOOL_DIGEST,
+                        ChatContextShard.KEY_HISTORY_MESSAGES),
+                shards.stream().map(ChatContextShard::contextKey).toList());
+        assertEquals(800, shards.get(0).tokenEstimate(), "系统提示片直接用传进来的固定开销，不重新估");
+    }
+
+    /** 没有放槽位时（老调用方/单测）不能抛异常：分片只是观测，缺槽位就静默跳过。 */
+    @Test
+    void 没有分片槽位时不影响记忆注入() {
+        ChatMemory chatMemory = mock(ChatMemory.class);
+        when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 3));
+        when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
+
+        List<Message> injected = injectedMessages(advisor(chatMemory), new UserMessage("你好"));
+
+        assertTrue(injected.size() >= 2);
     }
 
     // ---------- 辅助 ----------

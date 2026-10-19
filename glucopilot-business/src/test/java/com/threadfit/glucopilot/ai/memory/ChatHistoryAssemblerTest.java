@@ -187,4 +187,102 @@ class ChatHistoryAssemblerTest {
         assertEquals(List.of("你好"), heads(result.messages()));
         assertEquals(0, result.stats().keptHistory());
     }
+
+    // ---------------------------------------------------------------- ③ 期：分片元数据
+
+    /**
+     * 五类分片的顺序、类型码与 {@code sort_no} 必须固定。
+     * <p>
+     * 这不是美观问题：{@code chat_context} 的读取侧（排障/成本分析）按
+     * {@code (session_id, context_round, sort_no)} 取一段，顺序一旦飘，
+     * "这一轮 prompt 由哪些块组成"就变成一团乱序的行。类型码还要落在
+     * DDL 的 {@code chk_cc_type(1..6)} 允许范围内，否则插入会被数据库拒绝。
+     */
+    @Test
+    void 分片元数据按固定顺序给出五类() {
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                history(3, 10),
+                List.of(new UserMessage("我这周血糖怎么样")),
+                "用户早餐前 6.8，目标餐后 8 以内",
+                List.of("query_glucose_range → {avg:6.8}"),
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "对花生过敏", 95)),
+                500);
+
+        List<ChatContextShard> shards = result.shards();
+        assertEquals(List.of("system_prompt", "long_term_memory", "context_summary", "tool_digest",
+                        "history_messages"),
+                shards.stream().map(ChatContextShard::contextKey).toList(), "顺序即 sort_no：越靠前越基础");
+        assertEquals(List.of(1, 6, 3, 5, 6),
+                shards.stream().map(ChatContextShard::contextType).toList(),
+                "长期记忆与历史消息落 6（其他）：DDL 的六类里没有为它们留位置");
+        assertEquals(List.of(0, 1, 2, 3, 4), shards.stream().map(ChatContextShard::sortNo).toList());
+        assertEquals(500, shards.get(0).tokenEstimate(), "系统提示片用固定开销（含工具定义与消息骨架）");
+        for (ChatContextShard shard : shards) {
+            assertTrue(shard.tokenEstimate() >= 0, "token 估算不允许为负：" + shard);
+        }
+        // 有记忆/摘要/工具摘要时，它们的 token 都应为正数（内容确实进了 prompt）
+        assertTrue(shards.get(1).tokenEstimate() > 0);
+        assertTrue(shards.get(2).tokenEstimate() > 0);
+        assertTrue(shards.get(3).tokenEstimate() > 0);
+    }
+
+    /** 没用到附加上下文时不产出行：空行只会让"这一轮注入了什么"更难读。 */
+    @Test
+    void 未使用的分片不产出行() {
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                history(2, 10), List.of(new UserMessage("你好")), null, List.of(), 100);
+
+        assertEquals(List.of("system_prompt", "history_messages"),
+                result.shards().stream().map(ChatContextShard::contextKey).toList());
+    }
+
+    /** 历史为空时历史分片仍保留（值为 0）：它正好说明"这一轮几乎没有历史可回放"。 */
+    @Test
+    void 历史为空时历史分片仍然存在且为零() {
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                List.of(), List.of(new UserMessage("你好")), null, List.of(), 0);
+
+        ChatContextShard historyShard = result.shards().get(result.shards().size() - 1);
+        assertEquals(ChatContextShard.KEY_HISTORY_MESSAGES, historyShard.contextKey());
+        assertEquals(0, historyShard.tokenEstimate());
+    }
+
+    /**
+     * 历史片 token 只算<b>真正送进 prompt</b>的那些消息。
+     * <p>
+     * 两条容易算错的边界：① 被预算裁掉的历史不算；② 末尾与本轮重复的那条被去重后，
+     * 也不能再算进分片——否则"分片之和"会比实际发出的 prompt 多出整整一条消息，
+     * 而分片元数据的唯一用途就是让人相信这个合计。
+     */
+    @Test
+    void 历史分片的token只含实际送进prompt的消息() {
+        List<org.springframework.ai.chat.messages.Message> history = List.of(
+                new UserMessage("第一条历史消息"),
+                new AssistantMessage("第一条助手回复"),
+                new UserMessage("那我晚饭呢"));
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                history, List.of(new UserMessage("那我晚饭呢")), null, List.of(), 0);
+
+        // 去重后只剩前两条进 prompt
+        assertEquals(2, result.stats().keptHistory());
+        int expected = estimator.estimateMessage("第一条历史消息") + estimator.estimateMessage("第一条助手回复");
+        assertEquals(expected, result.shards().get(result.shards().size() - 1).tokenEstimate(),
+                "被去重的那条不能算进历史分片");
+    }
+
+    /** 分片合计不得超过整轮估算（分片是同一份预算的拆解，不是额外开销）。 */
+    @Test
+    void 分片合计不超过整轮估算() {
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                history(5, 20),
+                List.of(new UserMessage("我这周血糖怎么样，需要注意什么")),
+                "摘要正文若干",
+                List.of("query_glucose_range → {avg:6.8}"),
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "对花生过敏", 95)),
+                300);
+
+        int shardSum = result.shards().stream().mapToInt(ChatContextShard::tokenEstimate).sum();
+        assertTrue(shardSum <= result.stats().estimatedTokens(),
+                "分片合计 " + shardSum + " 不应超过整轮估算 " + result.stats().estimatedTokens());
+    }
 }

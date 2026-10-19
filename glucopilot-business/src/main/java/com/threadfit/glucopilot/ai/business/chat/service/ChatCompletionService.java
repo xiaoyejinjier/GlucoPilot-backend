@@ -9,9 +9,11 @@ import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.memory.ChatContextShard;
 import com.threadfit.glucopilot.ai.memory.ChatMemoryAdvisorParams;
 import com.threadfit.glucopilot.ai.memory.ChatSummaryService;
 import com.threadfit.glucopilot.ai.memory.TokenEstimator;
+import com.threadfit.glucopilot.ai.memory.UserChatMemoryService;
 import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.tool.AiToolContext;
 import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
@@ -39,9 +41,11 @@ import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * AI 流式补全（对应接口 2.25）。
@@ -162,6 +166,10 @@ public class ChatCompletionService {
     private final TokenEstimator tokenEstimator;
     /** ② 期：本轮落库后按需触发异步摘要。 */
     private final ChatSummaryService chatSummaryService;
+    /** ③ 期：长期记忆（显式指令时抽取）。 */
+    private final UserChatMemoryService userChatMemoryService;
+    /** ③ 期：本轮 prompt 的分片元数据（落库后回填 assistant_msg_id 再写 chat_context）。 */
+    private final ChatContextRecorder chatContextRecorder;
 
     public Flux<ServerSentEvent<byte[]>> complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
         // 同步校验：这些异常在返回 Flux 之前抛出，客户端拿到的仍是标准 JSON 错误响应
@@ -227,13 +235,18 @@ public class ChatCompletionService {
         // 两者都通过 advisor 参数传进去（Advisor 回调不在请求线程上，只能这样传）。
         int fixedOverhead = estimateFixedOverhead();
         AtomicInteger promptEstimate = new AtomicInteger();
+        // ③ 期：分片元数据的回传槽（写法同 promptEstimate）——装配阶段算好，落库后才用
+        AtomicReference<List<ChatContextShard>> contextShards = new AtomicReference<>(List.of());
+        state.contextShards = contextShards;
 
         ChatClient.ChatClientRequestSpec promptSpec = chatClientRegistry.textClient()
                 .prompt()
                 .advisors(advisors -> advisors
                         .param(ChatMemory.CONVERSATION_ID, sessionId.toString())
                         .param(ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS, fixedOverhead)
-                        .param(ChatMemoryAdvisorParams.PROMPT_ESTIMATE, promptEstimate))
+                        .param(ChatMemoryAdvisorParams.USER_ID, userId)
+                        .param(ChatMemoryAdvisorParams.PROMPT_ESTIMATE, promptEstimate)
+                        .param(ChatMemoryAdvisorParams.CONTEXT_SHARDS, contextShards))
                 // 工具上下文：当前用户身份由服务端注入，模型看不到也伪造不了。
                 // 缺了这一步，工具一旦被调用就会因取不到 userId 而失败（见 AiToolContext）。
                 .toolContext(toolContext)
@@ -266,6 +279,10 @@ public class ChatCompletionService {
                     // ② 期：本轮已落库 → 若已有消息落在窗口之外，异步把它们压缩进滚动摘要
                     // （不阻塞、失败只记日志，绝不影响这一轮已经成功的回复）
                     chatSummaryService.maybeSummarizeAsync(userId, sessionId);
+                    // ③ 期：用户显式要求记住时立刻抽一次长期记忆（用户主动表达最可信；其余时机是会话结束时）
+                    if (UserChatMemoryService.looksExplicit(input.promptText())) {
+                        userChatMemoryService.extractAsync(userId, sessionId, "explicit");
+                    }
                     return doneEvent(saved);
                 })
                 .subscribeOn(Schedulers.boundedElastic());
@@ -397,7 +414,30 @@ public class ChatCompletionService {
                 finishReason,
                 (int) Math.min(latencyMs, Integer.MAX_VALUE));
         writeBackCaption(target, input);
+        // ③ 期：助手消息落库之后才写分片元数据——assistant_msg_id 只能在这里拿到
+        recordContext(userId, sessionId, target, saved, state);
         return saved;
+    }
+
+    /**
+     * 把本轮的分片元数据写进 {@code chat_context}（③ 期）。
+     * <p>
+     * 放在 {@link #persist} 而不是 {@code done} 事件构造处：错误分支（上游报错但已有内容）
+     * 同样会走 persist，那一轮的分片同样值得记——"为什么这一轮又慢又贵还失败了"正是最想复盘的场景。
+     * <p>
+     * 再兜一层 try/catch：{@code ChatContextRecorder} 自己已经吞掉写库异常，这条约定不能只依赖
+     * "下游实现记得吞"——这里是响应式回调，抛出会把整条 {@code done} 事件打掉，
+     * 客户端就收不到已经成功的回复了。
+     */
+    private void recordContext(Long userId, Long sessionId, ChatMessage target, ChatMessage saved, StreamState state) {
+        try {
+            chatContextRecorder.record(userId, sessionId, target.getId(), saved.getId(), saved.getModelCode(),
+                    ChatContextRecorder.roundOf(saved.getSeqNo()),
+                    state.contextShards == null ? List.of() : state.contextShards.get());
+        } catch (RuntimeException e) {
+            log.warn("分片元数据写入失败（不影响本轮回复）sessionId={} assistantMsgId={}",
+                    sessionId, saved.getId(), e);
+        }
     }
 
     /**
@@ -607,5 +647,12 @@ public class ChatCompletionService {
         private boolean persisted;
         /** ② 期：记忆装配器对本轮 prompt 的估算（用于与真实 prompt_tokens 比对校准）。 */
         private int estimatedPromptTokens;
+        /**
+         * ③ 期：本轮分片元数据的回传槽（与 advisor 参数里是<b>同一个对象引用</b>）。
+         * <p>
+         * 存在 StreamState 而不是当参数往下传，是因为 {@link #persist} 由正常结束与错误分支
+         * 两条路共用，放进状态里这两条路就都不需要额外参数。
+         */
+        private AtomicReference<List<ChatContextShard>> contextShards;
     }
 }

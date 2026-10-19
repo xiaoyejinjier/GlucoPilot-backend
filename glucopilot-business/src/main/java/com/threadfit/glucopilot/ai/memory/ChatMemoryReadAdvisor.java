@@ -89,9 +89,12 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
         List<Message> history = chatMemory.get(sessionId.toString());
         String summary = contextReader.summary(sessionId);
         List<String> toolDigests = contextReader.recentToolDigests(sessionId);
+        // ③ 期：长期记忆是用户维度（与 sessionId 无关），userId 由调用方放进 advisor 参数
+        Long userId = userId(request);
+        List<UserChatMemoryService.MemoryItem> memories = contextReader.longTermMemory(userId);
         int fixedOverhead = fixedOverhead(request);
 
-        ChatHistoryAssembler.Assembled assembled = assembler.assemble(history, current, summary, toolDigests, fixedOverhead);
+        ChatHistoryAssembler.Assembled assembled = assembler.assemble(history, current, summary, toolDigests, memories, fixedOverhead);
         ChatHistoryAssembler.Stats stats = assembled.stats();
         if (stats.droppedHistory() > 0 || stats.summaryUsed() || stats.toolDigestUsed()) {
             log.info("会话记忆装配 sessionId={} 保留历史={} 裁剪={} 估算token={} 预算={} 摘要={} 工具摘要={}"
@@ -103,6 +106,8 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
                     stats.keptHistory(), stats.estimatedTokens());
         }
         writeBackEstimate(request, stats);
+        // ③ 期：把本轮的分片元数据交给调用方（它会在落库、拿到 assistant_msg_id 之后写 chat_context）
+        writeBackShards(request, assembled.shards());
 
         return request.mutate()
                 .prompt(new Prompt(assembled.messages(), request.prompt().getOptions()))
@@ -124,6 +129,19 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
         }
     }
 
+    /** 当前用户 ID（③ 期：长期记忆按用户维度取；缺失时按"没有记忆"处理）。 */
+    private static Long userId(ChatClientRequest request) {
+        Object value = request.context().get(ChatMemoryAdvisorParams.USER_ID);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(String.valueOf(value).trim());
+        } catch (NumberFormatException e) {
+            log.warn("advisor 参数里的 userId 不是合法数字：{}", value);
+            return null;
+        }
+    }
     /** 固定开销（系统提示词 + 工具定义）的估算：调用方算好放在 advisor 参数里，缺省 0。 */
     private static int fixedOverhead(ChatClientRequest request) {
         Object value = request.context().get(ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS);
@@ -138,6 +156,24 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
         Object holder = request.context().get(ChatMemoryAdvisorParams.PROMPT_ESTIMATE);
         if (holder instanceof AtomicInteger slot) {
             slot.set(stats.estimatedTokens());
+        }
+    }
+
+    /**
+     * 把本轮的分片元数据写回调用方持有的槽位（③ 期）。
+     * <p>
+     * 与 {@link #writeBackEstimate} 同一个套路，但这里是<b>整组</b>数据：装配器已经把
+     * "系统提示 / 长期记忆 / 摘要 / 工具结果 / 历史消息"各占多少 token 算好了
+     * （见 {@link ChatHistoryAssembler#assemble}），这里只负责原样交出去，
+     * <b>不再二次估算</b>——两处各算一遍，迟早会出现"日志里的 token 和 chat_context 里的不一样"。
+     */
+    private static void writeBackShards(ChatClientRequest request, List<ChatContextShard> shards) {
+        Object holder = request.context().get(ChatMemoryAdvisorParams.CONTEXT_SHARDS);
+        if (holder instanceof java.util.concurrent.atomic.AtomicReference<?> slot) {
+            @SuppressWarnings("unchecked")
+            java.util.concurrent.atomic.AtomicReference<List<ChatContextShard>> typed =
+                    (java.util.concurrent.atomic.AtomicReference<List<ChatContextShard>>) slot;
+            typed.set(shards == null ? List.of() : shards);
         }
     }
 

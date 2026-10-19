@@ -95,6 +95,10 @@ class ChatCompletionServiceTest {
     private final AiPromptTemplateService promptTemplateService = mock(AiPromptTemplateService.class);
     private final AiToolRegistry toolRegistry = mock(AiToolRegistry.class);
     private final ChatSummaryService chatSummaryService = mock(ChatSummaryService.class);
+    /** ③ 期新增依赖：显式"记住……"时抽长期记忆；落库后写分片元数据。 */
+    private final com.threadfit.glucopilot.ai.memory.UserChatMemoryService userChatMemoryService =
+            mock(com.threadfit.glucopilot.ai.memory.UserChatMemoryService.class);
+    private final ChatContextRecorder chatContextRecorder = mock(ChatContextRecorder.class);
 
     private ChatCompletionService service;
 
@@ -103,7 +107,8 @@ class ChatCompletionServiceTest {
         service = new ChatCompletionService(registry, chatMessageMapper, chatSessionService,
                 chatMessageService, ownedMediaResolver, visionAnalyzer, new EnglishPreambleGuard(),
                 new ChatRoundGuard(), new JsonUtils(new ObjectMapper()), promptTemplateService,
-                toolRegistry, new TokenEstimator(), chatSummaryService);
+                toolRegistry, new TokenEstimator(), chatSummaryService,
+                userChatMemoryService, chatContextRecorder);
         when(promptTemplateService.systemPrompt(any())).thenReturn("system prompt");
         when(toolRegistry.callbacks()).thenReturn(List.of());
 
@@ -403,6 +408,100 @@ class ChatCompletionServiceTest {
         verifyNoInteractions(visionAnalyzer);
         verifyNoInteractions(ownedMediaResolver);
         verify(chatMessageMapper, never()).updateMediaCaption(anyLong(), anyString());
+    }
+
+    // ---------- ③ 期：长期记忆抽取与分片元数据 ----------
+
+    /**
+     * 用户明确说"记住……"时，本轮结束后要立刻抽一次长期记忆。
+     * <p>
+     * 这是③期唯一一条"用户主动表达"的抽取时机（其余时机是会话结束）。触发条件是用户原话里出现
+     * {@code 记住 / 记一下 / 帮我记 …}——判据在 {@code UserChatMemoryService.looksExplicit}，
+     * 这里只验证"接线接上了、且抽的是本轮这条用户消息所属的会话"。
+     */
+    @Test
+    void 用户显式要求记住时触发长期记忆抽取() {
+        ChatMessage explicit = new ChatMessage();
+        explicit.setId(TARGET_MSG_ID);
+        explicit.setSessionId(SESSION_ID);
+        explicit.setMsgRole(CodeEnum.ChatMsgRole.USER.getCode());
+        explicit.setContentText("记住：我对花生过敏，以后别提花生");
+        when(chatMessageMapper.selectById(TARGET_MSG_ID)).thenReturn(explicit);
+        useModel(Flux.just(textChunk("好的，已记住")));
+
+        collect();
+
+        verify(userChatMemoryService).extractAsync(USER_ID, SESSION_ID, "explicit");
+    }
+
+    @Test
+    void 普通提问不触发长期记忆抽取() {
+        useModel(Flux.just(textChunk("你好")));
+
+        collect();
+
+        verify(userChatMemoryService, never()).extractAsync(anyLong(), anyLong(), anyString());
+    }
+
+    /**
+     * 落库后要写本轮的分片元数据，且 {@code assistantMsgId} 必须是<b>落库后</b>的真实 ID。
+     * <p>
+     * 分片是在装配阶段算出来的（advisor 回传槽），而助手消息 ID 要等模型跑完、INSERT 之后才有——
+     * 所以回填时机的唯一正确位置就在这里。填成 null 或填成用户消息 ID，这件事在页面上看不出来，
+     * 只有排障时才会发现"分片挂在了用户消息上"。
+     * <p>
+     * 注意本用例里 advisor 链没装配，所以分片列表是空的（真实内容由
+     * {@code ChatHistoryAssemblerTest} 与 {@code ChatMemoryReadAdvisorTest} 覆盖）；
+     * 这里钉的是"调用发生了、参数对不对"。
+     */
+    @Test
+    void 落库后写入分片元数据并回填助手消息ID() {
+        useModel(Flux.just(textChunk("你好")));
+
+        collect();
+
+        verify(chatContextRecorder).record(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID), eq(99L),
+                eq("test-model"), eq(1), any());
+    }
+
+    /** 上游报错但已有内容时也会落库，那一轮的分片同样要记——"又慢又贵还失败"最需要复盘。 */
+    @Test
+    void 上游报错落库时也写分片元数据() {
+        useModel(Flux.concat(Flux.just(textChunk("部分内容")),
+                Flux.error(new IllegalStateException("上游 500"))));
+
+        collect();
+
+        verify(chatContextRecorder).record(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID), eq(99L),
+                eq("test-model"), eq(1), any());
+    }
+
+    /** 取消/超时的轮次没有落库，自然也不该有分片行（两者必须同生同灭）。 */
+    @Test
+    void 取消订阅时不写分片元数据() {
+        useModel(Flux.concat(Flux.just(textChunk("半截回答")), Flux.never()));
+
+        service.complete(USER_ID, SESSION_ID, request()).take(1).collectList().block();
+
+        verifyNoInteractions(chatContextRecorder);
+    }
+
+    /**
+     * 分片落库失败绝不能让 {@code done} 事件消失。
+     * <p>
+     * 分片是旁路观测：回复已经成功生成并落库了，此时若因为观测写不进去而让客户端收不到 done，
+     * 用户就会看到"转圈到超时"，而这一轮其实已经扣过费。
+     */
+    @Test
+    void 分片写入失败不影响done事件() {
+        useModel(Flux.just(textChunk("你好")));
+        org.mockito.Mockito.doThrow(new IllegalStateException("chat_context 写不进去"))
+                .when(chatContextRecorder).record(anyLong(), anyLong(), anyLong(), anyLong(),
+                        any(), any(), any());
+
+        List<ServerSentEvent<byte[]>> events = collect();
+
+        assertEquals("done", events.get(events.size() - 1).event(), "观测失败不能让回复凭空消失");
     }
 
     // ---------- 辅助 ----------

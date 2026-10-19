@@ -42,7 +42,7 @@ public class ChatHistoryAssembler {
     private final TokenEstimator tokenEstimator;
 
     /** 装配结果。 */
-    public record Assembled(List<Message> messages, Stats stats) {
+    public record Assembled(List<Message> messages, Stats stats, List<ChatContextShard> shards) {
     }
 
     /**
@@ -64,25 +64,64 @@ public class ChatHistoryAssembler {
     }
 
     /**
-     * @param history        候选历史（时间正序；由仓库按 max-fetch 捞回）
-     * @param current        本轮消息（永不裁剪）
-     * @param summary        滚动摘要，可为 null/空
-     * @param toolDigests    最近工具结果摘要（可为空列表）
-     * @param fixedOverhead  固定开销的估算 token（系统提示词 + 工具定义）；由调用方按上一轮真实用量或估算给出
+     * 旧签名（不含长期记忆）：保留以免既有调用与测试全量改动，内部转调新签名。
      */
     public Assembled assemble(List<Message> history,
                               List<Message> current,
                               String summary,
                               List<String> toolDigests,
                               int fixedOverhead) {
+        return assemble(history, current, summary, toolDigests, List.of(), fixedOverhead);
+    }
+
+    /**
+     * 装配（③ 期起含长期记忆）。
+     * <p>
+     * {@code memories} 是该用户的**跨会话长期记忆**（忌口/目标/长期状况/习惯/偏好）。
+     * 它与摘要同属"附加上下文"，但语义更重：摘要说明"这段对话聊了什么"，记忆说明"你是谁"，
+     * 所以注入时明确标注"不要复述、不要据此下医嘱"，并与摘要/工具摘要合并成**同一条** system 消息。
+     *
+     * @param history        候选历史（时间正序；由仓库按 max-fetch 捞回）
+     * @param current        本轮消息（永不裁剪）
+     * @param summary        滚动摘要，可为 null/空
+     * @param toolDigests    最近工具结果摘要（可为空列表）
+     * @param memories       长期记忆（可为空列表；条数由读取侧限制）
+     * @param fixedOverhead  固定开销的估算 token（系统提示词 + 工具定义）；由调用方按上一轮真实用量或估算给出
+     */
+    public Assembled assemble(List<Message> history,
+                              List<Message> current,
+                              String summary,
+                              List<String> toolDigests,
+                              List<UserChatMemoryService.MemoryItem> memories,
+                              int fixedOverhead) {
         AIProperties.MemoryProperties config = aiProperties.getMemory();
         int budget = Math.max(config.getMaxPromptTokens(), 1);
         List<Message> safeHistory = history == null ? List.of() : history;
         List<Message> safeCurrent = current == null ? List.of() : current;
 
-        StringBuilder context = new StringBuilder();
-        boolean summaryUsed = appendSummary(context, summary, config.getSummaryMaxChars());
-        boolean toolDigestUsed = appendToolDigests(context, toolDigests, config.getToolReplayMaxItems());
+        // 三段附加上下文各自独立构造：既是为了拼装顺序可控，也是为了给"分片元数据"（③ 期）
+        // 逐段算出估算 token。分成三个 StringBuilder 而不是边拼边估，是因为估算要按<b>整段</b>算
+        // （estimate 里 CJK 与非 CJK 的比例是按字符统计的，拆开估会引入不必要的误差）。
+        StringBuilder memorySection = new StringBuilder();
+        StringBuilder summarySection = new StringBuilder();
+        StringBuilder toolSection = new StringBuilder();
+        boolean memoryUsed = appendMemories(memorySection, memories);
+        boolean summaryUsed = appendSummary(summarySection, summary, config.getSummaryMaxChars());
+        boolean toolDigestUsed = appendToolDigests(toolSection, toolDigests, config.getToolReplayMaxItems());
+
+        StringBuilder context = new StringBuilder(memorySection);
+        if (summarySection.length() > 0) {
+            if (context.length() > 0) {
+                context.append("\n\n");
+            }
+            context.append(summarySection);
+        }
+        if (toolSection.length() > 0) {
+            if (context.length() > 0) {
+                context.append("\n\n");
+            }
+            context.append(toolSection);
+        }
         SystemMessage contextMessage = context.length() == 0 ? null : new SystemMessage(context.toString());
 
         int used = fixedOverhead;
@@ -96,6 +135,7 @@ public class ChatHistoryAssembler {
         // 从最近往回装：只要"再装一条"不超过预算就装（并同时受条数上限约束）
         int keepRecent = Math.max(config.getKeepRecentMessages(), 0);
         int maxMessages = Math.max(config.getWindowMessages(), 1);
+        int historyTokens = 0;
         List<Message> kept = new ArrayList<>();
         for (int i = safeHistory.size() - 1; i >= 0; i--) {
             Message message = safeHistory.get(i);
@@ -108,6 +148,7 @@ public class ChatHistoryAssembler {
             if (kept.size() < keepRecent || used + cost <= budget) {
                 kept.add(message);
                 used += cost;
+                historyTokens += cost;
             } else {
                 break;
             }
@@ -118,8 +159,16 @@ public class ChatHistoryAssembler {
         // 背景：接口 2.24 先把用户消息落库、2.25 再开流，而记忆是从库里读的——于是本轮这条
         // 既在历史末尾、又在 current 里。不去重就会把同一句话送两遍（白花 token，还容易让模型
         // 以为用户重复问了一次）。这条规则从旧版 Advisor 的 merge(...) 原样搬过来。
-        int droppedDuplicate = dropTrailingDuplicate(kept, safeCurrent);
+        // 被去掉的那条不再进 prompt，分片里的历史 token 也要跟着扣掉，
+        // 否则"分片之和"会比实际发出的 prompt 多出整整一条消息
+        Message removedDuplicate = dropTrailingDuplicate(kept, safeCurrent);
+        int droppedDuplicate = removedDuplicate == null ? 0 : 1;
+        if (removedDuplicate != null) {
+            historyTokens -= tokenEstimator.estimateMessage(textOf(removedDuplicate));
+        }
         int keptCount = kept.size();
+        List<ChatContextShard> shards = buildShards(fixedOverhead, memorySection, summarySection, toolSection,
+                memoryUsed, summaryUsed, toolDigestUsed, historyTokens);
 
         List<Message> messages = new ArrayList<>(keptCount + safeCurrent.size() + 1);
         if (contextMessage != null) {
@@ -129,23 +178,60 @@ public class ChatHistoryAssembler {
         messages.addAll(safeCurrent);
         return new Assembled(List.copyOf(messages),
                 new Stats(keptCount, safeHistory.size() - keptCount - droppedDuplicate, used, budget,
-                        summaryUsed, toolDigestUsed));
+                        summaryUsed, toolDigestUsed),
+                shards);
     }
 
     /**
-     * 历史末尾若是本轮用户消息的副本，就从历史里去掉它（返回被去掉的条数）。
+     * 本轮 prompt 的分片元数据（③ 期）：顺序固定为
+     * 系统提示 → 长期记忆 → 滚动摘要 → 工具结果 → 历史消息。
+     * <p>
+     * <b>顺序即 {@code sort_no}</b>，与 {@code ChatContextShard} 里的常量一一对应：
+     * 它表达的是"越靠前越基础"（你是谁 &gt; 聊过什么 &gt; 刚查到什么 &gt; 逐字原文）。
+     * 没有用到的分片不产出行——空行只会让"这一轮到底注入了什么"更难读。
+     * 历史消息片即使为 0 条也保留：它说明"这一轮几乎没有历史可回放"，
+     * 而这恰恰是排查"模型为什么忘了前面"时最想看的一项。
+     */
+    private List<ChatContextShard> buildShards(int fixedOverhead,
+                                               StringBuilder memorySection,
+                                               StringBuilder summarySection,
+                                               StringBuilder toolSection,
+                                               boolean memoryUsed,
+                                               boolean summaryUsed,
+                                               boolean toolDigestUsed,
+                                               int historyTokens) {
+        List<ChatContextShard> shards = new ArrayList<>(5);
+        shards.add(ChatContextShard.systemPrompt(fixedOverhead));
+        if (memoryUsed) {
+            shards.add(ChatContextShard.longTermMemory(tokenEstimator.estimate(memorySection.toString())));
+        }
+        if (summaryUsed) {
+            shards.add(ChatContextShard.summary(tokenEstimator.estimate(summarySection.toString())));
+        }
+        if (toolDigestUsed) {
+            shards.add(ChatContextShard.toolDigest(tokenEstimator.estimate(toolSection.toString())));
+        }
+        shards.add(ChatContextShard.historyMessages(historyTokens));
+        return List.copyOf(shards);
+    }
+
+    /**
+     * 历史末尾若是本轮用户消息的副本，就从历史里去掉它（返回被去掉的那条，没有则 null）。
      * <p>
      * 只比对<b>文本相同</b>且角色为用户的消息：助手消息可能与历史里的某条内容相同但语义不同
      * （例如模型两次给出同样的回答），那不该被当成重复。
+     * <p>
+     * 返回整条消息（而不是一个计数）是为了让调用方能从"历史 token 合计"里精确地减掉它——
+     * 否则分片元数据会多算一条消息的量，与真实发出的 prompt 对不上。
      */
-    private static int dropTrailingDuplicate(List<Message> kept, List<Message> current) {
+    private static Message dropTrailingDuplicate(List<Message> kept, List<Message> current) {
         if (kept.isEmpty() || current.isEmpty()) {
-            return 0;
+            return null;
         }
         int last = kept.size() - 1;
         Message tail = kept.get(last);
         if (!(tail instanceof UserMessage tailUser) || tailUser.getText() == null) {
-            return 0;
+            return null;
         }
         boolean duplicated = current.stream()
                 .filter(UserMessage.class::isInstance)
@@ -154,12 +240,35 @@ public class ChatHistoryAssembler {
                 .filter(java.util.Objects::nonNull)
                 .anyMatch(tailUser.getText()::equals);
         if (!duplicated) {
-            return 0;
+            return null;
         }
         kept.remove(last);
-        return 1;
+        return tail;
     }
 
+    /**
+     * 长期记忆作为附加上下文的第一段（比摘要更靠前：它是"你是谁"，比"聊过什么"更基础）。
+     * <p>
+     * 条数由调用方（读取侧）限制；这里再限一次长度，避免一条超长记忆把预算吃光。
+     */
+    private static boolean appendMemories(StringBuilder context, List<UserChatMemoryService.MemoryItem> memories) {
+        if (memories == null || memories.isEmpty()) {
+            return false;
+        }
+        context.append("【关于这位用户的长期记忆（系统记住的事实，供你参考）】\n");
+        for (UserChatMemoryService.MemoryItem item : memories) {
+            if (item == null || item.text() == null || item.text().isBlank()) {
+                continue;
+            }
+            String text = item.text().trim();
+            if (text.length() > 120) {
+                text = text.substring(0, 120);
+            }
+            context.append("- ").append(item.key()).append('：').append(text).append('\n');
+        }
+        context.append("（这些是长期背景，不要复述给用户、不要据此下诊断或用药建议；与用户本轮说法冲突时以本轮为准）");
+        return true;
+    }
     /** 摘要作为附加上下文的第一段；显式标注"不是本轮原话"。 */
     private static boolean appendSummary(StringBuilder context, String summary, int maxChars) {
         if (summary == null || summary.isBlank()) {

@@ -33,6 +33,9 @@ public class ChatContextReader {
 
     private final AIProperties aiProperties;
 
+    /** ③ 期：长期记忆读取（用户维度，与 sessionId 无关）。 */
+    private final UserChatMemoryService userMemoryService;
+
     /** 滚动摘要；没有或读失败返回 null。 */
     public String summary(Long sessionId) {
         if (sessionId == null) {
@@ -76,5 +79,10 @@ public class ChatContextReader {
             log.warn("读取工具结果摘要失败（本轮不注入）sessionId={}", sessionId, e);
             return List.of();
         }
+    }
+
+    /** 该用户的长期记忆（③ 期）：按置信度取前 N 条；读失败返回空列表（记忆是增强项）。 */
+    public java.util.List<UserChatMemoryService.MemoryItem> longTermMemory(Long userId) {
+        return userMemoryService.forInjection(userId);
     }
 }

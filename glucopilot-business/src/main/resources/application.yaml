@@ -270,6 +270,13 @@ ai:
       version: v1
       temperature: 0.1
 
+    # 长期记忆抽取（③ 期）：从对话里挑出值得跨会话记住的用户事实，输出 JSON（不给用户看）。
+    # 温度取低：要稳定抽取而不是发挥；模型可在后台单独绑一个更便宜的。
+    memory:
+      prompt: prompts/memory/extract.md
+      version: v1
+      temperature: 0.1
+
 
 # Official RuoYi framework settings; secrets supplied by deployment environment.
 ruoyi:

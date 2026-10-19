@@ -214,6 +214,30 @@ public class SceneModelResolver {
     }
 
     /**
+     * 长期记忆抽取的请求级参数（③ 期）。
+     * <p>
+     * 与 {@link #summaryOptionsBuilder()} 同理：抽取是"从原文里挑事实"，不是推理，
+     * 因此<b>关掉思维链</b>并给输出封顶（{@code ai.memory.memory-extract-max-tokens}）；
+     * 温度取场景配置（要稳定抽取、不要发挥）。
+     * 模型由 MEMORY 场景的绑定/通道默认决定，可在后台单独绑一个更便宜的。
+     * <p>
+     * 为什么它的输出上限比摘要更小：抽取的产物是几条结构化 JSON（五类键 + 短句），
+     * 给大额度只会让模型在 JSON 外面多写解释文字，反而降低解析成功率。
+     */
+    public ChatOptions.Builder<?> memoryOptionsBuilder() {
+        SceneCode scene = SceneCode.MEMORY;
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        SceneProperties config = aiProperties.scene(scene);
+        DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder().disableThinking();
+        Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
+        if (temperature != null) {
+            builder.temperature(temperature);
+        }
+        builder.maxTokens(aiProperties.getMemory().getMemoryExtractMaxTokens());
+        return builder;
+    }
+
+    /**
      * 摘要场景的请求级参数（② 期）。
      * <p>
      * 与普通文本场景的差别，都是为了"别让摘要本身把预算与时延吃掉"：

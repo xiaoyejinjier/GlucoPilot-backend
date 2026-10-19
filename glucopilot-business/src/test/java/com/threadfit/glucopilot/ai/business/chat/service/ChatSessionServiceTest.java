@@ -52,7 +52,7 @@ class ChatSessionServiceTest {
     @BeforeEach
     void setUp() {
         service = new ChatSessionService(chatSessionMapper, chatMessageMapper, new AIProperties(),
-                chatClientRegistry, promptTemplateService);
+                chatClientRegistry, promptTemplateService, org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.UserChatMemoryService.class));
     }
 
     @Test

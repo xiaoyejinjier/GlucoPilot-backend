@@ -9,6 +9,7 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.memory.UserChatMemoryService;
 import com.threadfit.glucopilot.ai.prompt.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.SqlDuplicateKeys;
 import com.threadfit.glucopilot.common.api.ErrorCode;
@@ -59,6 +60,9 @@ public class ChatSessionService {
     private final AiChatClientRegistry chatClientRegistry;
     private final AiPromptTemplateService promptTemplateService;
 
+    /** ③ 期：会话结束时的长期记忆抽取（可选依赖语义：抽不到就不记，不影响新建会话）。 */
+    private final UserChatMemoryService userChatMemoryService;
+
     /**
      * 2.23 取进行中会话；没有就建一个。
      * <p>
@@ -88,12 +92,47 @@ public class ChatSessionService {
      * {@code active_user_id} 上（只有 {@code session_status = 1 AND is_deleted = 0} 时才等于 user_id），
      * 不结束旧的就插新的必然撞 1062。这与 {@link #getOrCreate} 的错误语义<b>不同</b>：
      * 那里撞 1062 是"并发建会话"，复用它是对的；这里撞 1062 只能是并发新建，回查返回并发方建的那条。
+     * <p>
+     * <b>③ 期：会话结束是长期记忆的主抽取时机。</b>顺序是"先取旧会话 → 结束 → 建新 → 再抽取"：
+     * 抽取要靠旧会话的 ID 读它的消息，所以必须在
+     * {@link ChatSessionMapper#endActiveSessions} <b>之前</b>把 ID 拿到手；而放在
+     * {@code insertNewSession} 之后调用，是为了"这次新建失败了就别白花一次模型调用"。
+     * <p>
+     * 抽取是<b>异步且失败只记日志</b>的（见 {@code UserChatMemoryService#extractAsync}）：
+     * 用户点"新对话"的本意是"马上开始说下一句"，绝不该为此等一次模型调用；
+     * 抽不到记忆只是增强项缺失，而新建会话失败是功能性故障，两者不能互相牵连。
+     * {@code previous == null}（本来就没有进行中会话）时不调用——没有旧会话就没有可抽的东西。
      */
     @Transactional
     public ChatSession openNew(Long userId, Integer sessionType) {
+        // 旧会话 ID 必须在结束之前读：endActiveSessions 之后它就查不到了（这正是它要干的事）
+        ChatSession previous = chatSessionMapper.selectActiveByUserId(userId);
         int ended = chatSessionMapper.endActiveSessions(userId);
         log.info("新建会话：先结束旧的进行中会话 userId={} ended={}", userId, ended);
-        return insertNewSession(userId, sessionType);
+        ChatSession created = insertNewSession(userId, sessionType);
+        if (previous != null) {
+            // 只在真的结束了旧会话时才抽：并发新建时可能一条都没结束（ended=0），此时 previous 也已为 null
+            extractMemoryQuietly(userId, previous.getId());
+        }
+        return created;
+    }
+
+    /**
+     * 会话结束时抽取长期记忆（③ 期）：<b>旁路调用，绝不拖累新建会话</b>。
+     * <p>
+     * {@code UserChatMemoryService#extractAsync} 自己已经吞掉了抽取过程中的异常，这里再挡一层的理由
+     * 与 {@code AdminChatMemoryService#audit} 相同：这条约定不能只靠"下游实现记得吞"来保证。
+     * 换实现、加装饰器、线程池拒绝任务，任何一种都会把异常顺着调用点冒上来，
+     * 而本方法在 {@code @Transactional} 里——一次"记忆抽取失败"就能把用户刚点出来的新会话一起回滚掉，
+     * 表现成"点了新对话没反应"。记忆是增强项，新建会话是功能本身，两者不能互相牵连。
+     */
+    private void extractMemoryQuietly(Long userId, Long endedSessionId) {
+        try {
+            userChatMemoryService.extractAsync(userId, endedSessionId, "session-ended");
+        } catch (RuntimeException e) {
+            log.warn("会话结束时的记忆抽取提交失败（忽略，不影响新建会话）userId={} sessionId={}",
+                    userId, endedSessionId, e);
+        }
     }
 
     /** 插入一条进行中会话；撞 {@code uk_user_active} 时回查并发方建好的那条（与 getOrCreate 同一套收敛语义）。 */

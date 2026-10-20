@@ -11,6 +11,7 @@ import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -69,7 +70,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
 
     private final Executor summaryExecutor;
 
-    public ChatSummaryServiceImpl(@Qualifier("summaryChatClient") ChatClient summaryClient,
+    public ChatSummaryServiceImpl(@Qualifier("summaryChatClient") @Nullable ChatClient summaryClient,
                               ChatSessionMapper chatSessionMapper,
                               ChatMessageMapper chatMessageMapper,
                               AiPromptTemplateService promptTemplateService,
@@ -96,7 +97,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      * <b>不阻塞、不抛异常</b>：这个方法在流式收尾的回调里被调用，任何异常都不该影响这一轮的结果。
      */
     public void maybeSummarizeAsync(Long userId, Long sessionId) {
-        if (sessionId == null) {
+        if (summaryClient == null || sessionId == null) {
             return;
         }
         String key = SUMMARY_KEY_PREFIX + sessionId;
@@ -125,6 +126,9 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      * @return 是否成功写入摘要
      */
     boolean runSummarize(Long userId, Long sessionId) {
+        if (summaryClient == null) {
+            return false;
+        }
         try {
             String existing = chatSessionMapper.selectContextSummary(sessionId);
             List<ChatMessage> candidates = summarizableMessages(sessionId);

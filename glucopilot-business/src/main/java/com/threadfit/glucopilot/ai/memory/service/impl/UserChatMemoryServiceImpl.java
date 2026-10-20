@@ -12,6 +12,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -80,7 +81,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     private final ChatRoundGuard extractGuard;
     private final Executor executor;
 
-    public UserChatMemoryServiceImpl(@Qualifier("summaryChatClient") ChatClient memoryClient,
+    public UserChatMemoryServiceImpl(@Qualifier("summaryChatClient") @Nullable ChatClient memoryClient,
                                  ChatUserMemoryMapper memoryMapper,
                                  ChatMessageMapper chatMessageMapper,
                                  AiPromptTemplateService promptTemplateService,
@@ -250,7 +251,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
 
     /** 会话结束时调用：异步抽取该会话的长期记忆。不阻塞、不抛异常。 */
     public void extractAsync(Long userId, Long sessionId, String reason) {
-        if (userId == null || sessionId == null) {
+        if (memoryClient == null || userId == null || sessionId == null) {
             return;
         }
         String key = EXTRACT_KEY_PREFIX + sessionId;
@@ -279,6 +280,9 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * @return 写入/覆盖的记忆条数
      */
     int runExtract(Long userId, Long sessionId, String reason) {
+        if (memoryClient == null) {
+            return 0;
+        }
         try {
             List<ChatMessage> messages = chatMessageMapper.selectRecentBySession(sessionId,
                     aiProperties.getMemory().getMemoryExtractMaxMessages());

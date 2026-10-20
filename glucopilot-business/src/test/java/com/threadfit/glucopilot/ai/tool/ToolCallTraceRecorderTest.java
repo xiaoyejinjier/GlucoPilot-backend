@@ -29,7 +29,13 @@ class ToolCallTraceRecorderTest {
 
     private final ChatToolCallMapper mapper = mock(ChatToolCallMapper.class);
 
-    private final ToolCallTraceRecorder recorder = new ToolCallTraceRecorder(mapper);
+    /** 摘要器用真实现（它本身就是被测行为的一部分：结构压缩 + 截断）。 */
+    private final ToolResultDigester digester = new ToolResultDigester();
+
+    private final com.threadfit.glucopilot.ai.config.AIProperties aiProperties =
+            new com.threadfit.glucopilot.ai.config.AIProperties();
+
+    private final ToolCallTraceRecorder recorder = new ToolCallTraceRecorder(mapper, digester, aiProperties);
 
     private static ToolContext context(Long sessionId, Long userMsgId, AtomicInteger counter) {
         Map<String, Object> values = new HashMap<>();

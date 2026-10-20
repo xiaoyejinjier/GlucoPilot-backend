@@ -28,6 +28,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import com.threadfit.glucopilot.ai.business.chat.service.impl.ChatMessageServiceImpl;
 
 /**
  * 2.24 写用户消息时对媒体引用的处置。
@@ -58,7 +59,7 @@ class ChatMessageServiceTest {
     private OwnedMediaResolver ownedMediaResolver;
 
     @InjectMocks
-    private ChatMessageService service;
+    private ChatMessageServiceImpl service;
 
     // ---------- 校验必须生效 ----------
 

@@ -1,0 +1,12 @@
+{
+  "samplePoints": [
+    {
+      "startTime": 1760400900000,
+      "originalDataCollectorId": "hw-collector-1",
+      "value": [
+        { "fieldName": "level", "floatValue": 6.7 },
+        { "fieldName": "measure_time", "integerValue": 1 }
+      ]
+    }
+  ]
+}

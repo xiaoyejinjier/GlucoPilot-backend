@@ -36,7 +36,7 @@ class ContentActionConcurrencyTest {
         try(var statement=schemaConnection.createStatement()) {statement.execute("ALTER TABLE cms_news ADD community_managed TINYINT DEFAULT 0 NOT NULL");}
         jdbc.execute("CREATE TABLE user_account(id BIGINT PRIMARY KEY,account_status INT DEFAULT 1,is_deleted INT DEFAULT 0)");
         jdbc.execute("CREATE TABLE community_blogger(id BIGINT PRIMARY KEY,user_id BIGINT)");
-        com.threadfit.glucopilot.community.CommunityTestSchema.applyV27(schemaConnection);
+        com.threadfit.glucopilot.community.CommunityTestSchema.applyDraftMigration(schemaConnection);
         jdbc.update("INSERT INTO cms_news(id,title,channel_code,publish_at,publish_status) VALUES(1,'并发文章',4,CURRENT_TIMESTAMP,1)");
         var configuration=new MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);
         GlobalConfigUtils.setGlobalConfig(configuration,new GlobalConfig().setDbConfig(new GlobalConfig.DbConfig()).setMetaObjectHandler(new AuditMetaObjectHandler()));

@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.tool;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatToolCall;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper;
+import com.threadfit.glucopilot.ai.config.AIProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
@@ -26,6 +27,10 @@ public class ToolCallTraceRecorder {
 
     private final ChatToolCallMapper chatToolCallMapper;
 
+    private final ToolResultDigester digester;
+
+    private final AIProperties aiProperties;
+
     /**
      * 记一条工具调用。
      *
@@ -36,6 +41,21 @@ public class ToolCallTraceRecorder {
      * @param errorType   失败时的异常类名，成功时为 null
      */
     public void record(ToolContext toolContext, String toolName, boolean ok, long durationMs, String errorType) {
+        record(toolContext, toolName, ok, durationMs, errorType, null);
+    }
+
+    /**
+     * 记一条工具调用（带结果摘要）。
+     *
+     * @param toolContext  本轮工具上下文（缺失 sessionId/userMsgId 时静默跳过）
+     * @param toolName     工具名
+     * @param ok           是否成功
+     * @param durationMs   耗时毫秒
+     * @param errorType    失败时的异常类名，成功时为 null
+     * @param toolResult   工具返回原文；只有成功时才会被压缩成摘要落库（失败没有结果可记）
+     */
+    public void record(ToolContext toolContext, String toolName, boolean ok, long durationMs, String errorType,
+                       String toolResult) {
         Long sessionId = AiToolContext.optionalLong(toolContext, AiToolContext.SESSION_ID);
         Long userMsgId = AiToolContext.optionalLong(toolContext, AiToolContext.USER_MSG_ID);
         if (sessionId == null) {
@@ -54,6 +74,9 @@ public class ToolCallTraceRecorder {
             row.setOk(ok ? 1 : 0);
             row.setDurationMs((int) Math.min(Math.max(durationMs, 0), Integer.MAX_VALUE));
             row.setErrorType(errorType);
+            if (ok) {
+                row.setResultDigest(digester.digest(toolResult, aiProperties.getMemory().getToolDigestMaxChars()));
+            }
             chatToolCallMapper.insert(row);
         } catch (RuntimeException e) {
             log.warn("工具调用元数据登记失败（不影响工具执行）：tool={} sessionId={}", toolName, sessionId, e);

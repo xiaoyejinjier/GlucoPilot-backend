@@ -52,7 +52,7 @@ public interface CodeEnum {
     @Getter
     @RequiredArgsConstructor
     enum LoginType implements CodeEnum {
-        WECHAT(1), PHONE(2);
+        WECHAT(1), PHONE(2), EMAIL(3);
         private final int code;
     }
 

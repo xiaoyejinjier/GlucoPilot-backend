@@ -4,7 +4,7 @@
 
 用户选择先进入待审核。导入时 `community_managed=1`、`publish_status=0`、`state=AI_PENDING`、`ai_verdict=PENDING`，发布人使用明确的社区编辑部身份，不关联虚构用户。新版后端的初审队列使用配置的文本模型；初审通过只进入管理员终审，失败转为可重试状态，不自动公开。
 
-导入工具为 `tools/CommunityStarterImport.java`，JDK21源码启动，需要后端运行依赖中的MySQL驱动和Jackson。参数为 `audit|apply 工作区绝对路径 已核对数据库名 后端MySQL客户端端口列表`。工具仅接受本机开发数据库，校验V24及运行中后端的连接数据库，拒绝写入未核对的目标；不执行DDL或修改现有文章。
+导入工具为 `tools/CommunityStarterImport.java`，JDK21源码启动，需要后端运行依赖中的MySQL驱动和Jackson。参数为 `audit|apply 工作区绝对路径 已核对数据库名 后端MySQL客户端端口列表`。工具仅接受本机开发数据库，校验V31及运行中后端的连接数据库，拒绝写入未核对的目标；不执行DDL或修改现有文章。
 
 执行apply前将涉及表备份到工作区 `.tmp/community-starter-backup-*`，随后在单事务内插入文章、标签关联及导入日志。唯一seedKey保证重复执行跳过已有记录；已审核/编辑的旧记录不会被重置或覆盖。生产部署与导入由运维另行评审执行。
 

@@ -120,7 +120,7 @@ Write-Host "   模拟用户 id=$userId" -ForegroundColor Gray
 # ---------------------------------------------------------------- 1. 列表
 Write-Host "1) 查询类接口（4.11 与场景列表）" -ForegroundColor Gray
 $scenes = Invoke-Api -Method GET -Url "$adminApi/ai-scenes" -Headers $adminHeaders -Tag 'ai-scenes'
-Check '场景列表返回 4 个场景' ($scenes.Code -eq 200 -and @($scenes.Body.data.records).Count -eq 4) `
+Check '场景列表返回全部场景（③ 期起为 6 个：含 SUMMARY 摘要与 MEMORY 长期记忆）' ($scenes.Code -eq 200 -and @($scenes.Body.data.records).Count -eq 6) `
     "HTTP $($scenes.Code)，records=$(@($scenes.Body.data.records).Count)"
 $chatScene = @($scenes.Body.data.records) | Where-Object { $_.sceneCode -eq 'CHAT' } | Select-Object -First 1
 Check 'CHAT 场景给出"实际生效模型 + 来源"' ($null -ne $chatScene -and $null -ne $chatScene.effectiveModelCode -and $null -ne $chatScene.effectiveModelSource) `
@@ -133,7 +133,7 @@ Check '场景列表带回可选模型清单' (@($scenes.Body.data.models).Count 
 $list = Invoke-Api -Method GET -Url "$adminApi/ai-prompt-templates?sceneCode=$testScene" -Headers $adminHeaders -Tag 'prompt-list'
 Check '4.11 提示词列表可查（按场景）' ($list.Code -eq 200 -and @($list.Body.data.records).Count -ge 1) `
     "HTTP $($list.Code)，records=$(@($list.Body.data.records).Count)"
-Check '列表带回场景元信息（含当前生效来源）' (@($list.Body.data.scenes).Count -eq 4) "scenes=$(@($list.Body.data.scenes).Count)"
+Check '列表带回场景元信息（含当前生效来源）' (@($list.Body.data.scenes).Count -eq 6) "scenes=$(@($list.Body.data.scenes).Count)"
 $beforeActive = @($list.Body.data.records) | Where-Object { $_.active -eq $true } | Select-Object -First 1
 $beforeActiveId = $beforeActive.id
 # 基准标签形如 chat@v1（落 chat_session.system_prompt_ver 的那个值），回滚后必须回到它

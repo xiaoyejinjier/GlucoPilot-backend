@@ -22,7 +22,7 @@ class DataExportServiceTest {
         jdbc.execute("CREATE TABLE user_account(id BIGINT PRIMARY KEY,username VARCHAR(64),account_status INT DEFAULT 1,is_deleted INT DEFAULT 0)");jdbc.execute("CREATE TABLE user_profile(user_id BIGINT PRIMARY KEY,nickname VARCHAR(64),is_deleted INT DEFAULT 0)");
         String schema=new ClassPathResource("db/migration/V1__init_schema.sql").getContentAsString(StandardCharsets.UTF_8);
         for(String table:List.of("data_export_task","glucose_record","meal_record")){int start=schema.indexOf("CREATE TABLE "+table+" (");String ddl=schema.substring(start,schema.indexOf(';',start)).replace("CONSTRAINT pk_id PRIMARY KEY","PRIMARY KEY").replace("uk_user_date_node","uk_"+table+"_date_node").replace("idx_user_date","idx_"+table+"_date");try(var s=connection.createStatement()){s.execute(ddl);}}
-        var migration=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V27__drafts_notifications_exports.sql"));migration.setSqlScriptEncoding("UTF-8");migration.populate(connection);
+        var migration=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V34__drafts_notifications_exports.sql"));migration.setSqlScriptEncoding("UTF-8");migration.populate(connection);
         jdbc.update("INSERT INTO user_account(id,username) VALUES(1,'one'),(2,'two')");jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(1,'用户甲'),(2,'用户乙')");
         service=new DataExportService(jdbc);
     }

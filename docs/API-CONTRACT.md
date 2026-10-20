@@ -9,20 +9,20 @@
 
 POST /api/v1/news/{id}/comments/{targetId}/replies 明确绑定回复目标，body沿用content/clientRequestId，服务端以路径目标构造CommentRequest；不支持此路由时客户端不得降级为顶级评论。返回的rootCommentId/replyToCommentId用于原线程展示。
 GET /api/v1/community/profiles/{key}/articles 按PageQuery返回该用户/发布者已公开且审核通过的Article页，不含草稿、待审或已下架内容。GET /community/tags/mine 返回本人投稿中使用过的标签；客户端另按用户ID保存最近添加的标签（包括尚未投稿的），仅作为可选项，不自动选中。
-投稿/草稿增加可选videoMediaIds（最多1个），Article和Draft增加videos:[{mediaId}]。最多6图+1视频；有有效媒体时正文可为空，否则正文至少20字，标题和1～3个标签仍必填。视频走bizType=8，仅MP4，单文件不超过20MB，客户端选取时限制60秒。V28扩展媒体类型、增加草稿video_ids；已发布/草稿媒体权限与图片一致。GET /api/v1/community/article-videos/{mediaId} 和 GET /admin/v1/community/articles/{id}/videos/{mediaId} 返回鉴权MP4二进制；客户端下载为临时文件播放，管理员以鉴权Blob播放。视频不得经匿名local-objects接口访问；AI初审只审文字，管理员需查看媒体后终审。
+投稿/草稿增加可选videoMediaIds（最多1个），Article和Draft增加videos:[{mediaId}]。最多6图+1视频；有有效媒体时正文可为空，否则正文至少20字，标题和1～3个标签仍必填。视频走bizType=8，仅MP4，单文件不超过20MB，客户端选取时限制60秒。V35扩展媒体类型、增加草稿video_ids；已发布/草稿媒体权限与图片一致。GET /api/v1/community/article-videos/{mediaId} 和 GET /admin/v1/community/articles/{id}/videos/{mediaId} 返回鉴权MP4二进制；客户端下载为临时文件播放，管理员以鉴权Blob播放。视频不得经匿名local-objects接口访问；AI初审只审文字，管理员需查看媒体后终审。
 私信支持下拉刷新，不重复消息，不清空已加载历史；双方头像跳转公开用户主页，用户主页只含公开资料与已发布内容。
 
 ## 草稿箱、信息中心、真实导出与用户详情（2026-10-20）
 
-发布按钮保持AI初审+管理员终审，返回待审状态，不绕过审核。草稿独立存储于V27 community_article_draft，不进入公开列表或审核队列：GET/POST /api/v1/community/drafts，GET/PUT/DELETE /drafts/{id}，POST /drafts/{id}/publish。写入title/body/tagCodes/customTags/imageMediaIds可为空（标题80/正文8000/标签合计3/图片6），需clientRequestId；修改需revision，创建按用户+请求标识幂等。可以携带sourceArticleId/sourceRevision保存已有文章的修改草稿，保存不改变线上版本；发布时验证原文章版本。发布请求{revision,clientRequestId}使用存储的内容，校验完整发文要求，同事务投稿/关闭草稿，重复发布只返回同一篇文章。草稿仅本人可读写，列表不返回他人草稿或密钥。
+发布按钮保持AI初审+管理员终审，返回待审状态，不绕过审核。草稿独立存储于V34 community_article_draft，不进入公开列表或审核队列：GET/POST /api/v1/community/drafts，GET/PUT/DELETE /drafts/{id}，POST /drafts/{id}/publish。写入title/body/tagCodes/customTags/imageMediaIds可为空（标题80/正文8000/标签合计3/图片6），需clientRequestId；修改需revision，创建按用户+请求标识幂等。可以携带sourceArticleId/sourceRevision保存已有文章的修改草稿，保存不改变线上版本；发布时验证原文章版本。发布请求{revision,clientRequestId}使用存储的内容，校验完整发文要求，同事务投稿/关闭草稿，重复发布只返回同一篇文章。草稿仅本人可读写，列表不返回他人草稿或密钥。
 
 发布请求成功即从草稿箱移除，不等待AI或管理员审核结果；审核拒绝也不恢复旧草稿，用户从“我的文章”修改并重投。关闭保留服务端幂等记录，失败的发布不关闭草稿。编辑页返回时若存在未保存的文字、标签或媒体变化，提示“内容尚未保存，要先存为草稿吗？”，提供“确定返回 / 存草稿”；选择保存须成功后才返回，失败保留编辑内容。
 
-V27 community_notification持久化真实互动：LIKE/COLLECT/COMMENT/FOLLOW，参与者取登录身份，自己给自己互动不提醒；点赞/收藏/关注幂等设置不重复产生提醒，取消清除对应提醒，重新操作可产生新提醒。评论同时通知文章作者和被回复者，去重且排除本人。旧数据不伪造为新提醒。读取时过滤停用账号、删除/下架文章及不可见评论线程。
+V34 community_notification持久化真实互动：LIKE/COLLECT/COMMENT/FOLLOW，参与者取登录身份，自己给自己互动不提醒；点赞/收藏/关注幂等设置不重复产生提醒，取消清除对应提醒，重新操作可产生新提醒。评论同时通知文章作者和被回复者，去重且排除本人。旧数据不伪造为新提醒。读取时过滤停用账号、删除/下架文章及不可见评论线程。
 
 GET /api/v1/community/information/summary返回{messages,likes,collections,comments,follows,total,latestMessageId,latestSenderId,latestNotificationId}，仅当前用户未读。GET /community/notifications?kind=LIKE|COLLECT|COMMENT|FOLLOW&pageNum=&pageSize=返回本人提醒页，含id/kind/actor公开资料/newsId/newsTitle/commentId/content/createdAt/read；PUT /community/notifications/read {kind,throughId}只标记本人该类别且ID<=已加载范围。信息入口包含私信、点赞、收藏、评论、新关注我的；记录页提醒与回复仅显示非零的提醒项，无内容时隐藏入口。前台5秒轮询，后台停止，不申请微信订阅推送。
 
-真实导出复用data_export_task，V27新增client_request_id及data_export_file保存XLSX二进制。POST /api/v1/data-export-tasks {startDate,endDate,clientRequestId}创建本人任务，范围最多366天且不包含未来日期，幂等ID相同参数返回原任务；GET /data-export-tasks返回本人历史。GET /admin/v1/exports按状态/用户关键词分页；POST /exports/{id}/generate生成真实未删除血糖/饮食记录（每类最多20000条，超出明确失败，不截断）；完成文件为固定快照，重复生成已完成任务不改文件。POST /api/v1/data-export-tasks/{id}/generate仅本人；GET 两端对应/{id}/file下载，C端限定本人、后台需export:task:manage，文件成功二进制application/vnd.openxmlformats-officedocument.spreadsheetml.sheet、no-store，错误ApiResponse；仅已完成任务可下载，不返回无鉴权公开地址。无记录时生成只有表头的真实空工作簿，不制造示例。失败可重试、保留错误状态，后台不回退Mock。
+真实导出复用data_export_task，V34新增client_request_id及data_export_file保存XLSX二进制。POST /api/v1/data-export-tasks {startDate,endDate,clientRequestId}创建本人任务，范围最多366天且不包含未来日期，幂等ID相同参数返回原任务；GET /data-export-tasks返回本人历史。GET /admin/v1/exports按状态/用户关键词分页；POST /exports/{id}/generate生成真实未删除血糖/饮食记录（每类最多20000条，超出明确失败，不截断）；完成文件为固定快照，重复生成已完成任务不改文件。POST /api/v1/data-export-tasks/{id}/generate仅本人；GET 两端对应/{id}/file下载，C端限定本人、后台需export:task:manage，文件成功二进制application/vnd.openxmlformats-officedocument.spreadsheetml.sheet、no-store，错误ApiResponse；仅已完成任务可下载，不返回无鉴权公开地址。无记录时生成只有表头的真实空工作簿，不制造示例。失败可重试、保留错误状态，后台不回退Mock。
 
 GET /admin/v1/users及GET /admin/v1/users/{id}需user:manage，增加真实phone（可空），保留phoneMasked；详情返回用户公开/账号字段、状态、注册/活跃时间、真实记录数量和达标率，不返回密码/openid/session凭据。手机号未绑定时如实显示未绑定，不伪造微信手机号；健康档案仍走独立health:archive:view权限。
 
@@ -32,13 +32,13 @@ GET /api/v1/community/messages/unread 返回 {unreadCount:number,latestMessageId
 
 私信语音复用POST /api/v1/speech-transcriptions：切换按住说话、松开识别、可修改/重录，确认后才调用原私信发送接口；识别文本和表情合计仍限1000字，发送失败保留草稿和幂等ID。
 
-V26新增community_article_image(news_id,media_id,sort_no)。投稿/修改增加可选imageMediaIds:string[]，最多6张、顺序保留，不允许重复；图片走原上传凭证→PUT→登记，新增MediaBizType.ARTICLE_IMAGE=7，单张最多5MB，服务端验证当前用户所有、可用、未删除及图片MIME。文章列表/详情追加images:[{mediaId}]；旧文章为空。图片与正文/标签同事务保存，幂等比较包含图片及顺序，任何编辑重新初审与终审。
+V33新增community_article_image(news_id,media_id,sort_no)。投稿/修改增加可选imageMediaIds:string[]，最多6张、顺序保留，不允许重复；图片走原上传凭证→PUT→登记，新增MediaBizType.ARTICLE_IMAGE=7，单张最多5MB，服务端验证当前用户所有、可用、未删除及图片MIME。文章列表/详情追加images:[{mediaId}]；旧文章为空。图片与正文/标签同事务保存，幂等比较包含图片及顺序，任何编辑重新初审与终审。
 
 GET /api/v1/community/article-images/{mediaId} 为需登录的二进制图片接口（成功image/*，错误ApiResponse），只允许图片所有者，或已终审发布且未删除的文章所引用的图片；GET /admin/v1/community/articles/{id}/images/{mediaId} 需content:news:list并验证当前文章确实引用。两者不返回存储密钥/永久公开地址，Cache-Control:no-store；客户端带会话下载到临时文件，离页清理，管理员使用带鉴权的Blob。正文配图可预览/删除，按选择顺序展示于正文后；审核页同时展示配图并提醒管理员核验图片，现有AI初审仅审核文字，不宣称图片已通过AI审查。
 
 ## 评论回复与显示（2026-10-20）
 
-V25在community_comment新增reply_to_comment_id及root_comment_id（旧顶级评论为空），不改已有正文或身份。POST /api/v1/news/{id}/comments增加可选replyToCommentId，服务端验证目标属于同一篇可见文章、评论和根评论可见，用户身份取会话；幂等标识同时校验正文与回复目标。支持回复评论或回复已有回复，统一归入最初的根评论。
+V32在community_comment新增reply_to_comment_id及root_comment_id（旧顶级评论为空），不改已有正文或身份。POST /api/v1/news/{id}/comments增加可选replyToCommentId，服务端验证目标属于同一篇可见文章、评论和根评论可见，用户身份取会话；幂等标识同时校验正文与回复目标。支持回复评论或回复已有回复，统一归入最初的根评论。
 
 GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，total/pages表示顶级评论数量；每项追加rootCommentId、replyToCommentId、replyToAuthor、replies（首3条按ID正序）、replyCount、replyHasMore、replyNextAfterId。GET /api/v1/news/{id}/comments/{rootId}/replies?afterId=&pageSize=10返回records/hasMore/nextAfterId，验证文章、根评论及当前用户，不能跨文章读取。文章commentCount统计可见顶级评论与回复；根评论被删除或作者停用后整串不再公开，删除中间回复不删除其他人的回复。回复目标已删除时不泄露其正文或资料。
 
@@ -52,7 +52,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 管理端文章管理补充：GET /admin/v1/community/articles 默认列出所有未删除的官方资讯及社区投稿，不默认只看待终审。支持 status、source=OFFICIAL/COMMUNITY、keyword（标题或发布人昵称，最多80字）、pageNum/pageSize。列表与详情追加 source；author 返回发布人的公开昵称与社区号，不返回手机号、微信标识或密钥。官方旧文章按 cms_news.publish_status 映射 DRAFT/PUBLISHED/HIDDEN，投稿按真实审核状态展示；createdAt 回退到原文章创建时间。官方文章沿用 /admin/v1/news 编辑发布，社区投稿继续走 AI 初审及管理员终审，不可混用官方编辑接口绕过审核。
 
-复用cms_news及点赞/收藏、community_follow、community_comment、community_message；迁移V24新增community_article、community_tag、community_article_tag、community_report、community_moderation_log，cms_news.community_managed标识需走审核的投稿。关注表已在V22建立，不另造重复表。文章为纯文本，标题1～80字、正文20～8000字、标签1～3个，标签包含饮食控糖、1型糖尿病、2型糖尿病、药物科普、运动管理、日常管理。
+复用cms_news及点赞/收藏、community_follow、community_comment、community_message；迁移V31新增community_article、community_tag、community_article_tag、community_report、community_moderation_log，cms_news.community_managed标识需走审核的投稿。关注表已在V29建立，不另造重复表。文章为纯文本，标题1～80字、正文20～8000字、标签1～3个，标签包含饮食控糖、1型糖尿病、2型糖尿病、药物科普、运动管理、日常管理。
 
 用户接口均需当前C端身份：GET /api/v1/community/tags；GET /community/articles（tag、following、keyword及pageNum/pageSize，路径均带/api/v1，下同）；POST /community/articles（title、body、tagCodes、clientRequestId）；GET /community/articles/mine；GET/PUT /community/articles/{id}（修改带revision）；POST /community/articles/{id}/retry-ai（仅AI_ERROR）；POST /community/reports（targetType=ARTICLE/COMMENT/USER/MESSAGE、targetId、reason、details、clientRequestId）。重试客户端标识不得变更正文，返回原记录；用户只能修改自己的文章，发布后修改立即撤下并重新审核，版本号防止覆盖。举报消息时必须是消息双方之一，不返回其他人的私信。
 
@@ -74,7 +74,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ## 社区互动与用户私信（2026-10-19）
 
-继续使用现有资讯，不增加用户发帖。V22增加发布者、关注、评论和用户私信表，cms_news增加blogger_id默认1；旧资讯统一归属“社区编辑部”，不把后台created_by推断为C端身份。公开资料key为b{发布者ID}或u{用户ID}；资料只返回key/userId（可空）/nickname/avatarUrl/bio/followed/isSelf，不返回手机号、openid、健康资料。发布者仅在显式关联有效C端user_id时可接收私信；评论者可关注并发私信。不可关注自己，不可给自己发私信，禁用/注销/删除账号不可互动或被检索。
+继续使用现有资讯，不增加用户发帖。V29增加发布者、关注、评论和用户私信表，cms_news增加blogger_id默认1；旧资讯统一归属“社区编辑部”，不把后台created_by推断为C端身份。公开资料key为b{发布者ID}或u{用户ID}；资料只返回key/userId（可空）/nickname/avatarUrl/bio/followed/isSelf，不返回手机号、openid、健康资料。发布者仅在显式关联有效C端user_id时可接收私信；评论者可关注并发私信。不可关注自己，不可给自己发私信，禁用/注销/删除账号不可互动或被检索。
 
 除原有公开资讯列表/详情外，下列接口全部要求C端登录，统一ApiResponse及X-Request-Id；pageNum从1开始、pageSize默认20且最多50，列表统一PageResult。详情增加author公开资料和commentCount；PUT /news/{id}/actions沿用liked/collected布尔目标状态，文章行锁保证并发计数不丢失。
 
@@ -95,7 +95,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 私信仅文本，普通HTTPS请求；打开页面每5秒刷新，退后台/离页停止；发送失败保留原文及幂等ID供重试，不自动重发，不显示虚假成功。所有查询以登录身份限定发送/接收双方，客户端不能指定senderId；第三人不可读、不可标已读。消息/评论正文不进入访问日志，不把私信内容放系统通知或公共资料；未知异常仍50000，参数40000、失效目标40400、幂等冲突40900。读取分页与标已读幂等；新增写请求以body.clientRequestId作幂等键，无需另外X-Idempotency-Key。
 
-本次仅编写迁移与测试，不对真实数据库执行DDL。需配套后端构建、V22正常迁移后与两个不同C端账号真机验收；dev固定openid时两个客户端会是同一用户，不能用作双账号验收。
+本次仅编写迁移与测试，不对真实数据库执行DDL。需配套后端构建、V29正常迁移后与两个不同C端账号真机验收；dev固定openid时两个客户端会是同一用户，不能用作双账号验收。
 
 ## 接口路由错误（2026-10-19）
 
@@ -199,9 +199,23 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 反馈管理、用户管理和九时段用户每日明细使用同样的分页交互：默认 10 条、可选 10/20/50/100 条，表格内部滚动，分页栏展示总数、当前页和记录区间。页码与每页条数改变时重新请求各自服务端接口，筛选条件只在提交查询时生效并随翻页保留；反馈状态、用户状态变更或数据减少导致当前页越界时自动回退。九时段按“用户 + 日期”分页，`overview` 统计整个查询范围，不按当前页记录数计算，也不得随翻页丢失已提交的日期范围。
 
+## 管理端内容媒体（资讯/轮播）
+
+媒体素材页管理资讯配图与轮播图：上传 JPG/PNG（单张 1 字节至 5MB），走对象存储「凭证 → PUT → 登记」。开发可选用 `STORAGE_PROVIDER=local` 或 `minio`；生产为阿里云 OSS。稳定访问地址为 `/api/v1/cms/images/{id}`（服务端读私有对象，不把预签名 URL 写入 CMS 表）。
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| `GET /admin/v1/cms-media?purpose=` | `content:media:manage` | `purpose` 可选 `news` / `banner` / 省略（全部）；返回素材列表 |
+| `POST /admin/v1/cms-media/upload-credentials` | `content:media:manage` | 请求 `{ purpose, bizType: 5, mimeType, sizeBytes }` |
+| `POST /admin/v1/cms-media` | `content:media:manage` | 请求 `{ purpose, bizType: 5, storageKey, mimeType, sizeBytes }`；建议带 `X-Idempotency-Key` |
+| `DELETE /admin/v1/cms-media/{id}` | `content:media:manage` | 软删除（`file_status=0`），仅本人运营账号上传的素材 |
+| `GET /api/v1/cms/images/{id}` | 公开 | 返回已登记 CMS 图片二进制 |
+
+`media_file` 使用 `biz_type=CMS(5)`，`biz_id=CONTENT_NEWS` 或 `CONTENT_BANNER`，`ops_id` 为当前运营，`user_id` 为空。Banner `image` / 资讯 `coverUrl` 可填上述稳定相对路径。
+
 ## 管理端食物图片
 
-待审核新食品（`nutritionSource=AI_ESTIMATE`且未上架）优先使用用户本次上传的餐食实拍图作为审核预览。识别服务只关联已验证归属的MEAL媒体，新增`food_nutrition.source_media_id`（迁移V23）；新草稿及缺少实拍关联的旧草稿可补充首次来源，重复识别不覆盖已关联照片，也不改动已审核或人工食品。管理端食品DTO新增只读`reviewImage`：有来源且仍待审核时为`/admin/v1/foods/{id}/review-image`，否则为空。该字段只用于审核，不写入公开`image`或食品库配图。
+待审核新食品（`nutritionSource=AI_ESTIMATE`且未上架）优先使用用户本次上传的餐食实拍图作为审核预览。识别服务只关联已验证归属的MEAL媒体，新增`food_nutrition.source_media_id`（迁移V30）；新草稿及缺少实拍关联的旧草稿可补充首次来源，重复识别不覆盖已关联照片，也不改动已审核或人工食品。管理端食品DTO新增只读`reviewImage`：有来源且仍待审核时为`/admin/v1/foods/{id}/review-image`，否则为空。该字段只用于审核，不写入公开`image`或食品库配图。
 
 `GET /admin/v1/foods/{id}/review-image`要求运营登录及`food:library:manage`权限，验证食品仍待审核、来源媒体未删除/可用且为餐食图片后，返回原图二进制，使用`Cache-Control: no-store`；缺失或失效返回统一404响应。管理端携带Bearer读取为Blob预览，离页/换食品回收临时URL；照片缺失或加载失败时回落已有配图，再回落内置图片。用户健康照片不经公开食品配图接口发布。旧草稿没有来源关联时继续显示原配图，下次同名高置信度识别时可补充来源。
 
@@ -350,7 +364,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 请求体字段：`nodeCode`（必填，餐点）、`currentGlucose`（必填，`(0,40)` mmol/L）、`carbsG`（必填，≥0）、`items`（可空，≤50，每项 `foodName` 必填 ≤64、`categoryCode` 必填 `1-9` 且**透传不落库**——前端从 food 库选食时详情自然带 `category_code` 填入、`weightG` / `carbsG` 可空 ≥0）、`portionRatio`（可空，`(0,2]`，默认 1.0）、`medicationTaken`（可空布尔，默认未服药）、`exerciseDone`（可空布尔，默认未运动）、补充原文（可空，≤200）。
 
-响应 `data`：`predictNow`（现状预测）、`suggestText`（建议文案——`items` 非空走分食物建议，为空退回碳水换算，均不调 LLM）、`predictSuggest`（按建议量再预测）、`algorithmVersion`（`"v1"`，算法数值/系数/文案变更时升级）。预测数值均收口到 `[0.1, 39.9]` 并保留 1 位小数。
+响应 `data`：`predictNow`（现状预测）、`suggestText`（建议文案——`items` 非空走分食物建议，为空退回碳水换算，均不调 LLM）、`predictSuggest`（按建议量再预测）、`suggestCarbs`（推荐总碳水 g，1 位小数；危险高血糖场景为 0）、`suggestItems`（分食物结构化建议，与 `suggestText` 同源派生；每项 `foodName` + `suggestWeight`：数值=建议吃 Xg、`0`=不建议、`null`=保持原份量（正常）；整体降级/暂缓进食/无明细场景为空数组）、`algorithmVersion`（`"v1"`，算法数值/系数/文案变更时升级）。预测数值均收口到 `[0.1, 39.9]` 并保留 1 位小数。
 
 | 场景 | code |
 | --- | --- |
@@ -370,6 +384,12 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
     "predictNow": 8.4,
     "suggestText": "米饭 150g · 红烧肉正常 · 青菜正常",
     "predictSuggest": 7.8,
+    "suggestCarbs": 45.0,
+    "suggestItems": [
+      { "foodName": "米饭", "suggestWeight": 150 },
+      { "foodName": "红烧肉", "suggestWeight": null },
+      { "foodName": "青菜", "suggestWeight": null }
+    ],
     "algorithmVersion": "v1"
   },
   "requestId": "d7b3..."
@@ -443,3 +463,25 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 成功结果中的 `ocrResult` 固定为：`schemaVersion=1`、`bizType=1`、`suggestedValue`（`mmol/L`，无法可靠识别时为 `null`）、`confidence`（`0-100`）和 `rawText`。即使状态成功，`suggestedValue=null` 也表示图片质量不足，客户端必须进入手工输入。任务失败时返回 `errorMsg`，客户端仍应允许用户手工记录。
 
 用户确认后调用 `PUT /api/v1/glucose-records/by-node`：采纳 OCR 值时必须传 `sourceType=2` 和原 `mediaId`；用户改为手工输入时传 `sourceType=1`，但仍可携带原 `mediaId` 供追溯。非空 `mediaId` 必须属于当前用户、状态可用且类型为 `GLUCOSE(2)`。血糖值继续执行 `(0,40)` 的服务端范围校验，识别接口不得直接写入 `glucose_record`。
+
+## 邮箱登录（合入）
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| POST /api/v1/auth/email/codes | 匿名 | 向邮箱发送 6 位验证码；scene 为 login 或 ind；同邮箱 60 秒冷却 |
+| POST /api/v1/auth/email/sessions | 匿名 | 邮箱验证码登录 |
+| PATCH /api/v1/users/me/email | C 端登录 | 绑定/换绑邮箱 |
+
+## 设备数据同步
+
+用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。
+
+## 管理端设备档案
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| GET /admin/v1/devices | device:manage | 分页查询 |
+| POST /admin/v1/devices | device:manage | 创建 |
+| PUT /admin/v1/devices/{id} | device:manage | 更新 |
+| PUT /admin/v1/devices/{id}/status | device:manage | 启用/禁用 |
+| DELETE /admin/v1/devices/{id} | device:manage | 逻辑删除 |

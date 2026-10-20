@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
+import com.threadfit.glucopilot.ai.business.chat.service.ChatSessionService;
 
 public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
 

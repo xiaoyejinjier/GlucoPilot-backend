@@ -17,6 +17,25 @@ wechat:
     app-secret: ${WECHAT_APP_SECRET:}
 
 spring:
+  mail:
+    host: ${MAIL_HOST:smtp.qq.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          connectiontimeout: ${MAIL_SMTP_CONNECTION_TIMEOUT:5000}
+          timeout: ${MAIL_SMTP_TIMEOUT:8000}
+          writetimeout: ${MAIL_SMTP_WRITE_TIMEOUT:8000}
+          quitwait: false
+          ssl:
+            enable: ${MAIL_SSL_ENABLED:false}
+          starttls:
+            enable: ${MAIL_STARTTLS_ENABLED:true}
+            required: ${MAIL_STARTTLS_REQUIRED:true}
   application:
     name: GlucoPilot Backend
   messages:
@@ -137,9 +156,30 @@ ai:
   # 会话记忆窗口：送入模型的最近原文消息条数。
   # 注意：chat_session.window_msg_count 这一列已在 V21 标注废弃——读取侧只认这里的配置，
   # 不读那个列（避免出现"看起来能按会话调窗口、实际不生效"的误导）。
+  #
+  # ② 期（2026-10-16）起改为**按 token 预算**裁剪：
+  #   实测一轮几乎空的对话（系统提示词 1651 字 + 6 个工具定义）就已经 5012 prompt tokens，
+  #   而单条助手回复上限 20000 字、回放时不做逐条截断——"20 条"能装的内容量可以差两个数量级。
   memory:
+    # 主判据：一轮 prompt 允许的总 token（含系统提示词与工具定义）。保守取值，它是安全阀不是目标值
+    max-prompt-tokens: 4096
+    # 无论预算多紧都至少保留这么多条最近历史（保连贯性，宁可超一点预算）
+    keep-recent-messages: 6
+    # 条数上限（降级为兜底：与 token 预算取小，防估算器被极短消息带偏后一次塞进几百条）
     window-messages: 20
+    # 仓库一次最多捞多少条可回放消息（防御性上限）
     max-fetch: 200
+    # 滚动摘要：长度上限、单次输入上限（字符）与输出 token 上限
+    summary-max-chars: 800
+    # 输入上限从 6000 降到 3000 是实测结论：6000 字摘要在该通道上会读超时（ReadTimeoutException），
+    # 任务失败 → 摘要一直建不起来；摘要对"少一点原文"并不敏感
+    summary-input-max-chars: 3000
+    # 摘要正文只有几百字，封顶可杜绝"模型长篇发挥"拖长生成时间
+    summary-max-tokens: 600
+    # 工具结果回放（B3 后半）：是否把最近工具调用的结果摘要注入上下文，以及条数/字符上限
+    tool-replay-enabled: true
+    tool-replay-max-items: 3
+    tool-digest-max-chars: 512
 
   # 医疗安全硬拦截：命中敏感词的请求不会发给模型，直接返回固定话术。
   # 提示词里的合规约束是软约束（模型可能不遵守），这里是硬约束。
@@ -256,6 +296,24 @@ ai:
       temperature: 0
       thinking: false
 
+    # 会话滚动摘要（② 期）：把超出记忆窗口的旧对话压缩成事实摘要（产物是内部上下文，不给用户看）。
+    # 温度取低：它要稳定复述而不是发挥；模型可单独在后台绑一个更便宜的（ai_scene_config）。
+    summary:
+      prompt: prompts/summary/compress.md
+      version: v1
+      temperature: 0.1
+
+    # 长期记忆抽取（③ 期）：从对话里挑出值得跨会话记住的用户事实，输出 JSON（不给用户看）。
+    # 温度取低：要稳定抽取而不是发挥；模型可在后台单独绑一个更便宜的。
+    memory:
+      prompt: prompts/memory/extract.md
+      version: v1
+      temperature: 0.1
+
+
+glucopilot:
+  mail:
+    from: ${MAIL_FROM:}
 
 # Official RuoYi framework settings; secrets supplied by deployment environment.
 ruoyi:

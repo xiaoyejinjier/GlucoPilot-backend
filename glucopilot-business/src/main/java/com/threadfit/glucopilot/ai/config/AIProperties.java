@@ -126,24 +126,78 @@ public class AIProperties {
         private Boolean thinking;
     }
 
-    /** 会话记忆（chat_message 窗口）。 */
+    /**
+     * 会话记忆（② 期：token 预算窗口 + 滚动摘要）。
+     * <p>
+     * <b>为什么从"条数"改成"token 预算"</b>：实测一轮几乎空的对话（系统提示词 1651 字 + 6 个工具定义）
+     * 就已经是 5012 prompt tokens，而单条助手回复上限 20 000 字、回放时不做逐条截断——
+     * 也就是"20 条"能装下的内容量可以差两个数量级。预算必须按 token 算。
+     */
     @Data
     public static class MemoryProperties {
 
         /**
-         * 送入模型的最近原文消息条数（窗口上限）。
+         * 历史窗口的<b>条数</b>兜底（默认 20）。
          * <p>
-         * 由 {@code ChatMemoryReadAdvisor.keepLastWindow(...)} 在读取侧施加——<b>不要</b>指望
-         * {@code MessageWindowChatMemory.maxMessages}：框架的 {@code get()} 不裁剪，裁剪只在
-         * {@code add()}（本项目不走的写入路径）上（详见该 Advisor 的类注释）。
-         * <p>
-         * {@code chat_session.window_msg_count} 在建会话时落的是本值的快照，仅供追溯；
-         * 改这里不会回改历史会话的那一列。
+         * 仍然保留它，但降级为"数量上限"而不是主判据：主判据是 {@link #maxPromptTokens}。
+         * 两者取小——这样即使估算器被某条极短消息带偏，也不会一次塞进几百条。
          */
         private int windowMessages = 20;
 
-        /** 单次从库里捞取的防御性上限，避免窗口配置被误改成大数后一次拉全表。 */
+        /** 仓库一次最多捞多少条可回放消息（防御性上限，防配置被改成大数后拉全表）。 */
         private int maxFetch = 200;
+
+        /**
+         * 一轮 prompt 允许的总 token（默认 4096，含系统提示词与工具定义）。
+         * <p>
+         * 保守取值的理由：固定开销实测约 5k（系统提示词 + 工具定义随工具数增长），
+         * 4096 是一个"安全阀"而不是"目标值"；调大只会让摘要更晚触发、单轮更贵。
+         */
+        private int maxPromptTokens = 4096;
+
+        /**
+         * 无论预算多紧，都至少保留最近这么多条历史消息。
+         * <p>
+         * 这是"宁可超预算也要保住连贯性"的兜底：只留最后一轮会让多轮追问（"那第二条呢"）直接断片。
+         */
+        private int keepRecentMessages = 6;
+
+        /** 滚动摘要的长度上限（字符）。超长摘要本身也会吃预算。 */
+        private int summaryMaxChars = 800;
+
+        /**
+         * 摘要场景的单次输入上限（字符）：要压缩的原文超过它时只取最近这么多字。
+         * <p>
+         * 从 6000 降到 3000 是实测结果：6000 字的摘要在该通道上会超过读超时（ReadTimeoutException），
+         * 任务失败 → 摘要一直建不起来。输入越长首 token 越慢，而摘要对"少一点原文"并不敏感。
+         */
+        private int summaryInputMaxChars = 3000;
+
+        /** 摘要输出的 token 上限：摘要正文只有几百字，封顶可杜绝"模型长篇发挥"拖长生成时间。 */
+        private int summaryMaxTokens = 600;
+
+        /** 是否把最近的工具结果摘要注入上下文（B3 的后半）。 */
+        private boolean toolReplayEnabled = true;
+
+        /** 回放的最近工具调用条数上限。 */
+        private int toolReplayMaxItems = 3;
+
+        /** 工具结果摘要（chat_tool_call.result_digest）的字符上限。 */
+        private int toolDigestMaxChars = 512;
+
+        // ---------------- ③ 期：长期记忆 ----------------
+
+        /** 注入上下文的最多记忆条数（按置信度降序取）；0 = 不注入。 */
+        private int injectMaxItems = 8;
+
+        /** 抽取时最多回看多少条消息（长期记忆只要稳定事实，不需要整段历史）。 */
+        private int memoryExtractMaxMessages = 60;
+
+        /** 抽取输入的字符上限（超长只取最近的部分）。 */
+        private int memoryExtractInputMaxChars = 3000;
+
+        /** 抽取输出的 token 上限（只输出 JSON）。 */
+        private int memoryExtractMaxTokens = 500;
     }
 
     /**

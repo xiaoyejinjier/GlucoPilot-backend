@@ -1,0 +1,11 @@
+[
+  {
+    "uuid": "apple-1",
+    "quantity": 100,
+    "unit": "mg/dL",
+    "startDate": "2026-10-14T07:20:00+08:00",
+    "metadata": {
+      "HKMetadataKeyBloodGlucoseMealTime": 1
+    }
+  }
+]

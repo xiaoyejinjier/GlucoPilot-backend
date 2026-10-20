@@ -32,12 +32,12 @@ class AdminCommunityArticlesTest {
         }
         jdbc.execute("CREATE TABLE user_account(id BIGINT PRIMARY KEY,account_status INT DEFAULT 1,is_deleted INT DEFAULT 0)");
         jdbc.execute("CREATE TABLE user_profile(user_id BIGINT PRIMARY KEY,nickname VARCHAR(64),avatar_url VARCHAR(512),is_deleted INT DEFAULT 0)");
-        for(String file:List.of("V22__community_interactions.sql","V24__community_publication_moderation.sql","V25__community_comment_replies.sql","V26__community_article_images.sql")) {
+        for(String file:List.of("V29__community_interactions.sql","V31__community_publication_moderation.sql","V32__community_comment_replies.sql","V33__community_article_images.sql")) {
             var resource=new ClassPathResource("db/migration/"+file);
             var migration=new ResourceDatabasePopulator(new org.springframework.core.io.ByteArrayResource(resource.getContentAsString(StandardCharsets.UTF_8).replace("DROP CHECK chk_mf_biz","DROP CONSTRAINT chk_mf_biz").getBytes(StandardCharsets.UTF_8)));
             migration.setSqlScriptEncoding("UTF-8");migration.populate(migrationConnection);
         }
-        CommunityTestSchema.applyV27(migrationConnection);
+        CommunityTestSchema.applyDraftMigration(migrationConnection);
         jdbc.update("INSERT INTO user_account(id) VALUES(2)");
         jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(2,'用户小明')");
         article(10,"官方已发布",0,1);article(11,"官方草稿",0,0);article(12,"官方下架",0,2);

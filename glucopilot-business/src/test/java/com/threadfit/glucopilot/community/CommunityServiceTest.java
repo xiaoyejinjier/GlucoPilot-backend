@@ -29,11 +29,11 @@ class CommunityServiceTest {
         jdbc.execute("CREATE TABLE user_profile(user_id BIGINT PRIMARY KEY,nickname VARCHAR(64),avatar_url VARCHAR(512),is_deleted INT DEFAULT 0)");
         jdbc.execute("CREATE TABLE cms_news(id BIGINT PRIMARY KEY,title VARCHAR(128),summary_text VARCHAR(512),channel_code INT DEFAULT 4,content_type INT DEFAULT 1,cover_url VARCHAR(512),publish_status INT DEFAULT 1,is_deleted INT DEFAULT 0,publish_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,like_count INT DEFAULT 0,collect_count INT DEFAULT 0)");
         jdbc.execute("CREATE TABLE news_user_action(id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT,news_id BIGINT,is_liked INT DEFAULT 0,is_collected INT DEFAULT 0,is_deleted INT DEFAULT 0,gmt_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE(user_id,news_id,is_deleted))");
-        var migration=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V22__community_interactions.sql"));
+        var migration=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V29__community_interactions.sql"));
         migration.setSqlScriptEncoding("UTF-8");migrationConnection=ds.getConnection();migration.populate(migrationConnection);
-        var replyMigration=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V25__community_comment_replies.sql"));
+        var replyMigration=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V32__community_comment_replies.sql"));
         replyMigration.setSqlScriptEncoding("UTF-8");replyMigration.populate(migrationConnection);
-        CommunityTestSchema.applyV27(migrationConnection);
+        CommunityTestSchema.applyDraftMigration(migrationConnection);
         jdbc.execute("ALTER TABLE cms_news ADD community_managed INT DEFAULT 0");
         jdbc.execute("CREATE TABLE community_article(news_id BIGINT PRIMARY KEY,state VARCHAR(24))");
         for(long id=1;id<=4;id++) {

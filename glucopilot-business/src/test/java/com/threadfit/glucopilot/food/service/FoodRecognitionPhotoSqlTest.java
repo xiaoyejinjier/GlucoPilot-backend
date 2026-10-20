@@ -28,7 +28,7 @@ class FoodRecognitionPhotoSqlTest {
         ddl.execute(schema.substring(start, end + 1).replace("CONSTRAINT pk_id PRIMARY KEY", "PRIMARY KEY"));
         ddl.execute("ALTER TABLE food_nutrition ADD nutrition_source VARCHAR(32) DEFAULT 'MANUAL' NOT NULL");
         ddl.execute("ALTER TABLE food_nutrition ADD source_model VARCHAR(128)");
-        ddl.execute(resource("V23__food_recognition_source_photo.sql"));
+        ddl.execute(resource("V30__food_recognition_source_photo.sql"));
         var config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         GlobalConfigUtils.setGlobalConfig(config, new GlobalConfig().setDbConfig(new GlobalConfig.DbConfig()));
         config.setEnvironment(new Environment("test", new JdbcTransactionFactory(), ds));

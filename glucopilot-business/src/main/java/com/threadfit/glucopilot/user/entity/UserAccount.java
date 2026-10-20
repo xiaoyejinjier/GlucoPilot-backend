@@ -16,6 +16,7 @@ public class UserAccount extends BaseEntity {
     private String openid;
     private String unionId;
     private String phone;
+    private String email;
     private Integer accountStatus;
     private LocalDateTime lastLoginAt;
     private String lastLoginIp;

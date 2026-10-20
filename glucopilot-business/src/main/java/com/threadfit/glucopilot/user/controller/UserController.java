@@ -67,4 +67,10 @@ public class UserController {
             @Valid @RequestBody UserDtos.PhoneBindRequest request) {
         return ApiResponse.ok(userAccountService.bindPhone(RequestContext.requireUserId(), request));
     }
+
+    @PatchMapping("/email")
+    public ApiResponse<UserDtos.EmailBindResult> bindEmail(
+            @Valid @RequestBody UserDtos.EmailBindRequest request) {
+        return ApiResponse.ok(userAccountService.bindEmail(RequestContext.requireUserId(), request));
+    }
 }

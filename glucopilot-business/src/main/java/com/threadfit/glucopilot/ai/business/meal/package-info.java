@@ -8,7 +8,7 @@
  * <ul>
  *   <li>视觉 provider 接入（{@code AiChatClientRegistry} 里按 {@code SceneCode.isRequiresVision()} 分流）；</li>
  *   <li>提示词：{@code prompts/meal-analysis/system.md}（已就绪，要求输出固定字段的 JSON）；</li>
- *   <li>结构化输出解析与校验：{@link com.threadfit.glucopilot.ai.business.meal.MealAnalysisService}；</li>
+ *   <li>结构化输出解析与校验：{@link com.threadfit.glucopilot.ai.business.meal.service.MealAnalysisService}；</li>
  *   <li>食物营养库（{@code food_nutrition}）作为估算数据源，属其他模块交付。</li>
  * </ul>
  * 入口为 {@code POST /api/v1/meal-analysis}。识别不生成血糖预测、不写饮食记录；

@@ -58,7 +58,7 @@ public class CommunityStarterImport {
         var entries=entries(workspace.resolve("backend/data/community/starter-articles.json"));
         String url="jdbc:mysql://"+host+":"+value("DB_PORT","3306")+"/"+db+"?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL="+value("DB_SSL_ENABLED","false");
         try(var c=DriverManager.getConnection(url,value("DB_USERNAME","root"),value("DB_PASSWORD",""))) {
-            try(var s=c.prepareStatement("SELECT COUNT(*) FROM flyway_schema_history WHERE version='24' AND success=1");var r=s.executeQuery()) {r.next();if(r.getLong(1)!=1) throw new IllegalStateException("V24 is not applied");}
+            try(var s=c.prepareStatement("SELECT COUNT(*) FROM flyway_schema_history WHERE version='31' AND success=1");var r=s.executeQuery()) {r.next();if(r.getLong(1)!=1) throw new IllegalStateException("V31 is not applied");}
             if(args.length>3 && !args[3].isBlank()) {
                 Set<String> schemas=new HashSet<>(),ports=Set.of(args[3].split(","));
                 try(var s=c.createStatement();var r=s.executeQuery("SELECT HOST,DB FROM information_schema.PROCESSLIST WHERE DB IS NOT NULL")) {

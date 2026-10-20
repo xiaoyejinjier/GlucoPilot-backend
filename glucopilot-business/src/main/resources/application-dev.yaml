@@ -24,12 +24,18 @@ logging:
     com.threadfit.glucopilot.ai.business.chat.mapper: INFO
 
 # ---------------------------------------------------------------------------
-# 对象存储（dev = 后端自带的本地文件存储）。完整入库流程仍走：凭证 → PUT → 登记 → 去重，
-# 但无需开发者额外安装 MinIO；生产仍走阿里云 OSS，见 application-prod.yaml。
+# 对象存储（dev）：
+#   STORAGE_PROVIDER=local（默认）——后端本地目录，免额外依赖
+#   STORAGE_PROVIDER=minio ——本机/团队 MinIO，内容与食物图片走同一套凭证→PUT→登记
+# 生产仍走阿里云 OSS，见 application-prod.yaml。
 # ---------------------------------------------------------------------------
 glucopilot:
   storage:
-    provider: local
+    provider: ${STORAGE_PROVIDER:local}
+    endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    bucket: ${MINIO_BUCKET:glucopilot}
     local-dir: ${LOCAL_UPLOAD_DIR:./data/uploads}
 
 # ---------------------------------------------------------------------------

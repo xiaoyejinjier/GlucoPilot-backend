@@ -1,8 +1,8 @@
 package com.ruoyi;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.threadfit.glucopilot.ai.business.meal.MealAnalysisDtos;
-import com.threadfit.glucopilot.ai.business.meal.MealFoodCatalogService;
+import com.threadfit.glucopilot.ai.business.meal.dto.MealAnalysisDtos;
+import com.threadfit.glucopilot.ai.business.meal.service.MealFoodCatalogService;
 import com.threadfit.glucopilot.food.entity.FoodNutrition;
 import com.threadfit.glucopilot.food.mapper.FoodNutritionMapper;
 import org.junit.jupiter.api.Test;

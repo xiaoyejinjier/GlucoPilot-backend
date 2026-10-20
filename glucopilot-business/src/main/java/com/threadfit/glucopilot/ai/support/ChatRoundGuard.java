@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import com.threadfit.glucopilot.ai.business.chat.service.ChatMessageService;
 
 /**
  * 同一轮生成的"单飞"保护：<b>同一条用户消息同时只允许一次生成</b>。

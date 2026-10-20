@@ -85,7 +85,22 @@ public final class PredictionDtos {
         private String suggestText;
         /** 按建议碳水摄入的预测血糖。 */
         private BigDecimal predictSuggest;
+        /** 推荐总碳水 (g)；危险高血糖场景为 0。 */
+        private BigDecimal suggestCarbs;
+        /** 分食物结构化建议；整体降级/暂缓进食/无明细场景为空数组。 */
+        private List<SuggestItem> suggestItems;
         /** 算法版本号（当前 v1 参数）。 */
         private String algorithmVersion;
+    }
+
+    /** 单个食物的建议：suggestWeight 数值=建议吃 Xg；0=不建议；null=保持原份量（正常）。 */
+    @Data
+    @Builder
+    public static class SuggestItem {
+        /** 食物名称（回显入参，前端按 foodName 匹配）。 */
+        @Size(max = 64)
+        private String foodName;
+        /** 建议克重（整数克）。 */
+        private BigDecimal suggestWeight;
     }
 }

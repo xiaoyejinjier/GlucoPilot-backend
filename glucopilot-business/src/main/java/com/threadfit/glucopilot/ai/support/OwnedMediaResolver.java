@@ -61,6 +61,8 @@ public class OwnedMediaResolver {
             case CHAT_IMAGE -> "图片";
             case CHAT_VOICE -> "语音";
             case CMS -> "内容图片";
+            case ARTICLE_IMAGE -> "文章配图";
+            case ARTICLE_VIDEO -> "文章视频";
         };
     }
 }

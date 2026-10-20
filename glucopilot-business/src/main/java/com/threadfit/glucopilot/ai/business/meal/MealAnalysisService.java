@@ -70,7 +70,7 @@ public class MealAnalysisService {
             if (food == null) continue;
             String name = MealFoodCatalogService.normalizeName(food.getName());
             if (name.isBlank() || name.length() > 64 || !names.add(name)) continue;
-            MealFoodCatalogService.Resolution resolution = catalog.resolve(food, model);
+            MealFoodCatalogService.Resolution resolution = catalog.resolve(food, model, media.getId());
             items.add(resolution.item());
             if (resolution.added()) newCount++;
             if (resolution.item().getWeightG() == null) warnings.add("请确认食物重量后保存");

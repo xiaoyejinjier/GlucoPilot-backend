@@ -186,6 +186,9 @@ public class MediaFileServiceImpl implements MediaFileService {
 
     /** 入参体积 / MIME 白名单校验（凭证与登记入口共用，顺序固定：大小在前、MIME 在后）。 */
     private void validateSizeAndMime(MediaBizType bizType, String mimeType, long sizeBytes) {
+        if (bizType == MediaBizType.ARTICLE_IMAGE && sizeBytes > 5L * 1024 * 1024) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "文章图片不能超过5MB");
+        }
         // 限制：0 < size ≤20MB，超限直接 40000（BAD_REQUEST）
         if (sizeBytes <= 0 || sizeBytes > MediaFileConstant.DEFAULT_MAX_SIZE_BYTES) {
             throw new BizException(ErrorCode.BAD_REQUEST, "文件大小超出限制");

@@ -93,6 +93,8 @@ public final class AdminFoodDtos {
         private String updatedAt;
         private String nutritionSource;
         private String sourceModel;
+        /** 待审核实拍图的鉴权读取路径，只读，不能保存为公开配图。 */
+        private String reviewImage;
     }
 
     /** 管理端新增或修改食品时提交的请求体。 */

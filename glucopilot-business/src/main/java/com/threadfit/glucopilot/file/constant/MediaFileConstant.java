@@ -32,7 +32,7 @@ public final class MediaFileConstant {
             Map.entry("audio/mp4", "m4a"),
             Map.entry("audio/wav", "wav"),
             Map.entry("audio/aac", "aac"),
-            Map.entry("audio/x-m4a", "m4a")
+            Map.entry("audio/x-m4a", "m4a"), Map.entry("video/mp4", "mp4")
     );
 
     private MediaFileConstant() {
@@ -43,6 +43,7 @@ public final class MediaFileConstant {
         if (mimeType == null) {
             return false;
         }
+        if (bizType == MediaBizType.ARTICLE_VIDEO) return "video/mp4".equals(mimeType);
         if (bizType == MediaBizType.CHAT_VOICE) {
             return AUDIO_MIMES.contains(mimeType.toLowerCase());
         }

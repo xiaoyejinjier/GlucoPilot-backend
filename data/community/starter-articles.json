@@ -1,0 +1,72 @@
+[
+  {
+    "seedKey":"community-20261020-diet-01","title":"一餐怎么搭配：从餐盘比例开始","tagCodes":["diet"],
+    "body":"控糖饮食需要兼顾食物种类和份量。餐盘法提供了一个容易观察的起点：大约半盘安排非淀粉类蔬菜，另外两部分分别安排蛋白质食物和含碳水化合物的食物。它帮助理解搭配，并不等于每个人都吃同样的克数。\n\n可以先记录一顿常吃的午餐：主食是什么、有没有蔬菜、蛋白质来自哪里、喝了什么。比起给食物简单贴上“能吃”或“不能吃”，这样更容易和营养师讨论调整。\n\n用药、体力活动及个人营养需要会影响饮食安排。本文是一般科普，具体份量请结合自己的诊疗计划确定。",
+    "sourceTitle":"CDC · Diabetes Meal Planning","sourceUrl":"https://www.cdc.gov/diabetes/healthy-eating/diabetes-meal-planning.html"
+  },
+  {
+    "seedKey":"community-20261020-diet-02","title":"主食不用一刀切：认识碳水化合物","tagCodes":["diet"],
+    "body":"碳水化合物可以是均衡饮食的一部分，关键在于来源和份量。全谷物、豆类、水果等食物除了碳水化合物，也可能提供膳食纤维或其他营养；含糖饮料、甜点则需要留意额外添加的糖。\n\n开始记录时，可以同时写下食物名称和大致份量，而不只记“吃了米饭”。同样叫早餐，一碗粥和一杯甜饮料的组成并不相同，记录越具体，后续沟通越有依据。\n\n不建议仅凭“低碳”“无糖”等名称判断整餐是否适合自己。饮食改变较大时，尤其使用可能引起低血糖的药物时，应先和专业人员讨论。",
+    "sourceTitle":"CDC · Choosing Healthy Carbs","sourceUrl":"https://www.cdc.gov/diabetes/healthy-eating/choosing-healthy-carbs.html"
+  },
+  {
+    "seedKey":"community-20261020-type1-01","title":"认识1型糖尿病：日常管理需要哪些支持","tagCodes":["type1"],
+    "body":"1型糖尿病与产生胰岛素的细胞受到自身免疫反应破坏有关，不能简单归因于“糖吃多了”。胰岛素治疗是其管理的重要组成部分，日常还需要配合血糖监测、饮食安排和活动计划。\n\n刚开始学习管理时，可以把问题分成几类：我怎样记录血糖？哪些情况需要联系医疗团队？外出要带什么？家人需要知道什么？把疑问写下来，比一次记住全部知识更容易执行。\n\n不同年龄、治疗方式和生活安排的人，需要的支持并不相同。不要照搬他人的胰岛素剂量，也不要因为某一次数值理想就自行停药。",
+    "sourceTitle":"NIDDK · Type 1 Diabetes","sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/what-is-diabetes/type-1-diabetes"
+  },
+  {
+    "seedKey":"community-20261020-type1-02","title":"连续监测与胰岛素泵：了解自动给药系统","tagCodes":["type1"],
+    "body":"自动胰岛素给药系统通常把连续血糖监测、控制算法和胰岛素泵联系起来，根据监测信息调整部分给药过程。它是辅助管理工具，并不意味着使用后可以忽略设备维护和医疗团队指导。\n\n咨询设备时，不妨准备自己的生活场景：是否经常运动、夜间提醒是否影响休息、能否熟练操作耗材、遇到设备故障时怎么办。把这些问题列出来，有助于讨论哪种方案更适合自己。\n\n设备型号、使用条件和适用人群会有差别。请以正规产品说明及专业指导为准，文章不推荐具体品牌，也不提供参数或剂量设置。",
+    "sourceTitle":"NIDDK · Artificial Pancreas","sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/managing-diabetes/artificial-pancreas"
+  },
+  {
+    "seedKey":"community-20261020-type2-01","title":"认识2型糖尿病：管理不只看一次血糖","tagCodes":["type2"],
+    "body":"2型糖尿病与胰岛素作用不足以及身体不能充分满足胰岛素需要有关。日常管理通常需要结合饮食、身体活动、监测和必要的药物治疗，而不是只追求某一次检测结果好看。\n\n可以在复诊前整理一段时间的记录：数值对应什么时点，饮食或活动是否和平时不同，用药后有没有不舒服。不要只挑选“表现好”的记录，不理想的数值同样有助于医生了解情况。\n\n没有明显不适并不代表可以停止随访。个人目标和治疗方案需要综合身体状况制定，本文不提供通用于所有人的控糖目标。",
+    "sourceTitle":"NIDDK · Type 2 Diabetes","sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/what-is-diabetes/type-2-diabetes"
+  },
+  {
+    "seedKey":"community-20261020-type2-02","title":"有2型糖尿病风险时，从一个习惯开始","tagCodes":["type2","daily"],
+    "body":"对有2型糖尿病风险的人，适合自己的饮食和身体活动改变，有助于预防或延缓发病。风险也受家族史等因素影响，生活方式改变不等于保证不会患病，更不能替代必要的检查。\n\n选择习惯时，先考虑能否坚持。例如把一个常喝甜饮料的时段换成无糖饮水，或者把活动安排写进日程。记录实施了几次、遇到什么困难，可以作为下次咨询时的讨论材料。\n\n已经确诊糖尿病的人需要自己的治疗方案，不能把预防建议当作停药理由。如果不清楚自己是否属于高风险人群，可以向医疗人员咨询筛查。",
+    "sourceTitle":"NIDDK · Preventing Type 2 Diabetes","sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/preventing-type-2-diabetes"
+  },
+  {
+    "seedKey":"community-20261020-medication-01","title":"为什么糖尿病用药方案因人而异","tagCodes":["medication"],
+    "body":"糖尿病药物的选择，会结合疾病类型、血糖情况、其他健康问题以及个人生活条件。不同药物发挥作用的方式不同，有人需要联合用药，有人需要胰岛素，不能简单比较谁的药“更强”。\n\n建议保留一份自己的用药清单：药品名称、医生交代的用法、开始使用时间，以及观察到的不适。复诊时把保健品和其他科室开具的药物也列出来，方便专业人员核对。\n\n漏服、出现副作用或准备改变用药时，应询问医生或药师。本文介绍管理思路，不提供药品替换、个体剂量或自行增减药物的方案。",
+    "sourceTitle":"NIDDK · Insulin, Medicines, & Other Diabetes Treatments","sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/insulin-medicines-treatments"
+  },
+  {
+    "seedKey":"community-20261020-medication-02","title":"使用降糖药时，提前准备低血糖应对计划","tagCodes":["medication","daily"],
+    "body":"低血糖需要及时处理，平时就应向医疗团队确认适合自己的识别和应对方法。外出时按个人计划携带监测用品及快速补糖用品，并让身边的人知道在哪里。\n\n可以把应对计划写成便于查看的小卡片：出现不适时怎样检测，清醒且能安全吞咽时怎样处理，何时复测，哪些情况需要急救，以及联系人是谁。请让专业人员帮助核对内容。\n\n如果出现意识不清、抽搐或不能安全吞咽，不要强行喂食或喂水，应立即寻求急救。反复发生低血糖，需要联系医疗团队评估原因，而不是自己猜测调整药量。",
+    "sourceTitle":"CDC · Treatment of Low Blood Sugar (Hypoglycemia)","sourceUrl":"https://www.cdc.gov/diabetes/treatment/treatment-low-blood-sugar-hypoglycemia.html"
+  },
+  {
+    "seedKey":"community-20261020-exercise-01","title":"运动记录怎么写，才方便和医生讨论","tagCodes":["exercise"],
+    "body":"身体活动是糖尿病日常管理的一部分，饮食、用药和运动需要配合考虑。尤其使用胰岛素或某些降糖药物时，活动前后的安排可能需要个体化指导。\n\n记录运动时，不必只写“今天运动了”。可以写下活动类型、持续多久、自己感觉的强度，以及有没有不舒服；如果已经按医嘱监测活动相关血糖，也可以把时点一并保留。\n\n选择活动要考虑原有运动习惯和身体状况。存在并发症、近期不适或准备明显增加强度时，应先咨询专业人员，不能依靠一篇文章判断所有运动都适合自己。",
+    "sourceTitle":"NIDDK · Healthy Living with Diabetes","sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/healthy-living-with-diabetes"
+  },
+  {
+    "seedKey":"community-20261020-exercise-02","title":"让活动容易坚持：从小目标开始","tagCodes":["exercise"],
+    "body":"规律活动对健康有帮助，不一定非得从长时间去健身房开始。把目标写得具体一些，例如在适合自己的时间安排一次短距离步行，通常比笼统地说“我要多运动”更容易回顾执行情况。\n\n先想清楚三个问题：什么时间最方便？天气不好时有什么替代安排？什么情况会让自己中断？也可以和家人约定一个固定提醒，把注意力放在逐步养成习惯。\n\n本文的小目标只是计划方法，不是统一运动处方。出现胸痛、明显气促、头晕等不适时，应停止活动并及时寻求医疗帮助；有健康限制时先咨询专业人员。",
+    "sourceTitle":"CDC · Get Active","sourceUrl":"https://www.cdc.gov/diabetes/living-with/physical-activity.html"
+  },
+  {
+    "seedKey":"community-20261020-daily-01","title":"血糖记录别只写数字，也记下时点","tagCodes":["daily"],
+    "body":"饮食、用药和身体活动都会影响一天中的血糖变化。监测记录的作用，是帮助自己与医疗团队了解变化，而不是给一次结果打分。测量的频次和目标，应按照个人管理计划确定。\n\n同一个数值，空腹、餐前或餐后测得，讨论时需要的背景并不相同。记录时可以加上日期、测量时点、单位，以及当天值得说明的情况，例如作息改变或身体不适。\n\n遇到超出个人目标的结果，先按既定计划应对并保留真实记录。不要删除异常数值，也不要仅凭单次读数自行修改治疗方案；反复异常时应联系医疗团队。",
+    "sourceTitle":"CDC · Monitoring Your Blood Sugar","sourceUrl":"https://www.cdc.gov/diabetes/diabetes-testing/monitoring-blood-sugar.html"
+  },
+  {
+    "seedKey":"community-20261020-daily-02","title":"每天留一点时间，看看自己的双脚","tagCodes":["daily"],
+    "body":"糖尿病可能影响足部神经和血液循环，有些小伤口不一定容易被察觉。日常留意足部皮肤、趾间和指甲的变化，是管理中的一个小步骤。看不到脚底时，可以借助镜子或请家人帮助。\n\n检查时不需要自己做诊断，可以简单记录“哪里出现了什么变化、什么时候发现、有没有继续变化”。把观察描述清楚，比只说“脚有点不好”更方便专业人员判断。\n\n发现伤口、水疱、红肿或其他异常，应及时联系医疗人员。不要自行挑破水疱或使用可能损伤皮肤的处理方法；伤口没有疼痛也不等于可以忽视。",
+    "sourceTitle":"CDC · Your Feet and Diabetes","sourceUrl":"https://www.cdc.gov/diabetes/diabetes-complications/diabetes-and-your-feet.html"
+  },
+  {
+    "seedKey":"community-20261020-daily-03","title":"复诊前准备这份简短清单","tagCodes":["daily"],
+    "body":"糖尿病管理既包括日常自我观察，也包括按计划安排检查和随访。每个人需要的项目与频次会有所不同，可以请医疗团队一起整理成适合自己的日程。\n\n复诊前准备三类材料：一段时间的真实监测记录、当前用药及不适情况、最希望解决的几个问题。把问题按重要程度排序，例如反复异常数值、生活安排变化或设备使用困难，沟通时更不容易遗漏。\n\n可以在就诊后写下已确认的下一步安排和复诊时间。本文只提供整理信息的方法，不替代医生决定检查项目，也不建议自行增加或取消已经安排的随访。",
+    "sourceTitle":"CDC · Your Diabetes Care Schedule","sourceUrl":"https://www.cdc.gov/diabetes/treatment/your-diabetes-care-schedule.html"
+  },
+  {
+    "seedKey":"community-20261020-daily-04","title":"感冒或身体不舒服时，提前有个应对计划","tagCodes":["daily"],
+    "body":"生病时，饮食、饮水和活动可能和平时不同，血糖管理也可能受到影响。最好在身体状况稳定时，就和医疗团队确认生病期间的监测、用药、补液及联系就医安排。\n\n家庭准备可以从一张清单开始：现有药物和监测用品是否充足，常用联系号码在哪里，出现什么情况要尽快求助。记录体温、进食饮水变化和相关数值，也方便就医时说明经过。\n\n不要因为吃得少就自行停用处方药，也不要照搬别人的病假用药计划。出现不能进水、持续呕吐、呼吸异常或意识改变等情况，应及时寻求医疗帮助。",
+    "sourceTitle":"CDC · Managing Sick Days","sourceUrl":"https://www.cdc.gov/diabetes/living-with/managing-sick-days.html"
+  }
+]

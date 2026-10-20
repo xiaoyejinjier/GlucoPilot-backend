@@ -7,9 +7,15 @@
 # 生产用 --spring.profiles.active=prod 显式覆盖即可。
 #
 # ⚠️ 「开箱即用」有一个前提：token.secret 引用的 ${OPS_TOKEN_SECRET} 没有默认值，
-#    缺了它连本地都起不来（PlaceholderResolutionException）。.env 只在 Docker/Compose 下被读取，
-#    shell 与 IDE 都不读，所以本机开发需要 export 该变量，或写进 application-local.yaml
-#    （该文件放在本目录，见 backend/README.md）。
+#    缺了它连本地都起不来（PlaceholderResolutionException）。dev profile显式导入.env，
+#    IDE工作目录应为本后端根目录；也可注入环境变量或写application-local.yaml。
+#    其他profile由部署环境提供私密配置，见README.md。
+wechat:
+  login:
+    mode: ${WECHAT_LOGIN_MODE:auto}
+    app-id: ${WECHAT_APP_ID:}
+    app-secret: ${WECHAT_APP_SECRET:}
+
 spring:
   application:
     name: GlucoPilot Backend
@@ -191,6 +197,14 @@ ai:
   # 注意：这里不是 spring.ai.openai.* —— 本模块刻意不引该 starter，
   # 写在那里不会有任何自动装配去读（详见 AIProperties.VisionProperties 注释）。
   # ---------------------------------------------------------------------------
+  # 短语音转文字：仅返回待确认草稿，不自动发送聊天消息。
+  # api-key 缺省时在服务内复用 ai.vision.api-key；密钥只放环境变量或本地配置。
+  speech:
+    enabled: true
+    api-key: ${AI_SPEECH_API_KEY:}
+    base-url: ${AI_SPEECH_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    model: ${AI_SPEECH_MODEL:qwen3-asr-flash}
+
   vision:
     # 刻意写字面量 false，不写成 ${AI_VISION_ENABLED:false}：
     # 类型化属性（boolean / int）拿到未解析的 ${...} 字面量会直接绑定失败，

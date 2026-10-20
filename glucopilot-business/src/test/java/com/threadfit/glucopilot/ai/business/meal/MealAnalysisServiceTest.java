@@ -48,9 +48,10 @@ class MealAnalysisServiceTest {
         verifyNoInteractions(media, vision, catalog);
     }
     @Test void parsesFencedResultAndReturnsCatalogNutrition() {
-        when(media.findOwnedMedia(8L, 1L, MediaBizType.MEAL)).thenReturn(new MediaFile());
+        MediaFile photo = new MediaFile(); photo.setId(8L);
+        when(media.findOwnedMedia(8L, 1L, MediaBizType.MEAL)).thenReturn(photo);
         when(vision.analyze(any(), eq(SceneCode.MEAL_ANALYSIS), anyString())).thenReturn("```json\n{\"schemaVersion\":1,\"foods\":[{\"name\":\"米饭\",\"categoryCode\":1,\"weightG\":100,\"confidence\":95}]}\n```");
-        when(catalog.resolve(any(), anyString())).thenReturn(new MealFoodCatalogService.Resolution(
+        when(catalog.resolve(any(), anyString(), eq(8L))).thenReturn(new MealFoodCatalogService.Resolution(
                 MealAnalysisDtos.Item.builder().foodName("米饭").foodId("1").nutritionSource("LIBRARY")
                         .weightG(new BigDecimal("100")).carbsG(new BigDecimal("25.9"))
                         .caloriesKcal(new BigDecimal("116.0")).build(), false));

@@ -66,7 +66,7 @@ public interface CodeEnum {
     @Getter
     @RequiredArgsConstructor
     enum MediaBizType implements CodeEnum {
-        AVATAR(1), GLUCOSE(2), MEAL(3), CHAT_IMAGE(4), CMS(5), CHAT_VOICE(6);
+        AVATAR(1), GLUCOSE(2), MEAL(3), CHAT_IMAGE(4), CMS(5), CHAT_VOICE(6), ARTICLE_IMAGE(7), ARTICLE_VIDEO(8);
         private final int code;
     }
 

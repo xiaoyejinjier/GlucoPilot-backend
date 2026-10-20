@@ -65,6 +65,14 @@ class AdminUserServiceTest {
 
     @InjectMocks
     private AdminUserService service;
+    @Test void userManagementDetailReturnsBoundPhoneWithoutAuthSecretsAndMissingUsersAreRejected() {
+        var account=new UserAccount();account.setId(3L);account.setUsername("detail_user");account.setPhone("13812345678");account.setAccountStatus(1);
+        when(userAccountMapper.selectById(3L)).thenReturn(account);
+        when(glucoseRecordMapper.selectList(any())).thenReturn(List.of());
+        when(mealRecordService.countActiveByUserIds(List.of(3L))).thenReturn(Map.of(3L,2L));
+        var detail=service.detail(3L);assertEquals("13812345678",detail.getPhone());assertEquals("138****5678",detail.getPhoneMasked());assertEquals(2,detail.getMealCount());
+        assertThrows(BizException.class,()->service.detail(4L));
+    }
 
     @Test
     void pageUsesDatabaseRowsAndBuildsMetrics() {

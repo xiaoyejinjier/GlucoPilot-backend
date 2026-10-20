@@ -5,7 +5,6 @@ import com.threadfit.glucopilot.common.constant.PermCodes;
 import com.threadfit.glucopilot.content.dto.AdminCmsDtos;
 import com.threadfit.glucopilot.content.service.AdminCmsService;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,10 +20,13 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/admin/v1")
-@RequiredArgsConstructor
 public class AdminCmsController {
 
     private final AdminCmsService adminCmsService;
+
+    public AdminCmsController(AdminCmsService adminCmsService) {
+        this.adminCmsService = adminCmsService;
+    }
 
     @GetMapping("/news")
     @PreAuthorize("@ss.hasPermi('" + PermCodes.CONTENT_NEWS_LIST + "')")

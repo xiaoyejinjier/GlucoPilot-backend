@@ -38,6 +38,7 @@ public class UserAccountService {
     public UserDtos.MeResponse me(Long userId) {
         UserAccount account = requireAccount(userId);
         return UserDtos.MeResponse.builder()
+                .communityKey("u" + userId)
                 .accountStatus(account.getAccountStatus())
                 .phoneMasked(PhoneUtils.mask(account.getPhone()))
                 .profile(toProfileView(requireProfile(userId)))

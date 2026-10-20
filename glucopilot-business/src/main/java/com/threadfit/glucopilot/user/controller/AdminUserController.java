@@ -42,6 +42,12 @@ public class AdminUserController {
         return ApiResponse.ok(adminUserService.updateStatus(id, request.getAccountStatus()));
     }
 
+    @GetMapping("/{id}")
+    @PreAuthorize("@ss.hasPermi('" + PermCodes.USER_MANAGE + "')")
+    public ApiResponse<AdminUserDtos.UserItem> detail(@PathVariable Long id) {
+        return ApiResponse.ok(adminUserService.detail(id));
+    }
+
     /** 健康档案详情：真实聚合用户资料/健康档案/血糖趋势/饮食汇总，供管理端档案页替换 Mock。 */
     @GetMapping("/{id}/archive")
     @PreAuthorize("@ss.hasPermi('" + PermCodes.HEALTH_ARCHIVE_VIEW + "')")

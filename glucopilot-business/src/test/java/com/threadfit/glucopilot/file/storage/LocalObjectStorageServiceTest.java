@@ -70,4 +70,12 @@ class LocalObjectStorageServiceTest {
         assertThrows(IllegalArgumentException.class,
                 () -> service.acceptUpload(token, new byte[]{1, 2}));
     }
+    @Test void articleImagesCannotBypassVisibilityThroughLocalPublicPreviewOrPathAliases() {
+        byte[] bytes={1,2,3,4};
+        var credential=service.createUploadCredential(MediaBizType.ARTICLE_IMAGE,"png",4,8L);
+        service.acceptUpload(credential.getUploadUrl().substring(credential.getUploadUrl().lastIndexOf('/')+1),bytes);
+        assertArrayEquals(bytes,service.getObject(credential.getStorageKey()));
+        assertThrows(com.threadfit.glucopilot.common.exception.BizException.class,()->service.getPublicObject(credential.getStorageKey()));
+        assertThrows(com.threadfit.glucopilot.common.exception.BizException.class,()->service.getPublicObject("3/../"+credential.getStorageKey()));
+    }
 }

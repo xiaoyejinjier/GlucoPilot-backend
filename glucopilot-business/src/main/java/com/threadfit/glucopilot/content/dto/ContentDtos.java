@@ -46,11 +46,15 @@ public final class ContentDtos {
         private String coverUrl;
         private String videoUrl;
         private String contentBody;
+        private java.util.List<com.threadfit.glucopilot.community.PublicationDtos.ArticleImage> images;
+        private java.util.List<com.threadfit.glucopilot.community.PublicationDtos.ArticleImage> videos;
         private LocalDateTime publishAt;
         private Integer likeCount;
         private Integer collectCount;
         private Boolean liked;
         private Boolean collected;
+        private com.threadfit.glucopilot.community.CommunityDtos.Profile author;
+        private Long commentCount;
     }
 
     @Data

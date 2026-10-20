@@ -62,6 +62,43 @@ class MealFoodCatalogServiceTest {
         verify(foods, never()).insertRecognitionDraft(any());
     }
 
+    @Test void newDraftKeepsTheVerifiedUploadedPhoto() {
+        when(foods.selectList(any())).thenReturn(List.of());
+        when(foods.insertRecognitionDraft(any())).thenReturn(1);
+        FoodNutrition draft = row(7L, "新食品", 0, "AI_ESTIMATE");
+        draft.setSourceMediaId(88L);
+        when(foods.selectOne(any())).thenReturn(draft);
+        service.resolve(input("新食品", "20", "120", "100", 90), "vision", 88L);
+        ArgumentCaptor<FoodNutrition> capture = ArgumentCaptor.forClass(FoodNutrition.class);
+        verify(foods).insertRecognitionDraft(capture.capture());
+        assertEquals(88L, capture.getValue().getSourceMediaId());
+        verify(foods, never()).attachRecognitionPhoto(any(), any());
+    }
+
+    @Test void oldDraftCanReceiveFirstPhotoButAnExistingPhotoIsNeverReplaced() {
+        FoodNutrition draft = row(7L, "杂粮饭", 0, "AI_ESTIMATE");
+        draft.setImageUrl("/images/foods/rice.svg");
+        when(foods.selectList(any())).thenReturn(List.of(draft));
+        when(foods.attachRecognitionPhoto(7L, 88L)).thenReturn(1);
+        service.resolve(input("杂粮饭", "99", "999", "100", 90), "vision", 88L);
+        service.resolve(input("杂粮饭", "99", "999", "100", 90), "vision", 99L);
+        assertEquals(88L, draft.getSourceMediaId());
+        assertEquals("/images/foods/rice.svg", draft.getImageUrl());
+        assertEquals(new BigDecimal("25.9"), draft.getCarbsPer100g());
+        verify(foods).attachRecognitionPhoto(7L, 88L);
+        verify(foods, never()).attachRecognitionPhoto(7L, 99L);
+    }
+
+    @Test void manualAndReviewedFoodNeverReceiveUserPhoto() {
+        for (String source : List.of("MANUAL", "AI_REVIEWED")) {
+            FoodNutrition food = row(7L, "米饭", 0, source);
+            when(foods.selectList(any())).thenReturn(List.of(food));
+            service.resolve(input("米饭", "99", "999", "100", 90), "vision", 88L);
+            assertNull(food.getSourceMediaId());
+        }
+        verify(foods, never()).attachRecognitionPhoto(any(), any());
+    }
+
     @Test void uncertainFoodDoesNotPolluteLibraryOrInventNutrition() {
         var result = service.resolve(input("不确定菜品", "10", "100", "100", 30), "qwen3-vl-plus");
         assertNull(result.item().getCarbsG());

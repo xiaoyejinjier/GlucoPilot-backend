@@ -101,6 +101,15 @@ public class LocalObjectStorageService implements ObjectStorageService {
         }
     }
 
+    /** Newly introduced article drafts must never bypass article visibility via the local preview route. */
+    public byte[] getPublicObject(String storageKey) {
+        Path relative=root.relativize(resolvePath(storageKey));
+        if(relative.getNameCount()==0 || java.util.Set.of("7","8").contains(relative.getName(0).toString())) {
+            throw new BizException(ErrorCode.NOT_FOUND,"图片不存在或不可公开查看");
+        }
+        return getObject(storageKey);
+    }
+
     @Override
     public StorageProvider provider() {
         // 本地存储只用于开发，沿用 MinIO 的开发存储枚举值，避免扩展生产数据库枚举。

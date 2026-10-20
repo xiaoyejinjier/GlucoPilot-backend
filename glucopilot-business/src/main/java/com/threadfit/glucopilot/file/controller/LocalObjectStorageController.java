@@ -35,7 +35,7 @@ public class LocalObjectStorageController {
 
     @GetMapping("/local-objects")
     public ResponseEntity<byte[]> object(@RequestParam String key) {
-        byte[] bytes = storageService.getObject(key);
+        byte[] bytes = storageService.getPublicObject(key);
         MediaType mediaType = MediaTypeFactory.getMediaType(key)
                 .orElse(MediaType.APPLICATION_OCTET_STREAM);
         return ResponseEntity.ok().contentType(mediaType).body(bytes);

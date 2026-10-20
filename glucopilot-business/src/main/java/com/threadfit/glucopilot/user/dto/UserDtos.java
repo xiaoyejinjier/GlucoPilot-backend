@@ -50,6 +50,7 @@ public final class UserDtos {
     @Data
     @Builder
     public static class MeResponse {
+        private String communityKey;
         private Integer accountStatus;
         private String phoneMasked;
         private ProfileView profile;

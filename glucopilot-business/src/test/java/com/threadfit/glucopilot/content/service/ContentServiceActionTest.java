@@ -21,6 +21,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class ContentServiceActionTest {
+    @Mock private com.threadfit.glucopilot.community.CommunityService community;
 
     @Mock
     private CmsBannerMapper bannerMapper;
@@ -39,7 +40,7 @@ class ContentServiceActionTest {
         news.setPublishStatus(1);
         news.setLikeCount(0);
         news.setCollectCount(0);
-        when(newsMapper.selectById(1L)).thenReturn(news);
+        when(newsMapper.selectForAction(1L)).thenReturn(news);
         when(newsUserActionMapper.selectOne(any())).thenReturn(null);
         when(newsUserActionMapper.insert(any(NewsUserAction.class))).thenAnswer(inv -> {
             NewsUserAction a = inv.getArgument(0);
@@ -60,7 +61,7 @@ class ContentServiceActionTest {
         CmsNews news = new CmsNews();
         news.setId(2L);
         news.setPublishStatus(0);
-        when(newsMapper.selectById(2L)).thenReturn(news);
+        when(newsMapper.selectForAction(2L)).thenReturn(news);
 
         ContentDtos.NewsActionRequest req = new ContentDtos.NewsActionRequest();
         req.setLiked(true);

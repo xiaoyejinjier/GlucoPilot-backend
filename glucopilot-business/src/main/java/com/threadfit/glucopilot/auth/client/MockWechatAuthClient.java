@@ -4,7 +4,6 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
@@ -28,7 +27,6 @@ import org.springframework.util.StringUtils;
  * </ul>
  */
 @Slf4j
-@Component
 public class MockWechatAuthClient implements WechatAuthClient {
 
     /** 开发用固定 openid；留空 = 按 code 哈希派生（每个 code 一个用户）。 */
@@ -37,8 +35,7 @@ public class MockWechatAuthClient implements WechatAuthClient {
     public MockWechatAuthClient(@Value("${wechat.mock.fixed-openid:}") String fixedOpenid) {
         this.fixedOpenid = fixedOpenid == null ? "" : fixedOpenid.trim();
         if (!this.fixedOpenid.isEmpty()) {
-            log.warn("开发用固定微信身份已启用：所有 wx.login() 的 code 都会映射到同一个 openid（{}）；"
-                    + "要联调「新用户」流程时清空 wechat.mock.fixed-openid 并重启", this.fixedOpenid);
+            log.warn("开发用固定微信身份已启用：所有微信登录都会映射到同一个开发用户；双账号真机请配置真实微信登录");
         }
     }
 

@@ -25,6 +25,13 @@ public class MealFoodCatalogService {
 
     @Transactional
     public Resolution resolve(MealAnalysisDtos.ModelFood input, String model) {
+        return resolve(input, model, null);
+    }
+
+    /** sourceMediaId由餐食识别入口完成媒体归属校验后提供。 */
+    @Transactional
+    public Resolution resolve(MealAnalysisDtos.ModelFood input, String model, Long sourceMediaId) {
+        if (sourceMediaId != null && sourceMediaId <= 0) sourceMediaId = null;
         String name = normalizeName(input.getName());
         int confidence = input.getConfidence() != null && input.getConfidence() >= 0 && input.getConfidence() <= 100
                 ? input.getConfidence() : 0;
@@ -51,6 +58,7 @@ public class MealFoodCatalogService {
                 draft.setCarbsPer100g(bounded(input.getCarbsPer100g(), 100));
                 draft.setCaloriesPer100g(bounded(input.getCaloriesPer100g(), 1000));
                 draft.setSourceModel(model);
+                draft.setSourceMediaId(sourceMediaId);
                 draft.setCreatedBy(RequestContext.operatorIdOrZero());
                 draft.setUpdatedBy(RequestContext.operatorIdOrZero());
                 added = foods.insertRecognitionDraft(draft) == 1;
@@ -58,6 +66,10 @@ public class MealFoodCatalogService {
                         .eq("category_code", category).eq("food_name", name).last("LIMIT 1 FOR UPDATE"));
                 if (row == null) throw new BizException(ErrorCode.INTERNAL_ERROR, "新食品登记后未能读取，请重试");
             }
+        }
+        if (row != null && sourceMediaId != null && row.getSourceMediaId() == null
+                && "AI_ESTIMATE".equals(row.getNutritionSource()) && Integer.valueOf(0).equals(row.getShelfStatus())) {
+            if (foods.attachRecognitionPhoto(row.getId(), sourceMediaId) == 1) row.setSourceMediaId(sourceMediaId);
         }
         BigDecimal carbs = row == null ? null : bounded(row.getCarbsPer100g(), 100);
         BigDecimal calories = row == null ? null : bounded(row.getCaloriesPer100g(), 1000);

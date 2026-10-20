@@ -23,4 +23,6 @@ public class CmsNews extends BaseEntity {
     private Integer publishStatus;
     private Integer likeCount;
     private Integer collectCount;
+    private Long bloggerId;
+    private Integer communityManaged;
 }

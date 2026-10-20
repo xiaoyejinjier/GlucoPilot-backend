@@ -24,7 +24,8 @@ public final class AdminUserDtos {
         private String username;
         private String nickname;
         private String avatarText;
-        /** 只返回脱敏手机号。 */
+        /** 仅user:manage接口返回绑定手机号，不进入公开社区资料。 */
+        private String phone;
         private String phoneMasked;
         private Integer age;
         private String diabetesTypeText;

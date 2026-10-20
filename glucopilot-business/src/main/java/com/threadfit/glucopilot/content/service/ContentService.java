@@ -13,7 +13,6 @@ import com.threadfit.glucopilot.content.entity.NewsUserAction;
 import com.threadfit.glucopilot.content.mapper.CmsBannerMapper;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
 import com.threadfit.glucopilot.content.mapper.NewsUserActionMapper;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,7 +20,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
-@RequiredArgsConstructor
 public class ContentService {
 
     private static final int SHELF_ON = 1;
@@ -30,6 +28,16 @@ public class ContentService {
     private final CmsBannerMapper bannerMapper;
     private final CmsNewsMapper newsMapper;
     private final NewsUserActionMapper newsUserActionMapper;
+    private final com.threadfit.glucopilot.community.CommunityService community;
+
+    public ContentService(CmsBannerMapper bannerMapper, CmsNewsMapper newsMapper,
+                          NewsUserActionMapper newsUserActionMapper,
+                          com.threadfit.glucopilot.community.CommunityService community) {
+        this.bannerMapper = bannerMapper;
+        this.newsMapper = newsMapper;
+        this.newsUserActionMapper = newsUserActionMapper;
+        this.community = community;
+    }
 
     public List<ContentDtos.BannerItem> listBanners() {
         LocalDateTime now = LocalDateTime.now();
@@ -47,6 +55,7 @@ public class ContentService {
                 new Page<>(query.getPageNum(), query.getPageSize()),
                 new LambdaQueryWrapper<CmsNews>()
                         .eq(CmsNews::getPublishStatus, PUBLISHED)
+                        .le(CmsNews::getPublishAt, LocalDateTime.now())
                         .eq(channelCode != null, CmsNews::getChannelCode, channelCode)
                         .orderByDesc(CmsNews::getPublishAt)
                         .orderByDesc(CmsNews::getId));
@@ -78,11 +87,14 @@ public class ContentService {
                 .coverUrl(news.getCoverUrl())
                 .videoUrl(news.getVideoUrl())
                 .contentBody(news.getContentBody())
+                .images(community.articleImages(newsId)).videos(community.articleVideos(newsId))
                 .publishAt(news.getPublishAt())
                 .likeCount(news.getLikeCount())
                 .collectCount(news.getCollectCount())
                 .liked(liked)
                 .collected(collected)
+                .author(community.newsAuthor(userIdOrNull, newsId))
+                .commentCount(community.commentCount(newsId))
                 .build();
     }
 
@@ -91,7 +103,13 @@ public class ContentService {
         if (request.getLiked() == null && request.getCollected() == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "liked/collected 至少传一个");
         }
-        CmsNews news = requirePublishedNews(newsId);
+        // Serialize all actions on an article before reading either counters or user flags.
+        // Otherwise concurrent users overwrite each other's counts and first-like inserts race.
+        CmsNews news = newsMapper.selectForAction(newsId);
+        if (news == null || news.getPublishStatus() == null || news.getPublishStatus() != PUBLISHED ||
+                (news.getPublishAt() != null && news.getPublishAt().isAfter(LocalDateTime.now()))) {
+            throw new BizException(ErrorCode.NOT_FOUND, "资讯不存在");
+        }
         NewsUserAction action = findAction(userId, newsId);
         if (action == null) {
             action = new NewsUserAction();
@@ -121,6 +139,8 @@ public class ContentService {
             news.setCollectCount(Math.max(0, nullToZero(news.getCollectCount()) + collectDelta));
             newsMapper.updateById(news);
         }
+        if(likeDelta!=0) community.notifyAction(userId,newsId,"LIKE",likeDelta>0);
+        if(collectDelta!=0) community.notifyAction(userId,newsId,"COLLECT",collectDelta>0);
 
         return ContentDtos.NewsActionResult.builder()
                 .liked(action.getIsLiked() == 1)
@@ -132,7 +152,8 @@ public class ContentService {
 
     private CmsNews requirePublishedNews(Long newsId) {
         CmsNews news = newsMapper.selectById(newsId);
-        if (news == null || news.getPublishStatus() == null || news.getPublishStatus() != PUBLISHED) {
+        if (news == null || news.getPublishStatus() == null || news.getPublishStatus() != PUBLISHED ||
+                (news.getPublishAt() != null && news.getPublishAt().isAfter(LocalDateTime.now()))) {
             throw new BizException(ErrorCode.NOT_FOUND, "资讯不存在");
         }
         return news;

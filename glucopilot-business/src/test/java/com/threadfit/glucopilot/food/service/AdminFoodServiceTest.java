@@ -39,6 +39,20 @@ class AdminFoodServiceTest {
     private AdminFoodService service;
 
     @Test
+    void reviewPreviewIsSeparateFromPublicImageAndHiddenAfterApproval() {
+        FoodNutrition food = new FoodNutrition(); food.setId(7L); food.setSourceMediaId(88L);
+        food.setNutritionSource("AI_ESTIMATE"); food.setShelfStatus(0); food.setImageUrl("/images/foods/rice.svg");
+        when(foodCategoryMapper.selectList(null)).thenReturn(List.of());
+        when(foodNutritionMapper.selectList(any())).thenReturn(List.of(food));
+        var pending = service.listFoods().get(0);
+        assertEquals("/admin/v1/foods/7/review-image", pending.getReviewImage());
+        assertEquals("/images/foods/rice.svg", pending.getImage());
+        food.setShelfStatus(1); food.setNutritionSource("AI_REVIEWED");
+        assertEquals("", service.listFoods().get(0).getReviewImage());
+        assertEquals("/images/foods/rice.svg", service.listFoods().get(0).getImage());
+    }
+
+    @Test
     void categoryImageIsSavedAndReturnedForNewCategory() {
         AdminFoodDtos.FoodCategorySaveRequest request = new AdminFoodDtos.FoodCategorySaveRequest();
         request.setName(" 新主食类 ");

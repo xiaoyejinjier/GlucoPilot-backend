@@ -135,6 +135,15 @@ public class AdminUserService {
         return AdminUserDtos.UpdatedResult.builder().updated(true).build();
     }
 
+    public AdminUserDtos.UserItem detail(Long userId) {
+        UserAccount account=userAccountMapper.selectById(userId);
+        if(account==null)throw new BizException(ErrorCode.NOT_FOUND,"用户不存在");
+        UserProfile profile=userProfileMapper.selectOne(new QueryWrapper<UserProfile>().eq("user_id",userId).last("LIMIT 1"));
+        UserHealth health=userHealthMapper.selectOne(new QueryWrapper<UserHealth>().eq("user_id",userId).last("LIMIT 1"));
+        List<GlucoseRecord> records=glucoseRecordMapper.selectList(new QueryWrapper<GlucoseRecord>().eq("user_id",userId));
+        return toItem(account,profile,health,records,mealRecordService.countActiveByUserIds(List.of(userId)).getOrDefault(userId,0L));
+    }
+
     /**
      * 管理端健康档案详情：聚合 user_account / user_profile / user_health 真实数据，
      * 趋势与分时段取自未删除的 glucose_record，饮食汇总经 meal service 聚合。
@@ -285,6 +294,7 @@ public class AdminUserService {
                 .username(account.getUsername())
                 .nickname(nickname)
                 .avatarText(avatarText)
+                .phone(account.getPhone())
                 .phoneMasked(PhoneUtils.mask(account.getPhone()))
                 .age(health == null ? null : health.getAge())
                 .diabetesTypeText(diabetesTypeTextOf(health))

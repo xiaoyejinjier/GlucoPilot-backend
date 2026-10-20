@@ -238,6 +238,8 @@ public class AdminFoodService {
                 .updatedAt(fmt(f.getGmtModified()))
                 .nutritionSource(f.getNutritionSource() == null ? "MANUAL" : f.getNutritionSource())
                 .sourceModel(f.getSourceModel())
+                .reviewImage(FoodReviewImageService.isPending(f) && f.getSourceMediaId() != null
+                        ? "/admin/v1/foods/" + f.getId() + "/review-image" : "")
                 .build();
     }
 

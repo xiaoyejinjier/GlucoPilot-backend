@@ -1,6 +1,115 @@
 # API 契约
 
+## 个人头像与草稿修复（2026-10-20）
+
+头像沿用现有上传协议：bizType=1，取凭证、PUT文件、登记完成后，以登记返回的fileUrl调用PATCH /users/me/profile。手机临时路径/本地持久文件路径不能作为avatarUrl提交；未修改头像时省略avatarUrl，清空时传空串。上传期间不能保存资料，失败保留原头像，账号变化或页面销毁后忽略迟到结果。后端继续校验当前用户的可用AVATAR媒体，不放宽所有权。
+草稿读取兼容Connector/J对DATETIME返回LocalDateTime及其他驱动返回Timestamp，保留原本的本地时间值，不强制类型转换。草稿保存经真实JSON绑定、版本校验和数据库写入验证，失败不能显示已保存或丢弃内容；不调用血糖同步接口。设置移除手工Mock血糖同步入口。
+
+## 回复、投稿媒体与用户主页（2026-10-20）
+
+POST /api/v1/news/{id}/comments/{targetId}/replies 明确绑定回复目标，body沿用content/clientRequestId，服务端以路径目标构造CommentRequest；不支持此路由时客户端不得降级为顶级评论。返回的rootCommentId/replyToCommentId用于原线程展示。
+GET /api/v1/community/profiles/{key}/articles 按PageQuery返回该用户/发布者已公开且审核通过的Article页，不含草稿、待审或已下架内容。GET /community/tags/mine 返回本人投稿中使用过的标签；客户端另按用户ID保存最近添加的标签（包括尚未投稿的），仅作为可选项，不自动选中。
+投稿/草稿增加可选videoMediaIds（最多1个），Article和Draft增加videos:[{mediaId}]。最多6图+1视频；有有效媒体时正文可为空，否则正文至少20字，标题和1～3个标签仍必填。视频走bizType=8，仅MP4，单文件不超过20MB，客户端选取时限制60秒。V28扩展媒体类型、增加草稿video_ids；已发布/草稿媒体权限与图片一致。GET /api/v1/community/article-videos/{mediaId} 和 GET /admin/v1/community/articles/{id}/videos/{mediaId} 返回鉴权MP4二进制；客户端下载为临时文件播放，管理员以鉴权Blob播放。视频不得经匿名local-objects接口访问；AI初审只审文字，管理员需查看媒体后终审。
+私信支持下拉刷新，不重复消息，不清空已加载历史；双方头像跳转公开用户主页，用户主页只含公开资料与已发布内容。
+
+## 草稿箱、信息中心、真实导出与用户详情（2026-10-20）
+
+发布按钮保持AI初审+管理员终审，返回待审状态，不绕过审核。草稿独立存储于V27 community_article_draft，不进入公开列表或审核队列：GET/POST /api/v1/community/drafts，GET/PUT/DELETE /drafts/{id}，POST /drafts/{id}/publish。写入title/body/tagCodes/customTags/imageMediaIds可为空（标题80/正文8000/标签合计3/图片6），需clientRequestId；修改需revision，创建按用户+请求标识幂等。可以携带sourceArticleId/sourceRevision保存已有文章的修改草稿，保存不改变线上版本；发布时验证原文章版本。发布请求{revision,clientRequestId}使用存储的内容，校验完整发文要求，同事务投稿/关闭草稿，重复发布只返回同一篇文章。草稿仅本人可读写，列表不返回他人草稿或密钥。
+
+发布请求成功即从草稿箱移除，不等待AI或管理员审核结果；审核拒绝也不恢复旧草稿，用户从“我的文章”修改并重投。关闭保留服务端幂等记录，失败的发布不关闭草稿。编辑页返回时若存在未保存的文字、标签或媒体变化，提示“内容尚未保存，要先存为草稿吗？”，提供“确定返回 / 存草稿”；选择保存须成功后才返回，失败保留编辑内容。
+
+V27 community_notification持久化真实互动：LIKE/COLLECT/COMMENT/FOLLOW，参与者取登录身份，自己给自己互动不提醒；点赞/收藏/关注幂等设置不重复产生提醒，取消清除对应提醒，重新操作可产生新提醒。评论同时通知文章作者和被回复者，去重且排除本人。旧数据不伪造为新提醒。读取时过滤停用账号、删除/下架文章及不可见评论线程。
+
+GET /api/v1/community/information/summary返回{messages,likes,collections,comments,follows,total,latestMessageId,latestSenderId,latestNotificationId}，仅当前用户未读。GET /community/notifications?kind=LIKE|COLLECT|COMMENT|FOLLOW&pageNum=&pageSize=返回本人提醒页，含id/kind/actor公开资料/newsId/newsTitle/commentId/content/createdAt/read；PUT /community/notifications/read {kind,throughId}只标记本人该类别且ID<=已加载范围。信息入口包含私信、点赞、收藏、评论、新关注我的；记录页提醒与回复仅显示非零的提醒项，无内容时隐藏入口。前台5秒轮询，后台停止，不申请微信订阅推送。
+
+真实导出复用data_export_task，V27新增client_request_id及data_export_file保存XLSX二进制。POST /api/v1/data-export-tasks {startDate,endDate,clientRequestId}创建本人任务，范围最多366天且不包含未来日期，幂等ID相同参数返回原任务；GET /data-export-tasks返回本人历史。GET /admin/v1/exports按状态/用户关键词分页；POST /exports/{id}/generate生成真实未删除血糖/饮食记录（每类最多20000条，超出明确失败，不截断）；完成文件为固定快照，重复生成已完成任务不改文件。POST /api/v1/data-export-tasks/{id}/generate仅本人；GET 两端对应/{id}/file下载，C端限定本人、后台需export:task:manage，文件成功二进制application/vnd.openxmlformats-officedocument.spreadsheetml.sheet、no-store，错误ApiResponse；仅已完成任务可下载，不返回无鉴权公开地址。无记录时生成只有表头的真实空工作簿，不制造示例。失败可重试、保留错误状态，后台不回退Mock。
+
+GET /admin/v1/users及GET /admin/v1/users/{id}需user:manage，增加真实phone（可空），保留phoneMasked；详情返回用户公开/账号字段、状态、注册/活跃时间、真实记录数量和达标率，不返回密码/openid/session凭据。手机号未绑定时如实显示未绑定，不伪造微信手机号；健康档案仍走独立health:archive:view权限。
+
+## 私信提醒、语音表情及文章配图（2026-10-20）
+
+GET /api/v1/community/messages/unread 返回 {unreadCount:number,latestMessageId:string|null,latestSenderId:string|null}，只计当前有效用户收到的、发送人仍有效的未读消息，跨全部会话统计。小程序前台每5秒查询，后台暂停；在社区及我的私信入口显示非零角标，新消息显示不含正文的站内提示；正在阅读同一聊天时不重复提示，读到的消息按原throughId接口标记已读。无未读不显示0，不申请微信订阅消息。
+
+私信语音复用POST /api/v1/speech-transcriptions：切换按住说话、松开识别、可修改/重录，确认后才调用原私信发送接口；识别文本和表情合计仍限1000字，发送失败保留草稿和幂等ID。
+
+V26新增community_article_image(news_id,media_id,sort_no)。投稿/修改增加可选imageMediaIds:string[]，最多6张、顺序保留，不允许重复；图片走原上传凭证→PUT→登记，新增MediaBizType.ARTICLE_IMAGE=7，单张最多5MB，服务端验证当前用户所有、可用、未删除及图片MIME。文章列表/详情追加images:[{mediaId}]；旧文章为空。图片与正文/标签同事务保存，幂等比较包含图片及顺序，任何编辑重新初审与终审。
+
+GET /api/v1/community/article-images/{mediaId} 为需登录的二进制图片接口（成功image/*，错误ApiResponse），只允许图片所有者，或已终审发布且未删除的文章所引用的图片；GET /admin/v1/community/articles/{id}/images/{mediaId} 需content:news:list并验证当前文章确实引用。两者不返回存储密钥/永久公开地址，Cache-Control:no-store；客户端带会话下载到临时文件，离页清理，管理员使用带鉴权的Blob。正文配图可预览/删除，按选择顺序展示于正文后；审核页同时展示配图并提醒管理员核验图片，现有AI初审仅审核文字，不宣称图片已通过AI审查。
+
+## 评论回复与显示（2026-10-20）
+
+V25在community_comment新增reply_to_comment_id及root_comment_id（旧顶级评论为空），不改已有正文或身份。POST /api/v1/news/{id}/comments增加可选replyToCommentId，服务端验证目标属于同一篇可见文章、评论和根评论可见，用户身份取会话；幂等标识同时校验正文与回复目标。支持回复评论或回复已有回复，统一归入最初的根评论。
+
+GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，total/pages表示顶级评论数量；每项追加rootCommentId、replyToCommentId、replyToAuthor、replies（首3条按ID正序）、replyCount、replyHasMore、replyNextAfterId。GET /api/v1/news/{id}/comments/{rootId}/replies?afterId=&pageSize=10返回records/hasMore/nextAfterId，验证文章、根评论及当前用户，不能跨文章读取。文章commentCount统计可见顶级评论与回复；根评论被删除或作者停用后整串不再公开，删除中间回复不删除其他人的回复。回复目标已删除时不泄露其正文或资料。
+
+列表沿用author公开昵称/头像；小程序在正文下显示刚刚/N分钟前/N小时前/N天前，右侧为加粗回复入口。相对时间按服务端Asia/Shanghai无偏移时间解释，展示层不改服务端原始createdAt；私信等既有时间显示不变。
+
+## 社区投稿、分类与审核（2026-10-20）
+
+自定义标签补充：投稿/修改请求增加可选customTags:string[]，预置标签仍用tagCodes，合计去重后1～3个。自定义标签去掉前导#并规范空白，1～16个中文/字母/数字/空格/下划线/连字符；与已有标签同名时复用，按规范名称生成稳定code，同一名称并发创建不重复，停用标签不可绕过。写入文章、标签及关联同一事务，重试保留原请求标识。标签接口固定展示六个预置分类及已有已发布文章使用的自定义标签，未审投稿的新标签不提前出现在公共分类导航。按用户之前选择新增约14篇有来源的原创科普文章，六类均覆盖，先以AI_PENDING进入审核，publish_status=0，不直接公开，不伪造AI通过或终审记录。
+
+初审队列默认启用（community.moderation.enabled可关闭），每次领取一个待处理版本，事务内锁定领取、事务外调用配置的文本模型；45秒调用超时、超过3分钟未完成的任务转为AI_ERROR，可显式重试。通过只到PENDING_ADMIN，拒绝到AI_REJECTED；结果必须与当前revision及AI_REVIEWING状态一致，旧版本或重复结果不回写，不修改公开状态。未配置可用文本模型、无效JSON或外部失败不自动通过，不回显密钥或上游原始错误。文章详情和列表中的已关联真实用户发布人统一为u{id}，官方编辑部保留b{id}。
+
+管理端文章管理补充：GET /admin/v1/community/articles 默认列出所有未删除的官方资讯及社区投稿，不默认只看待终审。支持 status、source=OFFICIAL/COMMUNITY、keyword（标题或发布人昵称，最多80字）、pageNum/pageSize。列表与详情追加 source；author 返回发布人的公开昵称与社区号，不返回手机号、微信标识或密钥。官方旧文章按 cms_news.publish_status 映射 DRAFT/PUBLISHED/HIDDEN，投稿按真实审核状态展示；createdAt 回退到原文章创建时间。官方文章沿用 /admin/v1/news 编辑发布，社区投稿继续走 AI 初审及管理员终审，不可混用官方编辑接口绕过审核。
+
+复用cms_news及点赞/收藏、community_follow、community_comment、community_message；迁移V24新增community_article、community_tag、community_article_tag、community_report、community_moderation_log，cms_news.community_managed标识需走审核的投稿。关注表已在V22建立，不另造重复表。文章为纯文本，标题1～80字、正文20～8000字、标签1～3个，标签包含饮食控糖、1型糖尿病、2型糖尿病、药物科普、运动管理、日常管理。
+
+用户接口均需当前C端身份：GET /api/v1/community/tags；GET /community/articles（tag、following、keyword及pageNum/pageSize，路径均带/api/v1，下同）；POST /community/articles（title、body、tagCodes、clientRequestId）；GET /community/articles/mine；GET/PUT /community/articles/{id}（修改带revision）；POST /community/articles/{id}/retry-ai（仅AI_ERROR）；POST /community/reports（targetType=ARTICLE/COMMENT/USER/MESSAGE、targetId、reason、details、clientRequestId）。重试客户端标识不得变更正文，返回原记录；用户只能修改自己的文章，发布后修改立即撤下并重新审核，版本号防止覆盖。举报消息时必须是消息双方之一，不返回其他人的私信。
+
+文章状态AI_PENDING→AI_REVIEWING→PENDING_ADMIN/AI_REJECTED/AI_ERROR，最终只有管理员通过→PUBLISHED；驳回REJECTED，下架HIDDEN。AI调用在数据库任务领取后进行，失败绝不自动放行，超时任务可回收；编辑版本变化后旧AI结果不能回写。AI只做初审，涉及保证治愈、个体处方剂量、明显危险建议/广告等给出拒绝建议；内容视为待检查数据，不能覆盖审核系统指令。管理员批准必须基于当前版本且初审通过，审核日志保留版本、意见及操作人。
+
+运营接口GET /admin/v1/community/articles（status/pageNum/pageSize）、GET /articles/{id}、GET /reports要求content:news:list；POST /articles/{id}/review（revision、decision=APPROVE/REJECT/HIDE、note）、POST /articles/{id}/retry-ai、POST /reports/{id}/resolve（action=DISMISS/HIDE_ARTICLE/HIDE_COMMENT/RESOLVE、note）还要求管理员角色和content:news:edit。旧资讯编辑/发布/删除接口不得绕过投稿审核。公开资讯详情、互动及社区列表都必须验证投稿已终审发布；未发布内容仅作者与有权限运营可读。举报处理按目标精确下架文章/隐藏评论，不自动封禁用户或删除私信。
+
+每篇文章的tags返回code/name；社区按标签或关注作者筛选并服务端分页，关注作者使用唯一公开社区号u{id}。预置约14篇原创科普示例，保留参考来源、标注为示例，采用唯一seed_key幂等导入；按用户选择先待审核，绝不冒充管理员已终审或已公开。
+
 本文件是 `xiaoyejinjier/GlucoPilot-backend` 的权威契约。本文历史路径中的 `frontend/` 指独立仓库 `GlucoPilot-frontend` 根目录，`admin/` 指 `GlucoPilot-admin` 根目录，`backend/` 指本仓库根目录；拆仓不改变接口路径或响应格式。
+
+## 双账号身份与私信发现（2026-10-19）
+
+`GET /users/me`新增`communityKey:string`，固定为`u{当前C端userId}`；公开社区号用于复制、精确查找对方，不是登录凭据。小程序“找用户”输入社区号时调用已有`GET /community/profiles/{key}`，输入昵称仍走原搜索接口；不接收客户端伪造的senderId。私信列表首屏及聊天页前台每5秒刷新，离页停止。
+
+`POST /auth/wechat/sessions`请求/响应保持不变。新增`wechat.login.mode=auto|wechat|mock`：auto有完整AppID/AppSecret时使用微信服务端code兑换，缺配置仅在dev/test且非prod时沿用原Mock；wechat模式缺配置明确拒绝登录，不退回模拟身份；mock模式只允许dev/test且非prod，生产禁止Mock。配置`WECHAT_APP_ID`/`WECHAT_APP_SECRET`仅在服务端；两个微信的真实openid对应不同用户，同一微信换code仍复用原账号。openid/unionid/session_key不返回小程序，不记录凭证、完整URL或微信响应；超时不自动重用code重试。
+
+本次不迁移、合并或覆盖已有Mock用户与健康数据；真实登录会按真实openid查找/创建账号。手机实际登录须使用同一个已配置的小程序AppID；测试号/无AppSecret不能当成已通过真实微信身份验证。手机号当前仍沿用验证码日志实现，本次不伪装已接入短信网关。
+
+## 社区互动与用户私信（2026-10-19）
+
+继续使用现有资讯，不增加用户发帖。V22增加发布者、关注、评论和用户私信表，cms_news增加blogger_id默认1；旧资讯统一归属“社区编辑部”，不把后台created_by推断为C端身份。公开资料key为b{发布者ID}或u{用户ID}；资料只返回key/userId（可空）/nickname/avatarUrl/bio/followed/isSelf，不返回手机号、openid、健康资料。发布者仅在显式关联有效C端user_id时可接收私信；评论者可关注并发私信。不可关注自己，不可给自己发私信，禁用/注销/删除账号不可互动或被检索。
+
+除原有公开资讯列表/详情外，下列接口全部要求C端登录，统一ApiResponse及X-Request-Id；pageNum从1开始、pageSize默认20且最多50，列表统一PageResult。详情增加author公开资料和commentCount；PUT /news/{id}/actions沿用liked/collected布尔目标状态，文章行锁保证并发计数不丢失。
+
+| 方法与路径（均在/api/v1下） | 请求/响应 |
+| --- | --- |
+| GET /community/profiles?keyword= | 昵称精确/包含搜索，至少2字、最多32字；只搜有效用户公开资料，不按手机号检索 |
+| GET /community/profiles/{key} | 公开资料、关注状态、是否本人 |
+| PUT /community/profiles/{key}/following | `{following:boolean}`；幂等设置关注状态，返回最新资料 |
+| GET /community/following | 本人关注的有效发布者/用户资料列表 |
+| GET /community/collections | 本人收藏且仍已发布、未删除的资讯列表，字段兼容news列表 |
+| GET /news/{id}/comments | 最新在前的评论页，字段id/content/createdAt/author/mine；仅已发布资讯 |
+| POST /news/{id}/comments | `{content,clientRequestId}`，去空白后1～500字；客户端生成8～64位字母数字/横线/下划线幂等ID；同用户同ID同参数重复提交返回原评论，不同参数40900 |
+| DELETE /news/{id}/comments/{commentId} | 只允许本人删除，重复删除成功；他人评论40400，逻辑删除 |
+| GET /community/messages | 本人的私信会话列表：peer公开资料、lastMessage、unreadCount；按最新消息ID倒序 |
+| GET /community/messages/{peerUserId} | 本人与指定用户的消息页，beforeId可选独占游标、每页最多50，页内时间正序；`{records,hasMore,nextBeforeId}` |
+| POST /community/messages/{peerUserId} | `{content,clientRequestId}`，去空白后1～1000字；唯一键(sender_id,client_request_id)防重复，重复同参数返回原消息，不同接收者/正文40900 |
+| PUT /community/messages/{peerUserId}/read | `{throughId:string}`；只标记该对方发给本人的且id<=throughId的消息已读，不把晚到消息误标已读 |
+
+私信仅文本，普通HTTPS请求；打开页面每5秒刷新，退后台/离页停止；发送失败保留原文及幂等ID供重试，不自动重发，不显示虚假成功。所有查询以登录身份限定发送/接收双方，客户端不能指定senderId；第三人不可读、不可标已读。消息/评论正文不进入访问日志，不把私信内容放系统通知或公共资料；未知异常仍50000，参数40000、失效目标40400、幂等冲突40900。读取分页与标已读幂等；新增写请求以body.clientRequestId作幂等键，无需另外X-Idempotency-Key。
+
+本次仅编写迁移与测试，不对真实数据库执行DDL。需配套后端构建、V22正常迁移后与两个不同C端账号真机验收；dev固定openid时两个客户端会是同一用户，不能用作双账号验收。
+
+## 接口路由错误（2026-10-19）
+
+通过鉴权后，未注册的接口返回 HTTP 404 / code=40400，message 为“接口不存在，请确认后端版本与请求地址”；已有路径不支持所用 HTTP 方法时返回 HTTP 405 / code=40500，并保留 Allow 响应头。两者继续使用 ApiResponse 和 requestId，不再落入 50000“系统异常”。业务资源不存在仍沿用原有 40400 语义；真实未处理异常仍返回 50000。
+
+## 小语语音转文字草稿（2026-10-16）
+
+`POST /api/v1/speech-transcriptions`：C端登录，普通JSON响应`ApiResponse<{text:string}>`，沿用requestId。请求为`{audioBase64:string,format:"mp3",durationMs:number}`，只接受纯Base64（不带data URI前缀）、MP3（含文件头校验）、原始文件最多512KiB；durationMs为500～60000整数，小程序录音强制60秒停止。Base64最长699052字符。
+
+此接口仅转写，不创建会话、不写聊天消息、不保存音频。小程序展示可编辑的文字，必须由用户明确点击“确认发送”，才调用已有2.24文本发送和2.25流式回复（msgType=1），不使用尚无ASR补全支持的msgType=3。录音前已有输入草稿保留，用户确认时合并发送；取消、重录、离页、登录或会话变化均不得自动发送或回写旧结果。
+
+错误：40000格式/大小/时长不合法，40001未识别到可用文字，40100未登录，42901本人识别仍在进行或服务繁忙，50000配置缺失/上游错误/超时。上游响应、凭据和音频不进入日志或对外错误。请求不可自动重试，无业务写入，不要求X-Idempotency-Key；同一用户仅允许一条在途识别，避免连点重复调用。
+
+识别走服务端百炼Qwen3-ASR-Flash兼容接口，默认`ai.speech.model=qwen3-asr-flash`、baseUrl为百炼北京兼容端点；`AI_SPEECH_API_KEY`独立配置，缺省复用`ai.vision.api-key`（本地yaml或环境变量已配置的百炼密钥）。不把密钥放小程序，也不依赖OSS上传或微信第三方插件。语音服务缺配置只影响此接口，不阻止应用启动。前端须声明麦克风用途并处理拒绝授权、录音中断、无语音和识别失败。
 
 ## 设备添加准备（2026-10-15，尚未接入真实设备）
 
@@ -91,6 +200,10 @@
 反馈管理、用户管理和九时段用户每日明细使用同样的分页交互：默认 10 条、可选 10/20/50/100 条，表格内部滚动，分页栏展示总数、当前页和记录区间。页码与每页条数改变时重新请求各自服务端接口，筛选条件只在提交查询时生效并随翻页保留；反馈状态、用户状态变更或数据减少导致当前页越界时自动回退。九时段按“用户 + 日期”分页，`overview` 统计整个查询范围，不按当前页记录数计算，也不得随翻页丢失已提交的日期范围。
 
 ## 管理端食物图片
+
+待审核新食品（`nutritionSource=AI_ESTIMATE`且未上架）优先使用用户本次上传的餐食实拍图作为审核预览。识别服务只关联已验证归属的MEAL媒体，新增`food_nutrition.source_media_id`（迁移V23）；新草稿及缺少实拍关联的旧草稿可补充首次来源，重复识别不覆盖已关联照片，也不改动已审核或人工食品。管理端食品DTO新增只读`reviewImage`：有来源且仍待审核时为`/admin/v1/foods/{id}/review-image`，否则为空。该字段只用于审核，不写入公开`image`或食品库配图。
+
+`GET /admin/v1/foods/{id}/review-image`要求运营登录及`food:library:manage`权限，验证食品仍待审核、来源媒体未删除/可用且为餐食图片后，返回原图二进制，使用`Cache-Control: no-store`；缺失或失效返回统一404响应。管理端携带Bearer读取为Blob预览，离页/换食品回收临时URL；照片缺失或加载失败时回落已有配图，再回落内置图片。用户健康照片不经公开食品配图接口发布。旧草稿没有来源关联时继续显示原配图，下次同名高置信度识别时可补充来源。
 
 新增与编辑食物可选择内置图片或已上传的食物图片，也可上传新的 JPG/PNG 图片（单张 1 字节至 5MB）。上传采用现有对象存储的“凭证 → PUT 文件字节 → 登记”流程，不将 base64 或浏览器临时地址写入食品表。
 

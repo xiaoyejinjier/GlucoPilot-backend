@@ -51,4 +51,7 @@ public class FoodNutrition extends BaseEntity {
 
     private String nutritionSource;
     private String sourceModel;
+
+    /** 已校验归属的餐食照片，仅用于管理端审核，不能作为公开配图。 */
+    private Long sourceMediaId;
 }

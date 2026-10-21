@@ -88,19 +88,21 @@ public class DynamicChatModel implements ChatModel {
     /**
      * 默认参数取"通道默认模型"的 options。
      * <p>
-     * <b>这里必须返回真实 provider 的 options（如 {@code ToolCallingChatOptions}）</b>：
-     * {@code ChatClient} 装配与工具回调都依赖它，返回一个空实现会让工具静默失效
-     * （本项目在假模型测试里踩过：{@code getOptions()} 与 {@code getDefaultOptions()} 都要返回
-     * tool-calling 类型，否则 {@code ToolCallingManager} 拿不到工具回调）。
+     * <b>这是 Spring AI 2.0 唯一的默认参数契约。</b>{@code ChatModel#getDefaultOptions()} 自 2.0 起
+     * 是 {@code @Deprecated(forRemoval = true)} 的兼容垫片，其默认实现就是 {@code return getOptions()}，
+     * 因此本类<b>只覆写 getOptions()、刻意不覆写它</b>（覆写会多出一条"待删除"告警，且 2.x 后续版本
+     * 真删掉接口方法时编译直接失败）。框架侧也只用这一个方法：{@code DefaultChatClientUtils}
+     * 每轮请求取 {@code chatModel.getOptions()} 作为基底，{@code mutate()} 之后
+     * {@code combineWith(请求级参数)}（请求级非空字段覆盖基底），再注入 toolCallbacks。
+     * <p>
+     * <b>因此这里必须返回真实 provider 的 options（如 {@code ToolCallingChatOptions}）</b>：
+     * 返回空实现会让 {@code mutate()} 退化成 {@code DefaultChatOptions}，
+     * {@code instanceof ToolCallingChatOptions.Builder} 判定失败 → {@code ToolCallingManager}
+     * 拿不到工具回调，表现成"模型照常回答、永远不调工具、日志无异常"（本项目在假模型测试里踩过）。
      */
     @Override
     public ChatOptions getOptions() {
         return channelModel().getOptions();
-    }
-
-    @Override
-    public ChatOptions getDefaultOptions() {
-        return channelModel().getDefaultOptions();
     }
 
     // ------------------------------------------------------------------ 内部

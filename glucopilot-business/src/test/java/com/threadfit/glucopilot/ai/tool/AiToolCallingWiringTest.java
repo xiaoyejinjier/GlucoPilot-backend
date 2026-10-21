@@ -65,8 +65,9 @@ import com.threadfit.glucopilot.ai.business.chat.service.ChatCompletionService;
  * 手搓的 client <b>会静默丢掉全部工具</b>：模型永不产生 tool_calls，从返回值与日志上都看不出来。
  * <p>
  * <b>另一个实测踩到的坑（假模型必须覆写 {@code getOptions()}）</b>：
- * 工具回调经由 {@code ToolCallingChatOptions} 进入请求，而 options 基类来自
- * {@code ChatModel.getOptions()}/{@code getDefaultOptions()}。假模型若不覆写（两个都要覆写），
+ * 工具回调经由 {@code ToolCallingChatOptions} 进入请求，而 options 基底来自
+ * {@code ChatModel.getOptions()}（Spring AI 2.0 起这是唯一入口；{@code getDefaultOptions()}
+ * 已 {@code @Deprecated(forRemoval = true)}，默认实现只是转发到它）。假模型若不覆写，
  * prompt 的 options 会退化成 {@code DefaultChatOptions}，{@code ToolCallingManager} 便拿不到工具回调——
  * <b>模型只被调用一次、答复为空、不报任何错</b>。真实 provider 无此问题
  * （{@code DeepSeekChatOptions implements ToolCallingChatOptions}，已核实）。
@@ -83,11 +84,6 @@ class AiToolCallingWiringTest {
 
         @Override
         public ChatOptions getOptions() {
-            return ToolCallingChatOptions.builder().build();
-        }
-
-        @Override
-        public ChatOptions getDefaultOptions() {
             return ToolCallingChatOptions.builder().build();
         }
 

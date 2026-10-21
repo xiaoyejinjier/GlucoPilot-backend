@@ -94,6 +94,31 @@ class CmsMediaServiceTest {
         verify(mediaFileMapper, never()).updateById(any(MediaFile.class));
     }
 
+    @Test
+    void registersNewsVideoUnderOpsIdentity() {
+        String videoKey = "5/2026/10/-9/" + "b".repeat(32) + ".mp4";
+        byte[] bytes = mp4();
+        when(storage.objectExists(videoKey)).thenReturn(true);
+        when(storage.getObject(videoKey)).thenReturn(bytes);
+        when(storage.provider()).thenReturn(CodeEnum.StorageProvider.MINIO);
+        when(storage.bucket()).thenReturn("glucopilot");
+        when(mediaFileMapper.insert(any(MediaFile.class))).thenAnswer(invocation -> {
+            invocation.<MediaFile>getArgument(0).setId(99L);
+            return 1;
+        });
+
+        RegisterRequest req = request("news-video", videoKey, bytes.length);
+        req.setMimeType("video/mp4");
+        var result = service.register(req, OPS_ID);
+
+        assertEquals("99", result.getId());
+        assertEquals("news-video", result.getPurpose());
+        assertEquals("/api/v1/cms/videos/99", result.getFileUrl());
+        ArgumentCaptor<MediaFile> captor = ArgumentCaptor.forClass(MediaFile.class);
+        verify(mediaFileMapper).updateById(captor.capture());
+        assertEquals("CONTENT_NEWS_VIDEO", captor.getValue().getBizId());
+    }
+
     private static RegisterRequest request(String purpose, String key, long size) {
         RegisterRequest request = new RegisterRequest();
         request.setPurpose(purpose);
@@ -109,5 +134,15 @@ class CmsMediaServiceTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ImageIO.write(image, "png", out);
         return out.toByteArray();
+    }
+
+    /** Minimal ISO BMFF with "ftyp" at offset 4. */
+    private static byte[] mp4() {
+        byte[] bytes = new byte[32];
+        bytes[4] = 'f';
+        bytes[5] = 't';
+        bytes[6] = 'y';
+        bytes[7] = 'p';
+        return bytes;
     }
 }

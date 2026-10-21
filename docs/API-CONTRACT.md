@@ -199,19 +199,25 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 反馈管理、用户管理和九时段用户每日明细使用同样的分页交互：默认 10 条、可选 10/20/50/100 条，表格内部滚动，分页栏展示总数、当前页和记录区间。页码与每页条数改变时重新请求各自服务端接口，筛选条件只在提交查询时生效并随翻页保留；反馈状态、用户状态变更或数据减少导致当前页越界时自动回退。九时段按“用户 + 日期”分页，`overview` 统计整个查询范围，不按当前页记录数计算，也不得随翻页丢失已提交的日期范围。
 
-## 管理端内容媒体（资讯/轮播）
+## 管理端内容媒体（资讯图 / 轮播图 / 资讯视频）
 
-媒体素材页管理资讯配图与轮播图：上传 JPG/PNG（单张 1 字节至 5MB），走对象存储「凭证 → PUT → 登记」。开发可选用 `STORAGE_PROVIDER=local` 或 `minio`；生产为阿里云 OSS。稳定访问地址为 `/api/v1/cms/images/{id}`（服务端读私有对象，不把预签名 URL 写入 CMS 表）。
+媒体素材页管理资讯配图、轮播图与资讯视频：走对象存储「凭证 → PUT → 登记」。开发可用 `STORAGE_PROVIDER=local` 或 `minio`；**部署默认 MinIO**（不默认阿里云 OSS）。稳定地址由服务端读私有对象，不把预签名 URL 写入 CMS 表。
+
+| purpose | MIME | 大小上限 | biz_id | 稳定公开 URL |
+| --- | --- | --- | --- | --- |
+| `news` / `banner` | `image/jpeg`、`image/png` | 5MB | `CONTENT_NEWS` / `CONTENT_BANNER` | `/api/v1/cms/images/{id}` |
+| `news-video` | `video/mp4` | 100MB | `CONTENT_NEWS_VIDEO` | `/api/v1/cms/videos/{id}` |
 
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
-| `GET /admin/v1/cms-media?purpose=` | `content:media:manage` | `purpose` 可选 `news` / `banner` / 省略（全部）；返回素材列表 |
+| `GET /admin/v1/cms-media?purpose=` | `content:media:manage` | `purpose` 可选 `news` / `banner` / `news-video` / 省略（全部） |
 | `POST /admin/v1/cms-media/upload-credentials` | `content:media:manage` | 请求 `{ purpose, bizType: 5, mimeType, sizeBytes }` |
 | `POST /admin/v1/cms-media` | `content:media:manage` | 请求 `{ purpose, bizType: 5, storageKey, mimeType, sizeBytes }`；建议带 `X-Idempotency-Key` |
 | `DELETE /admin/v1/cms-media/{id}` | `content:media:manage` | 软删除（`file_status=0`），仅本人运营账号上传的素材 |
 | `GET /api/v1/cms/images/{id}` | 公开 | 返回已登记 CMS 图片二进制 |
+| `GET /api/v1/cms/videos/{id}` | 公开 | 返回已登记 CMS 视频（MP4）二进制 |
 
-`media_file` 使用 `biz_type=CMS(5)`，`biz_id=CONTENT_NEWS` 或 `CONTENT_BANNER`，`ops_id` 为当前运营，`user_id` 为空。Banner `image` / 资讯 `coverUrl` 可填上述稳定相对路径。
+`media_file` 使用 `biz_type=CMS(5)`，`ops_id` 为当前运营，`user_id` 为空。Banner `image` / 资讯 `coverUrl` / `videoUrl` 填上述稳定相对路径。资讯正文 `contentBody` 为 **HTML**（管理端富文本）；小程序详情用 `rich-text` 渲染，正文插图使用 `/api/v1/cms/images/{id}`。
 
 ## 管理端食物图片
 
@@ -425,7 +431,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 2. 客户端直接把文件字节 PUT 到该 URL（有效期 300 秒，不经过后端）；
 3. `POST /api/v1/media-files` 登记 → 得到 `mediaId`，此后才能用于 2.24。
 
-开发环境默认使用后端自带的本地文件存储，不要求开发者另外安装 MinIO。此时第 1 步返回的是同一后端生成的一次性 PUT URL（`/api/v1/media-files/local-uploads/{token}`），该 URL 与本地文件读取地址仅在 `storage.provider=local` 时开放；向该本地上传地址 PUT 文件字节时必须携带 `Content-Type: application/octet-stream`，禁止使用 `application/json`，否则 JSON 请求过滤器会破坏二进制内容。启用 OSS 的生产环境仍使用私有 OSS 预签名 URL，并遵循凭证签名约束，不额外添加参与签名的请求头。除这一传输头差异外，调用方始终按上述三步协议处理。 课程部署可显式关闭对象存储，按下方 disabled 契约拒绝上传；本次功能不强制启用云存储，也不改变现有关闭模式。
+开发环境默认使用后端自带的本地文件存储，不要求开发者另外安装 MinIO。此时第 1 步返回的是同一后端生成的一次性 PUT URL（`/api/v1/media-files/local-uploads/{token}`），该 URL 与本地文件读取地址仅在 `storage.provider=local` 时开放；向该本地上传地址 PUT 文件字节时必须携带 `Content-Type: application/octet-stream`，禁止使用 `application/json`，否则 JSON 请求过滤器会破坏二进制内容。`storage.provider=minio` 时开发态同样签发同源代理 PUT（`/api/v1/media-files/minio-uploads/{token}`），由后端写入 MinIO，避免浏览器依赖桶 CORS。部署默认 MinIO；若显式 `STORAGE_PROVIDER=aliyun-oss` 则使用私有 OSS 预签名 URL，并遵循凭证签名约束。除这一传输头差异外，调用方始终按上述三步协议处理。课程部署可显式关闭对象存储，按下方 disabled 契约拒绝上传。
 
 **2.25 的 SSE 事件契约不变**：仍是 `delta` / `done` / `error`，`done` 必带完整正文。图片轮次对客户端**完全透明**——服务端内部先调用视觉模型产出客观描述，再把描述交给文本模型组织回答，2.25 的入参出参与文本轮次一模一样，前端不需要区分也不需要新增事件。
 

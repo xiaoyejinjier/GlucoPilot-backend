@@ -12,17 +12,7 @@ mvn package
 java -jar ruoyi-admin/target/ruoyi-admin.jar --spring.profiles.active=dev,local
 ```
 
-IDE 中打开本仓库的 `pom.xml`，使用本仓库 `ruoyi-admin` 模块运行 `com.ruoyi.RuoYiApplication`，工作目录设置为本仓库根目录，profile 使用 `dev,local`。修改此工作区后，另一个旧目录的运行配置不会自动更新；仅重新编译小程序也不会更新后端。
-
-公共配置和 Flyway 文件在 glucopilot-business/src/main/resources；个人配置放该目录的 application-local.yaml（Git 忽略），或注入环境变量。`dev` profile 显式导入相对工作目录的 `.env`、`../.env`、`GlucoPilot/.env`，具体见 application-dev.yaml；Shell/IDE 本身不会自动导入 `.env`。Docker Compose 按其环境文件规则读取。必须配置 MySQL、Redis、至少 64 字节的 OPS_TOKEN_SECRET 和启用功能所需的 AI/对象存储凭据。
-
-Windows 本机排查“已编译但历史/语音接口仍不可用”时，从本仓库运行：
-
-```powershell
-& .\tools\check-local-backend.ps1
-```
-
-脚本只读检查8080监听进程的加载目录及实际OpenAPI中的聊天/语音方法，发现旧工程会明确报错；不打印完整进程参数或私密配置，不停止进程、不改数据库。使用其他端口时传入 `-Port`；本机禁用OpenAPI时无法验证路由。检查通过仅证明运行目录和接口存在，不代表真实登录、数据库迁移或上游AI调用已验证。切换后端目录时先核对原有个人配置，正常启动仍会按Flyway配置检查迁移，不应以关闭迁移或盲目repair绕过错误。
+IDE 运行入口为 com.ruoyi.RuoYiApplication。公共配置和 Flyway 文件在 glucopilot-business/src/main/resources；个人配置放该目录的 application-local.yaml（Git 忽略），或注入环境变量。Shell/IDE 不会自动读取仓库根 .env；Docker Compose 会读取。必须配置 MySQL、Redis、至少 64 字节的 OPS_TOKEN_SECRET、DeepSeek API Key 和需要使用的对象存储。
 
 官方配置类的 upstream-standalone profile 仅用于标记保留的上游实现，不能与本项目运行 profile 一起启用。
 

@@ -1,10 +1,11 @@
-# 生产环境：阿里云 OSS（私有桶）。敏感项一律 ${...:} 空默认，来自服务器 .env / 密钥系统。
-# 严禁在本文件或任何文档/示例中写入真实 IP、AK/SK、桶地址。
+# 生产/课程默认 MinIO（图、视频同一套 ObjectStorage）。敏感项来自服务器 .env。
+# 若运维显式设置 STORAGE_PROVIDER=aliyun-oss，仍可用下方 OSS_*（或改配 MINIO_*）。
+# 严禁在本文件写入真实 IP、AK/SK、桶地址。
 glucopilot:
   storage:
-    provider: ${STORAGE_PROVIDER:aliyun-oss}
-    endpoint: ${OSS_ENDPOINT:}
-    access-key: ${OSS_ACCESS_KEY_ID:}
-    secret-key: ${OSS_ACCESS_KEY_SECRET:}
-    bucket: ${OSS_BUCKET:}
+    provider: ${STORAGE_PROVIDER:minio}
+    endpoint: ${MINIO_ENDPOINT:${OSS_ENDPOINT:}}
+    access-key: ${MINIO_ACCESS_KEY:${OSS_ACCESS_KEY_ID:}}
+    secret-key: ${MINIO_SECRET_KEY:${OSS_ACCESS_KEY_SECRET:}}
+    bucket: ${MINIO_BUCKET:${OSS_BUCKET:}}
     region: ${OSS_REGION:}

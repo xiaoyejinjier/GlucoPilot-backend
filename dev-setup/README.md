@@ -2,35 +2,34 @@
 
 本目录位于 **backend 根下**，monorepo 的 `backend/` 与独立仓 `GlucoPilot-backend` 用法相同。
 
-**用途：** 每次 `git pull` / 换机后不用手改本地配置——改默认值只动 `defaults.env`，再一键覆盖写出。
+**用途：** 每次 `git pull` / 换机后不用手改本地配置——改默认值只动 `defaults.env`，再一键覆盖写出。改完生成文件后须**重启后端**（profiles：`dev,local`）。
 
-## 一键（推荐：本地存储）
+## 一键：本地存储（推荐日常）
 
-双击本目录下的 **`一键配置.cmd`**
+双击 **`一键配置.cmd`**
 
-效果：
+- 写出 `.env` + `application-local.yaml`
+- `STORAGE_PROVIDER=local`，**不需要 Docker**
+- 管理端图片/视频上传走同源 PUT，即可用
 
-- 用 `defaults.env` **强制覆盖**写出 `backend/.env` 与 `application-local.yaml`
-- `STORAGE_PROVIDER=local`（文件落在 `./data/uploads`），**不需要 Docker / MinIO**
-- 内容/食物图片上传与稳定 URL 仍可用
+## 一键：本机 MinIO（对象存储联调）
 
-不启动 Spring Boot；IDE Active profiles 仍用 `dev,local`。
+1. 打开 Docker Desktop  
+2. 双击 **`一键配置并启动MinIO.cmd`**
 
-## 可选：本机 MinIO
+- `STORAGE_PROVIDER=minio`，拉起 MinIO、建桶 `glucopilot`
+- 浏览器上传走后端同源代理再写入 MinIO（不依赖桶 CORS，兼容第三方镜像）
+- 会先检查镜像（`netvark/minio` / `netvark/mc`）；已有则跳过拉取  
+- 控制台：http://127.0.0.1:9001 （`minioadmin` / `minioadmin`）
 
-仅在需要真 MinIO 时：先开 Docker Desktop，再双击 **`一键配置并启动MinIO.cmd`**（会写成 `STORAGE_PROVIDER=minio` 并建桶）。一键会先检查镜像是否已下载。
+同事任选其一即可；两种模式下 CMS 素材上传协议相同（凭证 → PUT → 登记）。
+生产/课程部署默认也是 MinIO（见 `application-prod.yaml`），不默认阿里云 OSS。
 
 ## 改默认值
 
-编辑 [`defaults.env`](defaults.env)，再双击 `一键配置.cmd`（或命令行加 `-Force`）。
-
-- `OPS_TOKEN_SECRET`：≥64 字符  
-- `STORAGE_PROVIDER`：默认 `local`  
-- `MINIO_*`：仅在 `-WithMinio` 时才会切到 minio
+编辑 [`defaults.env`](defaults.env)，再双击对应一键。
 
 ## 命令行（备选）
-
-在 **backend 根目录**：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\dev-setup\setup-backend-dev.ps1 -Force

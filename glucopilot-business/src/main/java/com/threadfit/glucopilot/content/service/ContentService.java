@@ -88,6 +88,7 @@ public class ContentService {
                 .videoUrl(news.getVideoUrl())
                 .contentBody(news.getContentBody())
                 .images(community.articleImages(newsId)).videos(community.articleVideos(newsId))
+                .tags(community.articleTags(newsId))
                 .publishAt(news.getPublishAt())
                 .likeCount(news.getLikeCount())
                 .collectCount(news.getCollectCount())

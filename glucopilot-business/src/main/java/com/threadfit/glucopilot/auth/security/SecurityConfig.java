@@ -73,7 +73,8 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.PUT,
-                        "/api/v1/media-files/local-uploads/*")
+                        "/api/v1/media-files/local-uploads/*",
+                        "/api/v1/media-files/minio-uploads/*")
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.POST,
@@ -93,6 +94,7 @@ public class SecurityConfig {
                         "/api/v1/foods/*",
                         "/api/v1/foods/images/*",
                         "/api/v1/cms/images/*",
+                        "/api/v1/cms/videos/*",
                         "/api/v1/dict/**",
                         "/api/v1/app-config",
                         "/api/v1/media-files/local-objects")

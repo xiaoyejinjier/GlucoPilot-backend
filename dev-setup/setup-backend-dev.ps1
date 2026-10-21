@@ -126,10 +126,10 @@ if ($WithMinio) {
     if (-not $docker) {
         throw 'docker not found. Install Docker Desktop or run without -WithMinio (STORAGE_PROVIDER=local).'
     }
-    # Must match image tags in compose.minio.yaml
+    # Must match image tags in compose.minio.yaml（第三方镜像，避开官方 Hub 经加速器 403）
     $minioImages = @(
-        'minio/minio:RELEASE.2025-04-22T22-12-26Z',
-        'minio/mc:RELEASE.2025-04-16T18-13-26Z'
+        'netvark/minio:latest',
+        'netvark/mc:latest'
     )
     Write-Host 'Checking Docker engine...'
     # NativeCommandError must not abort under $ErrorActionPreference=Stop
@@ -151,7 +151,8 @@ if ($WithMinio) {
             & docker pull $img
             if ($LASTEXITCODE -ne 0) {
                 $ErrorActionPreference = $prevEap
-                throw "docker pull failed: $img (exit $LASTEXITCODE). Config files were already written."
+                # ASCII only: console code page may garble Chinese in throw
+                throw "docker pull failed: $img (exit $LASTEXITCODE). Config already written. Your Docker registry-mirrors (e.g. daocloud) returned 403/502 — fix mirrors in Docker Desktop, or use 一键配置.cmd for local storage (no MinIO)."
             }
         }
     }
@@ -198,15 +199,37 @@ if ($WithMinio) {
         if ($networks -match 'glucopilot-minio') {
             $netName = ($networks | Where-Object { $_ -like '*glucopilot-minio*' } | Select-Object -First 1)
         }
-        # Fallback mb: env vars expand inside the container (escaped `$ for PowerShell)
-        $mcCmd = 'mc alias set local http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" && mc mb -p "local/$MINIO_BUCKET" || true'
+        # Fallback: mb + CORS（netvark/mc ENTRYPOINT=mc，须 --entrypoint /bin/sh）
+        $mcCmd = @'
+mc alias set local http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+mc mb -p "local/$MINIO_BUCKET" || true
+cat > /tmp/cors.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <CORSRule>
+    <AllowedOrigin>*</AllowedOrigin>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>PUT</AllowedMethod>
+    <AllowedMethod>POST</AllowedMethod>
+    <AllowedMethod>HEAD</AllowedMethod>
+    <AllowedHeader>*</AllowedHeader>
+    <ExposeHeader>ETag</ExposeHeader>
+    <ExposeHeader>Content-Length</ExposeHeader>
+    <ExposeHeader>Content-Type</ExposeHeader>
+    <MaxAgeSeconds>3600</MaxAgeSeconds>
+  </CORSRule>
+</CORSConfiguration>
+EOF
+mc cors set "local/$MINIO_BUCKET" /tmp/cors.xml || true
+'@
         & docker run --rm --network $netName `
+            --entrypoint /bin/sh `
             -e "MINIO_ACCESS_KEY=$accessKey" `
             -e "MINIO_SECRET_KEY=$secretKey" `
             -e "MINIO_BUCKET=$bucket" `
-            minio/mc:RELEASE.2025-04-16T18-13-26Z `
-            /bin/sh -c $mcCmd | Out-Host
-        Write-Host "MinIO ready. Bucket: $bucket  Console: http://127.0.0.1:9001"
+            netvark/mc:latest `
+            -c $mcCmd | Out-Host
+        Write-Host "MinIO ready. Bucket: $bucket (CORS for browser PUT). Console: http://127.0.0.1:9001"
     } finally {
         Pop-Location
         Remove-Item Env:MINIO_ACCESS_KEY -ErrorAction SilentlyContinue

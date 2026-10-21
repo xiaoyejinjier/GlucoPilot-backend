@@ -28,14 +28,14 @@ import java.util.List;
 /**
  * 管理端内容媒体（资讯配图 / 轮播图）。
  * <p>上传链路与食物图片一致：先取凭证 → 客户端直传对象存储（local / MinIO / OSS）→ 再登记。
- * 稳定访问地址为 {@code /api/v1/cms/images/{id}}，由服务端读私有对象，不把预签名 URL 写入 CMS 表。
+ * 稳定访问地址：图片 {@code /api/v1/cms/images/{id}}，视频 {@code /api/v1/cms/videos/{id}}。
  */
 @RestController
 @RequiredArgsConstructor
 public class CmsMediaController {
     private final CmsMediaService cmsMediaService;
 
-    /** 列出已登记且可用的 CMS 素材；purpose 可选 news / banner，省略则全部。 */
+    /** 列出素材；purpose 可选 news / banner / news-video，省略则全部。 */
     @GetMapping("/admin/v1/cms-media")
     @PreAuthorize("@ss.hasPermi('" + PermCodes.CONTENT_MEDIA_MANAGE + "')")
     public ApiResponse<List<MediaItem>> list(@RequestParam(required = false) String purpose) {
@@ -65,7 +65,7 @@ public class CmsMediaController {
         return ApiResponse.ok();
     }
 
-    /** 仅公开已登记的 CMS 素材，禁止读取 C 端健康照片等其它私有对象。 */
+    /** 仅公开已登记的 CMS 图片，禁止读取其它私有对象。 */
     @Anonymous
     @GetMapping("/api/v1/cms/images/{id:\\d+}")
     public ResponseEntity<byte[]> image(@PathVariable Long id) {
@@ -74,6 +74,19 @@ public class CmsMediaController {
                 .contentType(MediaType.parseMediaType(row.getMimeType()))
                 .cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
                 .header("X-Content-Type-Options", "nosniff")
+                .body(cmsMediaService.read(row));
+    }
+
+    /** 仅公开已登记的 CMS 资讯视频（MP4）。 */
+    @Anonymous
+    @GetMapping("/api/v1/cms/videos/{id:\\d+}")
+    public ResponseEntity<byte[]> video(@PathVariable Long id) {
+        var row = cmsMediaService.requireVideo(id);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(row.getMimeType()))
+                .cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Accept-Ranges", "bytes")
                 .body(cmsMediaService.read(row));
     }
 }

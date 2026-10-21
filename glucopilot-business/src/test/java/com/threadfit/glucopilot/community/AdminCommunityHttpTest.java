@@ -19,7 +19,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 class AdminCommunityHttpTest {
     @Configuration @EnableMethodSecurity static class Config {
         @Bean CommunityPublicationService service() { return mock(CommunityPublicationService.class); }
-        @Bean AdminCommunityController controller(CommunityPublicationService service) { return new AdminCommunityController(service); }
+        @Bean CommunityModerationQueue queue() { return mock(CommunityModerationQueue.class); }
+        @Bean AdminCommunityController controller(CommunityPublicationService service,CommunityModerationQueue queue) { return new AdminCommunityController(service,queue); }
         @Bean(name="ss") Gate gate() { return new Gate(); }
     }
     public static class Gate {

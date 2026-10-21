@@ -21,6 +21,51 @@
 
 ---
 
+## 0. 落地状态（2026-10-21，V37）
+
+本期**在社区侧既有实现上迭代**（不再新建独立模块），因为社区方已经有一版可跑的文章初审：
+`V31` 建了 `community_article`（state 状态机 + ai_verdict/ai_reason/ai_model/ai_checked_at）、
+`community_moderation_log` 与 `CommunityModerationWorker`（每 5 秒 claim 一篇 → 判 PASS/REJECT）。
+保留它的表与状态机，才能不动已上线的管理端页面与小程序端。
+
+| 落地项 | 实现位置 | 与本文设计的关系 |
+| --- | --- | --- |
+| 迁移 | `V37__community_moderation_ai.sql` | 替代原计划的 `V29`（版本号被社区模块占用） |
+| 提示词进库 | `SceneCode.MODERATION` + `ai.scenes.moderation` + `prompts/moderation/system.md` + V37 播种 v1 | 按设计 §8，**替代**原先硬编码在 Worker 里的 `SYSTEM` 常量 |
+| 输出协议 | `CommunityModerationParser`（逐行字段清单） | 因提示词要过 ST 模板（禁花括号），JSON 输出改为**字段清单**，见 §8 |
+| 类别枚举 | `ModerationCategories`（12 类） | 按设计 §5.6 |
+| 结构化证据 | `community_moderation_hit`（新表）+ 文章/评论的 `ai_category/ai_severity/ai_confidence/ai_prompt_ver` | 按设计 §5.3，但**只记类别/严重度/置信度**；`start_offset/snippet_hash` 暂空（提示词未要求模型回吐原句，解析器已支持 `evidence` 行，后续放开即可） |
+| 评论审核 | `community_comment` 11 个新列 + `claimComment/finishComment` + `is_hidden` + `VISIBLE_COMMENT` 过滤 | 按设计 D5（先发后审、命中即隐藏）；**V37 用两步默认值**：历史评论标 `SKIPPED`，避免上线当天全量重审 |
+| 误杀恢复 | `POST /admin/v1/community/comments/{id}/restore`（契约 4.25） | 按设计 D7；只改 `is_hidden`，保留 `ai_verdict` |
+| E2E | `scripts/e2e/moderation-e2e.ps1`（31 条断言，真实模型） | 按设计 §12 |
+
+### 与设计的差异（本期主动缩小范围）
+
+| 设计里有 | 本期状态 | 原因 |
+| --- | --- | --- |
+| 场景拆两个（文章 / 评论） | **只用一个** `MODERATION`，靠送审文本里的「类型：文章/评论」区分 | 判据差异只有"评论没有人工终审"这一条，写进提示词即可；少一个场景就少一处后台配置 |
+| L1 规则层（关键词/正则硬拦） | **未做** | 产品决策：一期完全依靠模型 |
+| `mode=shadow` 灰度 | **未做** | 同上；提示词 v1 与原有内联提示词语义等价，风险可控 |
+| 自动重试 + 退避 | **未做** | 文章失败进 `AI_ERROR` 等人工点"重新初审"；评论失败保持可见并记 `ERROR` |
+| 指标页 / 误杀抽样 | **未做** | 一期只落结构化证据，为二期统计留好数据 |
+| 申诉（`source=5`） | **未做** | 二期 |
+| 图片 / 视频 / 私信审核 | **未做** | 设计 D1 排除；注意配图（V33）与视频（V35）目前仍未送审，属已知盲区 |
+
+### 运维要点
+
+1. **改判定口径不用发版**：后台「提示词管理」编辑 `MODERATION` 场景 → 启用新版本即生效
+   （`@EnableScheduling` 的 worker 每轮重新取生效版本）。改完用 `prompt-e2e` 之外的手工样本先试。
+2. **按类别统计**：`SELECT category_code, severity, COUNT(*) FROM community_moderation_hit GROUP BY 1,2`；
+   误杀率靠抽样 `ai_verdict='PASS'` 的文章/评论人工复看。
+3. **误杀恢复**：`POST /admin/v1/community/comments/{id}/restore`（文章侧沿用既有 `review` 的人工终审）。
+4. **关闭 AI 初审**：`community.moderation.enabled=false`（worker 不再跑，内容停在待审/未审，**不会自动放行**）。
+
+### 已知观察点（实测）
+
+E2E 里"卖降糖神药、吃一周就能停针停药"被判成 `illegal_goods`（严重度 1）而不是
+`medical_advice`/`medical_claim`：**判定正确（REJECT）但类别和严重度偏低**。
+这类偏差说明提示词里的类别判据还需要按真实误判样本继续调（本设计的结构化证据正是为此准备）。
+
 ## 1. 背景与目标
 
 社区（文章、点赞、评论、私信）上线后，平台方是内容的第一责任人。AI 侧的价值不是"替运营判断一切"，而是：

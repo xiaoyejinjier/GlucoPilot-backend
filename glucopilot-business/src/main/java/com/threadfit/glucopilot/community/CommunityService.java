@@ -21,7 +21,7 @@ public class CommunityService {
     private static final String USER_FROM = " FROM user_account u LEFT JOIN user_profile p ON p.user_id=u.id AND p.is_deleted=0 ";
     private static final String ACTIVE = "u.is_deleted=0 AND u.account_status=1";
     private static final String USER_FIELDS = "u.id,COALESCE(NULLIF(p.nickname,''),'社区用户') nickname,COALESCE(p.avatar_url,'') avatar_url";
-    private static final String VISIBLE_COMMENT = " c.is_deleted=0 AND EXISTS(SELECT 1 FROM user_account u WHERE u.id=c.user_id AND " + ACTIVE + ") AND (c.root_comment_id IS NULL OR EXISTS(SELECT 1 FROM community_comment r WHERE r.id=c.root_comment_id AND r.news_id=c.news_id AND r.root_comment_id IS NULL AND r.is_deleted=0 AND EXISTS(SELECT 1 FROM user_account u WHERE u.id=r.user_id AND "+ACTIVE+"))) ";
+    private static final String VISIBLE_COMMENT = " c.is_deleted=0 AND c.is_hidden=0 AND EXISTS(SELECT 1 FROM user_account u WHERE u.id=c.user_id AND " + ACTIVE + ") AND (c.root_comment_id IS NULL OR EXISTS(SELECT 1 FROM community_comment r WHERE r.id=c.root_comment_id AND r.news_id=c.news_id AND r.root_comment_id IS NULL AND r.is_deleted=0 AND EXISTS(SELECT 1 FROM user_account u WHERE u.id=r.user_id AND "+ACTIVE+"))) ";
 
     private BizException missing() { return new BizException(ErrorCode.NOT_FOUND,"内容或用户不存在"); }
     private void requireUser(long userId) {
@@ -165,7 +165,11 @@ public class CommunityService {
         if(rows.isEmpty()) throw new BizException(ErrorCode.INTERNAL_ERROR,"评论保存失败，请重试");
         var row=rows.getFirst();
         if(((Number)row.get("news_id")).longValue()!=news || !content.equals(row.get("content")) || ((Number)row.get("is_deleted")).intValue()!=0 || !Objects.equals(target,number(row.get("reply_to_comment_id")))) throw new BizException(ErrorCode.CONFLICT,"请求已使用，请刷新后重试");
-        var saved=jdbc.query("SELECT c.* FROM community_comment c WHERE c.id=? AND c.news_id=? AND "+VISIBLE_COMMENT,(rs,i)->comment(viewer,rs),row.get("id"),news);
+        // 回查刚插入的这条时**不能**套用 VISIBLE_COMMENT：评论是"先发后审"，
+        // AI 可能在插入与回查之间的几毫秒内把它判违规并置 is_hidden=1，
+        // 那时套可见性过滤会查不到行，作者收到的是"内容或用户不存在"这种完全误导的 404。
+        // 作者本人刚发的评论必须能拿到（前端据此立即渲染），列表侧仍然过滤隐藏。
+        var saved=jdbc.query("SELECT c.* FROM community_comment c WHERE c.id=? AND c.news_id=? AND c.is_deleted=0",(rs,i)->comment(viewer,rs),row.get("id"),news);
         if(saved.isEmpty()) throw missing();
         var recipients=new HashSet<Long>();Long author=articleUser(news);if(author!=null)recipients.add(author);
         if(target!=null)recipients.addAll(jdbc.queryForList("SELECT user_id FROM community_comment WHERE id=? AND news_id=? AND is_deleted=0",Long.class,target,news));

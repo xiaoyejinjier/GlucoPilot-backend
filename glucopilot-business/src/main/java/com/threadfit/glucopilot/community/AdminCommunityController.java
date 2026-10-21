@@ -14,7 +14,11 @@ import static com.threadfit.glucopilot.community.PublicationDtos.*;
 @RequestMapping("/admin/v1/community")
 public class AdminCommunityController {
     private final CommunityPublicationService service;
-    public AdminCommunityController(CommunityPublicationService service) { this.service=service; }
+    private final CommunityModerationQueue queue;
+    public AdminCommunityController(CommunityPublicationService service, CommunityModerationQueue queue) {
+        this.service = service;
+        this.queue = queue;
+    }
 
     @GetMapping("/articles")
     @PreAuthorize("@ss.hasPermi('content:news:list')")
@@ -34,6 +38,20 @@ public class AdminCommunityController {
     @PostMapping("/articles/{id}/retry-ai")
     @PreAuthorize("@ss.hasRole('admin') and @ss.hasPermi('content:news:edit')")
     public ApiResponse<Void> retry(@PathVariable long id) { service.retry(RequestContext.requireOpsId(),id,true);return ApiResponse.ok(); }
+
+    /**
+     * 恢复被 AI 判违规并隐藏的评论（误杀兜底）。
+     * <p>
+     * 为什么必须有人工恢复入口：评论是"先发后审"，机器判 REJECT 会立即隐藏；
+     * 没有恢复入口意味着一次误判只能改库才能纠正，而误判一定会有。
+     * 幂等：评论不存在或本来就没有被隐藏时返回成功（运营重复点击不该报错）。
+     */
+    @PostMapping("/comments/{id}/restore")
+    @PreAuthorize("@ss.hasRole('admin') and @ss.hasPermi('content:news:edit')")
+    public ApiResponse<Void> restoreComment(@PathVariable long id) {
+        queue.restoreComment(RequestContext.requireOpsId(), id);
+        return ApiResponse.ok();
+    }
 
     @GetMapping("/reports")
     @PreAuthorize("@ss.hasPermi('content:news:list')")

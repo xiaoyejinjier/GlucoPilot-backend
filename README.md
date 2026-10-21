@@ -59,4 +59,4 @@ docker build -t glucopilot-api:local .
 
 课程演示无需开通 OSS：设置服务器 `.env` 中 `STORAGE_PROVIDER=disabled`，不创建对象存储客户端，也不需要 OSS 凭据。上传及对象读取明确拒绝，不返回模拟成功。AI 仍需单独设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false` 关闭。恢复存储时选择已有 provider 并填写真实配置，重建容器。
 
-本机联调内容/食物图片可用 MinIO：`docker compose -f compose.minio.yaml up -d`，在控制台创建桶（默认名 `glucopilot`），`.env` 设 `STORAGE_PROVIDER=minio` 与 `MINIO_*`（见 `.env.example`）。未起 MinIO 时保持 `STORAGE_PROVIDER=local` 即可。
+本机联调默认用本地文件存储：双击 `dev-setup/一键配置.cmd`（或见 `dev-setup/README.md`），会按 `defaults.env` 写出 `.env`（`STORAGE_PROVIDER=local`），无需 Docker。可选本机 MinIO：开 Docker 后双击 `dev-setup/一键配置并启动MinIO.cmd`（自动建桶 `glucopilot`）。

@@ -1,7 +1,7 @@
-# 本机联调 MinIO（不作为团队共享数据源）。用法：
+# 本机联调 MinIO（非团队共享存储）。用法：
 #   docker compose -f compose.minio.yaml up -d
-#   控制台 http://127.0.0.1:9001  默认账号/密码见下方环境变量
-#   在控制台创建桶 glucopilot（或与 MINIO_BUCKET 一致）后，.env 设 STORAGE_PROVIDER=minio
+# 控制台：http://127.0.0.1:9001（默认 minioadmin / minioadmin）
+# minio-init 会自动创建桶 MINIO_BUCKET（默认 glucopilot）。
 name: glucopilot-minio
 services:
   minio:
@@ -11,9 +11,32 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      - minio
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-glucopilot}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        echo waiting for minio...
+        i=0
+        until mc alias set local http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"; do
+          i=$$((i+1))
+          if [ "$$i" -gt 60 ]; then echo minio not ready; exit 1; fi
+          sleep 1
+        done
+        mc mb -p "local/$$MINIO_BUCKET" || true
+        echo bucket ready: $$MINIO_BUCKET
+
 volumes:
   minio-data:

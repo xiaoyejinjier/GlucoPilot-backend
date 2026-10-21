@@ -235,6 +235,10 @@ public class CommunityService {
     public List<PublicationDtos.ArticleImage> articleVideos(long newsId) {
         return jdbc.query("SELECT i.media_id FROM community_article_image i JOIN media_file m ON m.id=i.media_id WHERE i.news_id=? AND m.biz_type=8 ORDER BY i.sort_no",(rs,n)->new PublicationDtos.ArticleImage(rs.getString(1)),newsId);
     }
+    /** 资讯详情标签；无投稿标签时返回空列表。 */
+    public List<PublicationDtos.Tag> articleTags(long newsId) {
+        return jdbc.query("SELECT t.code,t.name FROM community_article_tag a JOIN community_tag t ON t.id=a.tag_id WHERE a.news_id=? AND t.enabled=1 ORDER BY t.sort_no,t.id",(rs,n)->new PublicationDtos.Tag(rs.getString(1),rs.getString(2)),newsId);
+    }
     private Long articleUser(long news) {
         var users=jdbc.queryForList("SELECT b.user_id FROM cms_news n JOIN community_blogger b ON b.id=n.blogger_id JOIN user_account u ON u.id=b.user_id AND "+ACTIVE+" WHERE n.id=? AND n.is_deleted=0",Long.class,news);
         return users.isEmpty()?null:users.getFirst();

@@ -503,3 +503,15 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 | PUT /admin/v1/devices/{id} | device:manage | 更新 |
 | PUT /admin/v1/devices/{id}/status | device:manage | 启用/禁用 |
 | DELETE /admin/v1/devices/{id} | device:manage | 逻辑删除 |
+
+## 服务器资源监控（2026-10-22）
+
+新增只读接口 `GET /admin/v1/ruoyi/monitor/resources`，沿用 `monitor:server:list` 权限，返回 ApiResponse，成功码0并保留X-Request-Id。现有 `/monitor/server` 的 JVM 统计语义不变。
+
+资源来自宿主机 systemd 采集器，每10秒采集 `/proc/stat`、`/proc/meminfo`、`/proc/uptime`、根文件系统容量，以及仅本项目 Compose 容器的 Docker 状态和资源。Web容器只读挂载快照目录，不挂载Docker socket，不接受命令/路径参数，不返回进程参数、环境变量、密钥、IP或主机名。
+
+`data = {available, stale, message, snapshot}`。文件不存在/损坏时 available=false、snapshot=null；采样超过30秒或时间异常时 stale=true，必须显示原采样时间与过期警告，不伪装为实时。数据缺失用null，不补0。容器采集失败时 containersAvailable=false、containers=[]，独立提示，不影响真实宿主机指标展示。
+
+snapshot格式：schemaVersion=1；sampledAt为UTC ISO时间；host={cpuPercent(首样本可null),cpuCores,memoryTotalBytes,memoryAvailableBytes,memoryUsedBytes,memoryPercent,swapTotalBytes,swapUsedBytes,diskTotalBytes,diskUsedBytes,diskFreeBytes,diskPercent,uptimeSeconds}；containersAvailable:boolean；containers=[{name,service,state,cpuPercent,memoryUsedBytes,memoryLimitBytes(无限制时null)}]；history=[{sampledAt,cpuPercent,memoryPercent}]，最多60个按采样时间递增的样本；containers最多30行。所有容量单位bytes、利用率百分比0~100（容器CPU可超过100%）。内存used=total-available，包含可回收缓存的口径与完全空闲内存区分；磁盘为根文件系统used/total，不聚合容器overlay。
+
+管理端每10秒串行刷新，切后台暂停、恢复可见时刷新、离开页面清理定时器并丢弃迟到响应。图表使用服务器快照历史，刷新页面不伪造历史。非生产环境未安装采集器时明确显示“尚未采集”，不使用Mock数据。当前值、趋势、容器资源与JVM统计分别标明范围。部署须安装采集器并将公共快照目录只读挂载至 `/app/monitor`；后端默认读取该目录下metrics.json，可通过SERVER_METRICS_PATH配置，不添加数据库迁移。

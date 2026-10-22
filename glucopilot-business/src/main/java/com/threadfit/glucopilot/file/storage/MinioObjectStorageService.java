@@ -19,9 +19,9 @@ import org.springframework.stereotype.Service;
 import java.io.InputStream;
 
 /**
- * MinIO 开发实现（provider=minio，本地 mock 对象存储）。
- * <p>完整走「凭证 → 直传 → 登记 → 读取」全链路，不因是 mock 就跳过任何校验环节，
- * 保证开发环境与生产 OSS 行为一致。直传使用预签名 PUT URL（有效 {@link ObjectStorageService#EXPIRE_SECONDS} 秒）。
+ * MinIO 对象存储实现（provider=minio，可连接团队共享服务）。
+ * <p>完整走「凭证 → 直传 → 登记 → 读取」全链路，
+ * 保持与 OSS 相同的业务校验。直传使用预签名 PUT URL（有效 {@link ObjectStorageService#EXPIRE_SECONDS} 秒）。
  * <p><b>注意</b>：签发预签名 URL 时刻意不携带 Content-Type——
  * 真正的 MIME 校验推迟到登记接口 {@code MediaFileService#register} 进行，
  * 避免前端在「预签名阶段」通过 Content-Type 绕过白名单。
@@ -72,13 +72,13 @@ public class MinioObjectStorageService implements ObjectStorageService {
         }
     }
 
-    /** 由 storageKey 拼出公开访问 URL；桶默认私有，这里仅为 C 端展示用。 */
+    /** 对象定位地址，不保证匿名可读；私有资源通过对应业务的后端读取接口展示。 */
     @Override
     public String resolvePublicUrl(String storageKey) {
         return props.getEndpoint() + "/" + props.getBucket() + "/" + storageKey;
     }
 
-    /** HEAD 探活：登记接口据此确认真实上传。异常一律视为「不存在」，转入拒绝分支。 */
+    /** 对象缺失与存储故障分别处理，连接失败不能伪装成未上传。 */
     @Override
     public boolean objectExists(String storageKey) {
         try {
@@ -88,16 +88,10 @@ public class MinioObjectStorageService implements ObjectStorageService {
                     .build());
             return true;
         } catch (ErrorResponseException e) {
-            // 「对象不存在」是正常业务结果（2.15 登记校验时经常命中），压到 DEBUG 免得刷屏
-            log.debug("MinIO statObject 未命中 bucket={} key={}", props.getBucket(), storageKey, e);
-            return false;
+            if (isMissing(e)) return false;
+            throw unavailable("stat",e);
         } catch (Exception e) {
-            // 连不上 MinIO 也会走到这里，而本方法只能返回 false。
-            // 于是「存储不可达」在上层会被解释成「你传的文件不存在」——方向完全错，
-            // 所以这一类必须留下 WARN，否则真实原因不可见。
-            log.warn("MinIO statObject 异常（存储不可达？）bucket={} endpoint={} key={}",
-                    props.getBucket(), props.getEndpoint(), storageKey, e);
-            return false;
+            throw unavailable("stat",e);
         }
     }
 
@@ -119,10 +113,21 @@ public class MinioObjectStorageService implements ObjectStorageService {
                 .object(storageKey)
                 .build())) {
             return in.readAllBytes();
+        } catch (ErrorResponseException e) {
+            if(isMissing(e))throw new BizException(ErrorCode.NOT_FOUND,"文件不存在");
+            throw unavailable("read",e);
         } catch (Exception e) {
-            // 读失败必须留下痕迹：这是「图片送模型」链路里最难定位的一环（成功路径无日志）
-            log.warn("MinIO 读取对象失败 bucket={} key={}", props.getBucket(), storageKey, e);
-            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+            throw unavailable("read",e);
         }
+    }
+
+    private static boolean isMissing(ErrorResponseException error) {
+        return error.errorResponse()!=null&&java.util.Set.of("NoSuchKey","NoSuchObject").contains(error.errorResponse().code());
+    }
+    private static BizException unavailable(String operation,Exception error) {
+        // SDK异常的toString可能附带签名请求头；只记录故障类型及错误码。
+        String code=error instanceof ErrorResponseException response&&response.errorResponse()!=null?response.errorResponse().code():error.getClass().getSimpleName();
+        log.warn("MinIO {} failed type={} code={}",operation,error.getClass().getSimpleName(),code);
+        return new BizException(ErrorCode.INTERNAL_ERROR,"文件存储暂时不可用，请稍后重试");
     }
 }

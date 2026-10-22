@@ -9,6 +9,7 @@ import com.threadfit.glucopilot.common.util.Asserts;
 import com.threadfit.glucopilot.common.util.EmailUtils;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.file.service.MediaFileService;
+import com.threadfit.glucopilot.file.service.AvatarMediaService;
 import com.threadfit.glucopilot.profile.health.service.HealthProfileService;
 import com.threadfit.glucopilot.user.dto.UserDtos;
 import com.threadfit.glucopilot.user.entity.UserAccount;
@@ -40,6 +41,7 @@ public class UserAccountService {
         UserAccount account = requireAccount(userId);
         return UserDtos.MeResponse.builder()
                 .communityKey("u" + userId)
+                .phone(account.getPhone())
                 .accountStatus(account.getAccountStatus())
                 .phoneMasked(PhoneUtils.mask(account.getPhone()))
                 .emailMasked(EmailUtils.mask(account.getEmail()))
@@ -56,13 +58,15 @@ public class UserAccountService {
     @Transactional
     public UserDtos.UpdatedResult patchProfile(Long userId, UserDtos.ProfilePatchRequest request) {
         if (request.getNickname() == null && request.getAvatarUrl() == null
-                && request.getAvatarText() == null && request.getGender() == null) {
+                && request.getAvatarText() == null && request.getGender() == null && request.getBio() == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "至少提交一个待修改字段");
         }
         // 头像必须来自当前用户上传的可用文件，防止引用他人或伪造 URL；空串/空白表示清空，跳过归属校验
         String avatarUrl = nullIfBlank(request.getAvatarUrl());
-        if (avatarUrl != null && mediaFileService.findAvailableAvatar(userId, avatarUrl) == null) {
-            throw new BizException(ErrorCode.BIZ_REJECTED, "头像不属于当前用户");
+        if (avatarUrl != null) {
+            var avatar = mediaFileService.findAvailableAvatar(userId, avatarUrl);
+            if (avatar == null) throw new BizException(ErrorCode.BIZ_REJECTED, "头像不属于当前用户");
+            avatarUrl = AvatarMediaService.path(avatar.getId());
         }
         UserProfile profile = requireProfile(userId);
         // 部分更新：非 null 字段走 entity（触发审计填充），空串清空走 wrapper.set(=NULL)；
@@ -99,6 +103,11 @@ public class UserAccountService {
         }
         if (request.getGender() != null) {
             entity.setGender(request.getGender());
+        }
+        if (request.getBio() != null) {
+            String bio=request.getBio().trim();
+            if(bio.length()>160)throw new BizException(ErrorCode.BAD_REQUEST,"个性签名最多160字");
+            entity.setBio(bio);
         }
         userProfileMapper.update(entity, wrapper);
         return UserDtos.UpdatedResult.builder().updated(true).build();
@@ -179,6 +188,7 @@ public class UserAccountService {
     private static UserDtos.ProfileView toProfileView(UserProfile p) {
         return UserDtos.ProfileView.builder()
                 .nickname(p.getNickname())
+                .bio(p.getBio())
                 .avatarUrl(p.getAvatarUrl())
                 .avatarText(p.getAvatarText())
                 .gender(p.getGender())

@@ -35,7 +35,6 @@ class CommunityServiceTest {
         replyMigration.setSqlScriptEncoding("UTF-8");replyMigration.populate(migrationConnection);
         CommunityTestSchema.applyDraftMigration(migrationConnection);
         jdbc.execute("ALTER TABLE cms_news ADD community_managed INT DEFAULT 0");
-        jdbc.execute("CREATE TABLE community_article(news_id BIGINT PRIMARY KEY,state VARCHAR(24))");
         for(long id=1;id<=4;id++) {
             jdbc.update("INSERT INTO user_account(id,phone,openid) VALUES(?,?,?)",id,"private-phone-"+id,"private-openid-"+id);
             jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(?,?)",id,"测试用户"+id);

@@ -52,6 +52,146 @@ class AdminCommunityArticlesTest {
     @AfterEach void cleanup() throws Exception { try { jdbc.execute("DROP ALL OBJECTS"); } finally { migrationConnection.close(); } }
     private PageResult<Article> list(String state,String source,String keyword) { return service.adminArticles(state,source,keyword,new PageQuery()); }
     private CommunityDraftService drafts(){return new CommunityDraftService(jdbc,new com.threadfit.glucopilot.common.util.JsonUtils(new tools.jackson.databind.ObjectMapper()),service);}
+    private CommunityReportFeedbackService feedback(){return new CommunityReportFeedbackService(jdbc);}
+    private ArticleAccessService access(){return new ArticleAccessService(jdbc);}
+    private void peer(long id){jdbc.update("INSERT INTO user_account(id) VALUES(?)",id);jdbc.update("INSERT INTO user_profile(user_id,nickname,bio) VALUES(?,?,'认真记录生活')",id,"好友"+id);}
+    private void mutual(long id){jdbc.update("INSERT INTO community_follow(follower_id,target_key,following) VALUES(2,?,1),(?,'u2',1)","u"+id,id);}
+
+    @Test void privateArticlesAreFilteredAcrossDetailFeedsCollectionsCommentsAndLegacyNews() {
+        peer(3);var policy=tx().execute(s->access().change(2,21,new ArticleAccessService.Change("PRIVATE",List.of(),0)));
+        assertEquals("PRIVATE",policy.visibility());assertEquals(1,policy.revision());assertEquals("PRIVATE",service.get(2L,21,false).visibility());
+        assertThrows(BizException.class,()->service.get(3L,21,false));assertThrows(BizException.class,()->service.get(null,21,false));
+        assertFalse(service.feed(3,null,false,null,new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("21")));
+        assertFalse(service.byAuthor(3,"u2",new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("21")));
+        jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_collected) VALUES(3,21,1)");
+        var community=new CommunityService(jdbc);assertEquals(0,community.collections(3,new PageQuery()).getTotal());
+        assertThrows(BizException.class,()->community.comments(3,21,new PageQuery()));
+        assertThrows(BizException.class,()->community.addComment(3,21,new CommunityDtos.CommentRequest("不能读取的文章也不能评论","private-comment-01")));
+        var content=new com.threadfit.glucopilot.content.service.ContentService(mock(com.threadfit.glucopilot.content.mapper.CmsBannerMapper.class),mock(CmsNewsMapper.class),mock(com.threadfit.glucopilot.content.mapper.NewsUserActionMapper.class),community);
+        assertThrows(BizException.class,()->content.getNewsDetail(21L,3L));
+        assertEquals("用户已发布",service.get(null,21,true).title());
+    }
+    @Test void selectedFriendsMustBeMutualAndPermissionIsRevokedWhenEitherSideUnfollows() {
+        peer(3);peer(4);mutual(3);mutual(4);
+        assertEquals(2,access().friends(2,null,new PageQuery()).getTotal());
+        tx().execute(s->access().change(2,21,new ArticleAccessService.Change("FRIENDS",List.of("3"),0)));
+        assertEquals("FRIENDS",service.get(3L,21,false).visibility());assertEquals(List.of(),service.get(3L,21,false).viewerIds());
+        assertEquals(List.of("3"),service.get(2L,21,false).viewerIds());assertThrows(BizException.class,()->service.get(4L,21,false));
+        assertThrows(BizException.class,()->access().change(4,21,new ArticleAccessService.Change("PUBLIC",List.of(),1)));
+        jdbc.update("UPDATE community_follow SET following=0 WHERE follower_id=3 AND target_key='u2'");
+        assertThrows(BizException.class,()->service.get(3L,21,false));assertEquals(1,access().friends(2,null,new PageQuery()).getTotal());
+        assertThrows(BizException.class,()->access().change(2,21,new ArticleAccessService.Change("FRIENDS",List.of("3"),1)));
+    }
+    @Test void visibilityValidationVersionsAndRetriesDoNotChangeArticleReviewState() {
+        peer(3);
+        for(var request:List.of(new ArticleAccessService.Change("FRIENDS",List.of(),0),new ArticleAccessService.Change("FRIENDS",List.of("3"),0),new ArticleAccessService.Change("PUBLIC",List.of("3"),0),new ArticleAccessService.Change("ANY",List.of(),0)))assertThrows(BizException.class,()->tx().execute(s->access().change(2,21,request)));
+        tx().execute(s->access().change(2,21,new ArticleAccessService.Change("PRIVATE",List.of(),0)));
+        assertEquals(1,tx().execute(s->access().change(2,21,new ArticleAccessService.Change("PRIVATE",List.of(),0))).revision());
+        assertThrows(BizException.class,()->tx().execute(s->access().change(2,21,new ArticleAccessService.Change("PUBLIC",List.of(),0))));
+        assertEquals("PUBLISHED",service.get(2L,21,false).state());
+        tx().execute(s->access().change(2,20,new ArticleAccessService.Change("PUBLIC",List.of(),0)));
+        assertEquals("PENDING_ADMIN",service.get(2L,20,false).state());assertThrows(BizException.class,()->service.get(3L,20,false));
+    }
+    @Test void realViewsAreDeduplicatedPerAccountAndDayAndNeverCountTheAuthor() {
+        peer(3);peer(4);
+        assertEquals(0L,access().recordView(2,21).get("viewCount"));
+        assertEquals(1L,access().recordView(3,21).get("viewCount"));assertEquals(1L,access().recordView(3,21).get("viewCount"));
+        assertEquals(2L,access().recordView(4,21).get("viewCount"));assertEquals(2,service.get(2L,21,false).viewCount());
+        tx().execute(s->access().change(2,21,new ArticleAccessService.Change("PRIVATE",List.of(),0)));
+        assertThrows(BizException.class,()->access().recordView(3,21));assertEquals(2,access().views(21));
+        jdbc.update("UPDATE user_account SET account_status=0 WHERE id=3");assertThrows(BizException.class,()->access().recordView(3,10));
+    }
+    @Test void hidingAnArticleIsPersistentIdempotentAndOnlyAffectsTheCurrentViewer() {
+        peer(3);peer(4);tx().executeWithoutResult(s->access().hidden(3,21,true));tx().executeWithoutResult(s->access().hidden(3,21,true));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM community_article_hidden WHERE user_id=3",Integer.class));
+        assertThrows(BizException.class,()->service.get(3L,21,false));assertEquals("21",service.get(4L,21,false).id());
+        assertFalse(service.feed(3,null,false,null,new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("21")));
+        assertTrue(service.feed(4,null,false,null,new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("21")));
+        access().hidden(3,21,false);assertEquals("21",service.get(3L,21,false).id());
+        assertThrows(BizException.class,()->access().hidden(2,21,true));
+    }
+    @Test void reportingHidesOnlyAfterSuccessfulCommitAndDoesNotGloballyUnpublish() {
+        peer(3);peer(4);var report=new ReportRequest("ARTICLE",21,"SPAM","请求核查","hide-report-001");
+        tx().executeWithoutResult(s->{service.report(3,report);s.setRollbackOnly();});assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM community_article_hidden",Integer.class));
+        var first=tx().execute(s->service.report(3,report));var retry=tx().execute(s->service.report(3,report));assertEquals(first.get("id"),retry.get("id"));
+        assertThrows(BizException.class,()->service.get(3L,21,false));assertEquals("PUBLISHED",service.get(4L,21,false).state());
+    }
+    @Test void draftPublicationPreservesSelectedAudienceInTheSameTransaction() {
+        peer(3);mutual(3);var drafts=drafts();
+        var payload=new CommunityDraftService.Payload("好友分享","今天把自己的生活记录整理了一下，想和互相关注的好友分享。",List.of("daily"),List.of(),List.of(),"visibility-draft-01",null,21L,1,List.of(),"FRIENDS",List.of("3"));
+        var saved=tx().execute(s->drafts.create(2,payload));assertEquals("FRIENDS",saved.visibility());assertEquals(List.of("3"),saved.viewerIds());
+        var published=tx().execute(s->drafts.publish(2,Long.parseLong(saved.id()),new CommunityDraftService.Publish(saved.revision(),"visibility-publish-01")));
+        assertEquals("FRIENDS",published.visibility());assertEquals(List.of("3"),published.viewerIds());assertEquals("AI_PENDING",published.state());
+        assertEquals(0,drafts.list(2,new PageQuery()).getTotal());assertThrows(BizException.class,()->service.get(3L,21,false));
+    }
+    @Test void interactionNotificationsDoNotExposeArticlesAfterPrivacyChanges() {
+        peer(3);peer(4);mutual(3);var community=new CommunityService(jdbc);
+        var root=community.addComment(2,21,new CommunityDtos.CommentRequest("文章里的生活记录","privacy-root-01"));
+        var reply=community.addComment(3,21,new CommunityDtos.CommentRequest("回复作者的分享","privacy-reply-01",Long.parseLong(root.id())));
+        var notification=new CommunityNotificationService(jdbc,community);assertEquals(1,notification.summary(2).comments());
+        var comment=community.addComment(4,21,new CommunityDtos.CommentRequest("回复另一位糖友","privacy-reply-02",Long.parseLong(reply.id())));
+        assertEquals(1,notification.summary(3).comments());
+        tx().execute(s->access().change(2,21,new ArticleAccessService.Change("PRIVATE",List.of(),0)));
+        assertEquals(0,notification.list(3,"COMMENT",new PageQuery()).getTotal());assertNotNull(comment);
+    }
+    private long createReport(String key){return Long.parseLong(tx().execute(s->service.report(2,new ReportRequest("ARTICLE",10,"SPAM","请求核查",key))).get("id").toString());}
+    @Test void reportFeedbackIsPrivateAndPersistsAfterTargetIsHidden() {
+        long id=createReport("feedback-hidden-01");
+        assertEquals("官方已发布",feedback().get(2,id).targetTitle());
+        assertEquals("OPEN",feedback().get(2,id).state());
+        jdbc.update("INSERT INTO user_account(id) VALUES(3)");
+        assertEquals(0,feedback().mine(3,new PageQuery()).getTotal());
+        assertThrows(BizException.class,()->feedback().get(3,id));assertThrows(BizException.class,()->feedback().read(3,id));
+        tx().executeWithoutResult(s->service.resolveReport(99,id,new Resolution("HIDE_ARTICLE","已核查并下架文章，感谢反馈。")));
+        var result=feedback().get(2,id);assertEquals("RESOLVED",result.state());assertEquals("HIDE_ARTICLE",result.resolution());
+        assertEquals("已核查并下架文章，感谢反馈。",result.resolutionNote());assertNotNull(result.resolvedAt());assertFalse(result.feedbackRead());
+        assertEquals(2,jdbc.queryForObject("SELECT publish_status FROM cms_news WHERE id=10",Integer.class));
+        assertEquals(1,feedback().mine(2,new PageQuery()).getTotal());
+        jdbc.update("UPDATE cms_news SET is_deleted=1,deleted_at=CURRENT_TIMESTAMP,deleted_by=99,title='已修改标题' WHERE id=10");assertEquals("官方已发布",feedback().get(2,id).targetTitle());
+    }
+    @Test void reportFeedbackUnreadSummaryAndReadAreScopedAndIdempotent() {
+        long first=createReport("feedback-read-01");feedback().read(2,first);assertFalse(feedback().get(2,first).feedbackRead());
+        var notices=new CommunityNotificationService(jdbc,new CommunityService(jdbc));assertEquals(0,notices.summary(2).reports());
+        tx().executeWithoutResult(s->service.resolveReport(99,first,new Resolution("DISMISS","核查后未发现违规内容。")));
+        long second=createReport("feedback-read-02");tx().executeWithoutResult(s->service.resolveReport(99,second,new Resolution("RESOLVE","已完成核查。")));
+        assertEquals(2,notices.summary(2).reports());assertEquals(2,notices.summary(2).total());assertEquals(Long.toString(second),notices.summary(2).latestReportId());
+        feedback().read(2,first);feedback().read(2,first);assertTrue(feedback().get(2,first).feedbackRead());assertFalse(feedback().get(2,second).feedbackRead());
+        assertEquals(1,notices.summary(2).reports());feedback().read(2,second);assertEquals(0,notices.summary(2).total());assertNull(notices.summary(2).latestReportId());
+    }
+    @Test void failedOrRolledBackReportResolutionDoesNotCreateFeedback() {
+        long id=createReport("feedback-rollback-01");
+        assertThrows(BizException.class,()->tx().executeWithoutResult(s->service.resolveReport(99,id,new Resolution("DISMISS"," "))));
+        tx().executeWithoutResult(s->{service.resolveReport(99,id,new Resolution("DISMISS","未发现问题"));s.setRollbackOnly();});
+        assertEquals("OPEN",feedback().get(2,id).state());assertNull(feedback().get(2,id).resolvedAt());
+        assertEquals(0,new CommunityNotificationService(jdbc,new CommunityService(jdbc)).summary(2).reports());
+        tx().executeWithoutResult(s->service.resolveReport(99,id,new Resolution("DISMISS","未发现问题")));
+        assertThrows(BizException.class,()->tx().executeWithoutResult(s->service.resolveReport(99,id,new Resolution("RESOLVE","不能重复处理"))));
+        assertEquals("DISMISS",feedback().get(2,id).resolution());
+    }
+    @Test void reportFeedbackHttpUsesCurrentUserAndDoesNotExposeAdministrativeOrTargetPrivateFields()throws Exception {
+        long id=createReport("feedback-http-01");tx().executeWithoutResult(s->service.resolveReport(99,id,new Resolution("DISMISS","感谢反馈，已完成核查。")));
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new CommunityReportFeedbackController(feedback()))
+                .setControllerAdvice(new com.threadfit.glucopilot.common.exception.GlobalExceptionHandler()).build();
+        try{
+            com.threadfit.glucopilot.common.context.RequestContext.setUserId(2L);
+            var response=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/community/reports/mine")).andReturn().getResponse();
+            assertEquals(200,response.getStatus());var json=new tools.jackson.databind.ObjectMapper().readTree(response.getContentAsString());
+            var report=json.get("data").get("records").get(0);assertEquals(Long.toString(id),report.get("id").asText());assertFalse(report.has("resolved_by"));assertFalse(report.has("reporter_id"));assertFalse(report.has("target_content"));
+            assertEquals(200,mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/community/reports/"+id+"/read")).andReturn().getResponse().getStatus());
+            assertTrue(feedback().get(2,id).feedbackRead());
+            jdbc.update("INSERT INTO user_account(id) VALUES(3)");com.threadfit.glucopilot.common.context.RequestContext.setUserId(3L);
+            assertEquals(404,mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/community/reports/"+id)).andReturn().getResponse().getStatus());
+            assertEquals(404,mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/community/reports/"+id+"/read")).andReturn().getResponse().getStatus());
+            com.threadfit.glucopilot.common.context.RequestContext.clear();
+            assertEquals(401,mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/community/reports/mine")).andReturn().getResponse().getStatus());
+        }finally{com.threadfit.glucopilot.common.context.RequestContext.clear();}
+    }
+    @Test void reportFeedbackPaginationAndInactiveAccountsAreValidated() {
+        for(String key:List.of("feedback-page-01","feedback-page-02","feedback-page-03"))createReport(key);
+        var q=new PageQuery();q.setPageSize(2);var first=feedback().mine(2,q);assertEquals(3,first.getTotal());assertEquals(2,first.getRecords().size());
+        q.setPageNum(2);assertEquals(1,feedback().mine(2,q).getRecords().size());q.setPageSize(51);assertThrows(BizException.class,()->feedback().mine(2,q));
+        jdbc.update("UPDATE user_account SET account_status=0 WHERE id=2");assertThrows(BizException.class,()->feedback().mine(2,new PageQuery()));
+    }
     @Test void draftReadAndListAcceptMysqlDatetimeWithoutTimestampCast() {
         var saved=tx().execute(s->drafts().create(2,draft("MySQL datetime regression","draft-mysql-time",null)));
         var mysql=new JdbcTemplate(jdbc.getDataSource()) {
@@ -153,6 +293,11 @@ class AdminCommunityArticlesTest {
         jdbc.update("UPDATE cms_news SET publish_status=1 WHERE id=20");
         jdbc.update("UPDATE community_article SET state='PUBLISHED' WHERE news_id=20");
         assertEquals(4,images.read(3L,null,50).bytes().length);
+        tx().execute(s->access().change(2,20,new ArticleAccessService.Change("PRIVATE",List.of(),0)));
+        assertThrows(BizException.class,()->images.read(3L,null,50));assertEquals(4,images.read(2L,null,50).bytes().length);assertEquals(4,images.read(null,20L,50).bytes().length);
+        mutual(3);tx().execute(s->access().change(2,20,new ArticleAccessService.Change("FRIENDS",List.of("3"),1)));
+        assertEquals(4,images.read(3L,null,50).bytes().length);
+        jdbc.update("UPDATE community_follow SET following=0 WHERE follower_id=3 AND target_key='u2'");assertThrows(BizException.class,()->images.read(3L,null,50));
         jdbc.update("UPDATE community_article SET state='HIDDEN' WHERE news_id=20");
         assertThrows(BizException.class,()->images.read(3L,null,50));
         photo.setBizType(3);assertThrows(BizException.class,()->images.read(2L,null,50));

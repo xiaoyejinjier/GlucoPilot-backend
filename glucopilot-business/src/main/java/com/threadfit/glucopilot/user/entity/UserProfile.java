@@ -12,6 +12,7 @@ public class UserProfile extends BaseEntity {
 
     private Long userId;
     private String nickname;
+    private String bio;
     private String avatarUrl;
     private String avatarText;
     private Integer gender;

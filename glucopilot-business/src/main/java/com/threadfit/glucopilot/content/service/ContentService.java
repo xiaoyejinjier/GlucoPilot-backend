@@ -51,12 +51,18 @@ public class ContentService {
     }
 
     public PageResult<ContentDtos.NewsListItem> pageNews(Integer channelCode, PageQuery query) {
+        return pageNews(channelCode,query,null);
+    }
+
+    public PageResult<ContentDtos.NewsListItem> pageNews(Integer channelCode, PageQuery query,Long viewer) {
         Page<CmsNews> page = newsMapper.selectPage(
                 new Page<>(query.getPageNum(), query.getPageSize()),
                 new LambdaQueryWrapper<CmsNews>()
                         .eq(CmsNews::getPublishStatus, PUBLISHED)
                         .le(CmsNews::getPublishAt, LocalDateTime.now())
                         .eq(channelCode != null, CmsNews::getChannelCode, channelCode)
+                        .apply(com.threadfit.glucopilot.community.ArticleAccessService.publishedSql("cms_news"))
+                        .apply(com.threadfit.glucopilot.community.ArticleAccessService.readableSql("cms_news",viewer))
                         .orderByDesc(CmsNews::getPublishAt)
                         .orderByDesc(CmsNews::getId));
         Page<ContentDtos.NewsListItem> mapped = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
@@ -65,6 +71,7 @@ public class ContentService {
     }
 
     public ContentDtos.NewsDetail getNewsDetail(Long newsId, Long userIdOrNull) {
+        community.requireReadable(userIdOrNull,newsId);
         CmsNews news = requirePublishedNews(newsId);
         Boolean liked = null;
         Boolean collected = null;
@@ -95,6 +102,7 @@ public class ContentService {
                 .collected(collected)
                 .author(community.newsAuthor(userIdOrNull, newsId))
                 .commentCount(community.commentCount(newsId))
+                .viewCount(community.viewCount(newsId))
                 .build();
     }
 
@@ -106,6 +114,7 @@ public class ContentService {
         // Serialize all actions on an article before reading either counters or user flags.
         // Otherwise concurrent users overwrite each other's counts and first-like inserts race.
         CmsNews news = newsMapper.selectForAction(newsId);
+        community.requireReadable(userId,newsId);
         if (news == null || news.getPublishStatus() == null || news.getPublishStatus() != PUBLISHED ||
                 (news.getPublishAt() != null && news.getPublishAt().isAfter(LocalDateTime.now()))) {
             throw new BizException(ErrorCode.NOT_FOUND, "资讯不存在");
@@ -188,6 +197,7 @@ public class ContentService {
                 .publishAt(n.getPublishAt())
                 .likeCount(n.getLikeCount())
                 .collectCount(n.getCollectCount())
+                .viewCount(community.viewCount(n.getId()))
                 .build();
     }
 

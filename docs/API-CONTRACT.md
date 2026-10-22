@@ -1,5 +1,45 @@
 # API 契约
 
+## 用户端设备管理集成（2026-10-21）
+
+合入GitHub设备实现：GET /api/v1/devices返回本人未删除的设备列表（含停用项）；POST /api/v1/devices/bind接收{deviceSn,provider,deviceName?}，SN最长64、名称最长64、provider属于既有DeviceProviders。返回{id,deviceSn,deviceName,provider,deviceStatus,lastSyncAt,bound:true}，空闲SN可认领，本人重复请求不新增档案，他人占用返回409，停用设备不由自助绑定重新启用。POST /api/v1/devices/{id}/unbind仅本人操作，明确清空user_id并保留档案，不能改变他人归属。沿用user_device，无新增迁移。
+
+前端待适配登记仍只保存在当前登录会话；确认绑定后才进入持久化设备列表。设备状态区分“已绑定 / 已停用”和同步时间，不以最近同步推断真实在线状态。当前小程序没有厂商授权或真实设备拉取链路，因此设备页仅刷新服务端状态，不调用defaultMockReadings或写入模拟血糖；既有设备原始报文同步接口不变。显示适配器来源名称，不向用户呈现provider字段等实现说明。
+
+## 社区资料、浏览量与可见范围（2026-10-21）
+
+本人GET /users/me增加phone原号码（仅本人鉴权响应），profile增加bio；PATCH /users/me/profile支持bio（最多160字，空串清空）。公开资料只展示昵称、头像、签名，不公开手机号；communityKey继续作为内部路由身份，用户界面不再展示社区号，用户搜索按昵称进行。
+
+GET /community/friends按PageQuery返回当前有效、互相关注的用户Profile页，可选keyword昵称筛选。投稿Submit与草稿Payload增加visibility（PUBLIC/PRIVATE/FRIENDS）及viewerIds:string[]（最多50个不重复的有效互相关注用户ID）；FRIENDS必须至少选择1人，其他模式必须为空。新投稿默认PUBLIC，旧客户端修改时未提供visibility保留原权限。草稿保存这些设置并在发布事务中应用，发布仍需AI初审及管理员终审。
+
+Article增加viewCount、visibility、visibilityRevision、viewerIds（名单只返回给作者，其他人为空）。PUT /community/articles/{id}/visibility {visibility,viewerIds,revision}仅作者可改，支持公开、仅自己和指定互关好友；不修改正文或绕过审核，revision为权限版本（旧文章默认0）。失效版本409；不能查询或修改他人权限。朋友名单校验当前互关关系，取消任一方向关注后不再具有好友可见权限。
+
+POST /community/articles/{id}/views无body，验证当前用户具有阅读权限后记真实浏览，按文章+登录用户+自然日去重；作者本人不计数，返回{viewCount}。列表和详情均展示真实计数，历史文章从0开始，不伪造浏览。
+
+PUT /community/articles/{id}/hidden {hidden:boolean}幂等保存本人的减少展示偏好；前端菜单显示“举报 / 减少此类内容”，隐藏成功后从本人列表移除。ARTICLE举报成功同事务保存本人隐藏，取消举报表单不隐藏。隐藏不影响其他用户、文章全局状态或管理员审核。
+
+V37增加文章权限、指定读者、浏览去重、本人隐藏表和签名/草稿权限字段。社区/作者/收藏/旧资讯列表、文章详情、评论回复、点赞收藏、图片视频及互动通知都按阅读权限过滤；无权统一404，不通过媒体或旧接口绕过。管理员保持原审核权限，可检查待审及私密投稿。
+
+## 本人举报反馈（2026-10-21）
+
+GET /api/v1/community/reports/mine 按PageQuery返回本人举报页；GET /api/v1/community/reports/{id}返回本人举报详情。字段为id、targetType、targetId、targetTitle、reason、details、state、resolution、resolutionNote、createdAt、resolvedAt、feedbackRead。目标标题在新举报提交时保存快照；旧数据仅显示类型及编号。返回不包含管理员ID、他人举报或私信/评论原文；文章下架后本人仍能查看处理结果，不能借此重新读取下架正文。非本人或不存在的ID统一404。
+
+PUT /api/v1/community/reports/{id}/read 无body，幂等标记该条已处理举报的反馈已读；只限本人，不会顺带标记后来到达或其他举报。待处理举报不标已读。管理员既有POST /admin/v1/community/reports/{id}/resolve仍要求管理员身份和写权限、锁定OPEN记录、填写处理说明；提交处理与反馈状态在同一事务内生效，重复处理仍409。
+
+GET /community/information/summary增加reports（本人未读处理反馈数）、latestReportId（用于提醒游标）；total包含reports。记录页“提醒与回复”在有未读处理反馈时显示“举报反馈”，点击进入本人举报列表；列表/详情中的反馈阅读成功后刷新全局未读。管理员说明直接展示给举报人，管理端须明确此用途。沿用5秒前台轮询，不发送外部消息。
+
+V36仅为community_report增加target_title、feedback_read_at和本人反馈查询索引，不回填伪造的管理员反馈、不修改旧处理结论；已有已处理举报作为未读反馈可查看。
+
+存储故障区分：MinIO明确返回NoSuchKey/NoSuchObject时视为对象缺失；连接中断、超时、鉴权或服务错误返回500业务错误“文件存储暂时不可用，请稍后重试”，不能将其误报为未上传/不存在。食品配图登记同时保存bucket_name，已有永久图片业务地址不变。
+
+## MinIO 头像稳定读取（2026-10-21）
+
+AVATAR（bizType=1）登记返回稳定的相对fileUrl `/api/v1/media-files/avatars/{mediaId}`，其余上传凭证/直传/登记字段不变。PATCH /users/me/profile仍限定本人可用头像，兼容已有登记绝对URL；新提交统一保存稳定头像路径，临时文件不得提交。
+
+GET /api/v1/media-files/avatars/{mediaId}返回公开头像图片（二进制image/jpeg、image/png、image/webp或image/gif，与头像上传白名单一致；Cache-Control:no-store、X-Content-Type-Options:nosniff）；只读取正常账号所属、未删除且可用的AVATAR媒体，禁用/删除/非头像/账号停用返回404。该入口不公开桶或其他业务图片；MinIO/OSS桶保持私有，由后端按登记对象键读取，不保存临时签名下载URL。前端将稳定相对路径解析到当前API地址，保持头像展示与上传登记身份分离。
+
+local迁移到团队MinIO时先备份，按原storageKey复制并比对字节摘要，确认目标完整后更新对应media_file的桶定位及匹配的个人头像路径；保留媒体ID、业务归属及原文件。目标桶确认前不切换正在使用的存储配置。
+
 ## 个人头像与草稿修复（2026-10-20）
 
 头像沿用现有上传协议：bizType=1，取凭证、PUT文件、登记完成后，以登记返回的fileUrl调用PATCH /users/me/profile。手机临时路径/本地持久文件路径不能作为avatarUrl提交；未修改头像时省略avatarUrl，清空时传空串。上传期间不能保存资料，失败保留原头像，账号变化或页面销毁后忽略迟到结果。后端继续校验当前用户的可用AVATAR媒体，不放宽所有权。

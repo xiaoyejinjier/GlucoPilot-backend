@@ -102,12 +102,15 @@ public class MediaFileServiceImpl implements MediaFileService {
 
     @Override
     public MediaFile findAvailableAvatar(Long userId, String fileUrl) {
-        return mediaFileMapper.selectOne(new LambdaQueryWrapper<MediaFile>()
+        Long reference = AvatarMediaService.referenceId(fileUrl);
+        var query = new LambdaQueryWrapper<MediaFile>()
                 .eq(MediaFile::getUserId, userId)
                 .eq(MediaFile::getBizType, MediaBizType.AVATAR.getCode())
-                .eq(MediaFile::getFileUrl, fileUrl)
                 .eq(MediaFile::getFileStatus, FILE_STATUS_AVAILABLE)
-                .last("LIMIT 1"));
+                .last("LIMIT 1");
+        if (reference == null) query.eq(MediaFile::getFileUrl, fileUrl);
+        else query.eq(MediaFile::getId, reference);
+        return mediaFileMapper.selectOne(query);
     }
 
     @Override
@@ -202,7 +205,7 @@ public class MediaFileServiceImpl implements MediaFileService {
     private MediaFileRegisterResult toResult(MediaFile row) {
         return MediaFileRegisterResult.builder()
                 .id(String.valueOf(row.getId()))
-                .fileUrl(row.getFileUrl())
+                .fileUrl(row.getBizType().equals(MediaBizType.AVATAR.getCode()) ? AvatarMediaService.path(row.getId()) : row.getFileUrl())
                 .build();
     }
 }

@@ -36,6 +36,7 @@ class FoodImageServiceTest {
         when(storage.objectExists(KEY)).thenReturn(true);
         when(storage.getObject(KEY)).thenReturn(bytes);
         when(storage.provider()).thenReturn(CodeEnum.StorageProvider.MINIO);
+        when(storage.bucket()).thenReturn("team-foods");
         when(mediaFileMapper.insert(any(MediaFile.class))).thenAnswer(invocation -> {
             invocation.<MediaFile>getArgument(0).setId(72L);
             return 1;
@@ -51,6 +52,7 @@ class FoodImageServiceTest {
         assertNull(row.getUserId());
         assertEquals(OPS_ID, row.getOpsId());
         assertEquals("FOOD_IMAGE", row.getBizId());
+        assertEquals("team-foods", row.getBucketName());
         assertEquals(2, row.getWidthPx());
         assertEquals(3, row.getHeightPx());
         assertEquals(64, row.getSha256Hex().length());

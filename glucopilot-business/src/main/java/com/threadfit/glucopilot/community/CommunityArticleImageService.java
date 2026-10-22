@@ -36,7 +36,7 @@ public class CommunityArticleImageService {
                 || photo.getStorageKey()==null || photo.getStorageKey().isBlank()) throw missing();
         if(articleId!=null) {
             if(jdbc.queryForObject("SELECT COUNT(*) FROM community_article_image i JOIN cms_news n ON n.id=i.news_id WHERE i.news_id=? AND i.media_id=? AND n.is_deleted=0",Long.class,articleId,mediaId)!=1) throw missing();
-        } else if(!Objects.equals(viewer,photo.getUserId()) && jdbc.queryForObject("SELECT COUNT(*) FROM community_article_image i JOIN cms_news n ON n.id=i.news_id JOIN community_article a ON a.news_id=n.id WHERE i.media_id=? AND n.is_deleted=0 AND n.publish_status=1 AND n.publish_at<=CURRENT_TIMESTAMP AND a.state='PUBLISHED'",Long.class,mediaId)==0) throw missing();
+        } else if(!Objects.equals(viewer,photo.getUserId()) && jdbc.queryForObject("SELECT COUNT(*) FROM community_article_image i JOIN cms_news n ON n.id=i.news_id JOIN community_article a ON a.news_id=n.id WHERE i.media_id=? AND n.is_deleted=0 AND n.publish_status=1 AND n.publish_at<=CURRENT_TIMESTAMP AND a.state='PUBLISHED' AND "+ArticleAccessService.publishedSql("n")+" AND "+ArticleAccessService.readableSql("n",viewer),Long.class,mediaId)==0) throw missing();
         byte[] bytes=storage.getObject(photo.getStorageKey());
         if(bytes==null || bytes.length==0 || bytes.length>max || bytes.length!=photo.getSizeBytes()) throw missing();
         return new Image(bytes,photo.getMimeType());

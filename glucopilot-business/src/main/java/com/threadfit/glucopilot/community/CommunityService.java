@@ -27,9 +27,8 @@ public class CommunityService {
     private void requireUser(long userId) {
         if (jdbc.queryForObject("SELECT COUNT(*) FROM user_account u WHERE u.id=? AND "+ACTIVE,Long.class,userId)!=1) throw missing();
     }
-    private void requireNews(long newsId) {
-        if (jdbc.queryForObject("SELECT COUNT(*) FROM cms_news WHERE id=? AND is_deleted=0 AND publish_status=1 AND publish_at<=CURRENT_TIMESTAMP",Long.class,newsId)!=1) throw missing();
-    }
+    public void requireReadable(Long viewer,long newsId) { new ArticleAccessService(jdbc).requireReadable(viewer,newsId); }
+    public long viewCount(long newsId) { return new ArticleAccessService(jdbc).views(newsId); }
     private void requirePeer(long viewer,long peer) { requireUser(viewer);requireUser(peer);if(viewer==peer) throw new BizException(ErrorCode.BAD_REQUEST,"不能给自己发私信"); }
     private void page(PageQuery q) {
         if(q.getPageNum()<1 || q.getPageSize()<1 || q.getPageSize()>50) throw new BizException(ErrorCode.BAD_REQUEST,"每页条数应为1～50");
@@ -42,8 +41,8 @@ public class CommunityService {
         long id;
         try { id=Long.parseLong(key.substring(1)); } catch(NumberFormatException ex) { throw missing(); }
         if(key.charAt(0)=='u') {
-            var rows=jdbc.query("SELECT "+USER_FIELDS+USER_FROM+" WHERE u.id=? AND "+ACTIVE,
-                    (rs,n)->new Profile(key,Long.toString(id),rs.getString("nickname"),rs.getString("avatar_url"),"",following(viewer,key),Objects.equals(viewer,id)),id);
+            var rows=jdbc.query("SELECT "+USER_FIELDS+",COALESCE(p.bio,'') bio"+USER_FROM+" WHERE u.id=? AND "+ACTIVE,
+                    (rs,n)->new Profile(key,Long.toString(id),rs.getString("nickname"),rs.getString("avatar_url"),rs.getString("bio"),following(viewer,key),Objects.equals(viewer,id)),id);
             if(rows.isEmpty()) throw missing();
             return rows.getFirst();
         }
@@ -90,12 +89,12 @@ public class CommunityService {
     }
     public PageResult<ContentDtos.NewsListItem> collections(long viewer,PageQuery q) {
         requireUser(viewer);page(q);
-        String from=" FROM news_user_action a JOIN cms_news n ON n.id=a.news_id WHERE a.user_id=? AND a.is_deleted=0 AND a.is_collected=1 AND n.is_deleted=0 AND n.publish_status=1 AND n.publish_at<=CURRENT_TIMESTAMP";
+        String from=" FROM news_user_action a JOIN cms_news n ON n.id=a.news_id WHERE a.user_id=? AND a.is_deleted=0 AND a.is_collected=1 AND "+ArticleAccessService.publishedSql("n")+" AND "+ArticleAccessService.readableSql("n",viewer);
         long total=jdbc.queryForObject("SELECT COUNT(*)"+from,Long.class,viewer);
         var rows=jdbc.query("SELECT n.*"+from+" ORDER BY a.gmt_modified DESC,n.id DESC LIMIT ? OFFSET ?",(rs,i)->ContentDtos.NewsListItem.builder()
                 .id(rs.getString("id")).title(rs.getString("title")).summaryText(rs.getString("summary_text"))
                 .channelCode(rs.getInt("channel_code")).contentType(rs.getInt("content_type")).coverUrl(rs.getString("cover_url"))
-                .publishAt(rs.getTimestamp("publish_at").toLocalDateTime()).likeCount(rs.getInt("like_count")).collectCount(rs.getInt("collect_count")).build(),viewer,q.getPageSize(),q.offset());
+                .publishAt(rs.getTimestamp("publish_at").toLocalDateTime()).likeCount(rs.getInt("like_count")).collectCount(rs.getInt("collect_count")).viewCount(viewCount(rs.getLong("id"))).build(),viewer,q.getPageSize(),q.offset());
         return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
     }
     public long commentCount(long newsId) {
@@ -118,7 +117,7 @@ public class CommunityService {
                 Long.toString(root==null?id:root),target==null?null:target.toString(),targetAuthor,page.records(),total,page.hasMore(),page.nextAfterId());
     }
     public PageResult<Comment> comments(long viewer,long news,PageQuery q) {
-        requireUser(viewer);requireNews(news);page(q);
+        requireUser(viewer);requireReadable(viewer,news);page(q);
         String filter="c.news_id=? AND c.root_comment_id IS NULL AND "+VISIBLE_COMMENT;
         var rows=jdbc.query("SELECT c.* FROM community_comment c WHERE "+filter+" ORDER BY c.id DESC LIMIT ? OFFSET ?",(rs,i)->comment(viewer,rs),news,q.getPageSize(),q.offset());
         long total=jdbc.queryForObject("SELECT COUNT(*) FROM community_comment c WHERE "+filter,Long.class,news);
@@ -126,7 +125,7 @@ public class CommunityService {
     }
     private long replyCount(long news,long root) { return jdbc.queryForObject("SELECT COUNT(*) FROM community_comment c WHERE c.news_id=? AND c.root_comment_id=? AND "+VISIBLE_COMMENT,Long.class,news,root); }
     public Replies replies(long viewer,long news,long root,Long after,int size) {
-        requireUser(viewer);requireNews(news);
+        requireUser(viewer);requireReadable(viewer,news);
         if(size<1 || size>50 || (after!=null && after<1)) throw new BizException(ErrorCode.BAD_REQUEST,"回复分页参数错误");
         if(jdbc.queryForObject("SELECT COUNT(*) FROM community_comment c WHERE c.id=? AND c.news_id=? AND c.root_comment_id IS NULL AND "+VISIBLE_COMMENT,Long.class,root,news)!=1) throw missing();
         return replyPage(viewer,news,root,after,size);
@@ -153,7 +152,7 @@ public class CommunityService {
     }
     @Transactional
     public Comment addComment(long viewer,long news,CommentRequest request) {
-        requireUser(viewer);requireNews(news);String content=text(request.content(),500,request.clientRequestId());
+        requireUser(viewer);requireReadable(viewer,news);String content=text(request.content(),500,request.clientRequestId());
         Long target=request.replyToCommentId();if(target!=null && target<1) throw new BizException(ErrorCode.BAD_REQUEST,"回复目标不合法");
         var prior=jdbc.queryForList("SELECT id FROM community_comment WHERE user_id=? AND client_request_id=?",Long.class,viewer,request.clientRequestId());
         if(prior.isEmpty()) {
@@ -175,7 +174,7 @@ public class CommunityService {
     }
     @Transactional
     public void deleteComment(long viewer,long news,long comment) {
-        requireUser(viewer);requireNews(news);
+        requireUser(viewer);requireReadable(viewer,news);
         if(jdbc.queryForObject("SELECT COUNT(*) FROM community_comment WHERE id=? AND news_id=? AND user_id=?",Long.class,comment,news,viewer)==0) throw missing();
         jdbc.update("UPDATE community_comment SET is_deleted=1 WHERE id=? AND news_id=? AND user_id=?",comment,news,viewer);
     }

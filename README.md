@@ -59,4 +59,6 @@ docker build -t glucopilot-api:local .
 
 课程演示无需开通 OSS：设置服务器 `.env` 中 `STORAGE_PROVIDER=disabled`，不创建对象存储客户端，也不需要 OSS 凭据。上传及对象读取明确拒绝，不返回模拟成功。AI 仍需单独设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false` 关闭。恢复存储时选择已有 provider 并填写真实配置，重建容器。
 
-本机联调内容/食物图片可用 MinIO：`docker compose -f compose.minio.yaml up -d`，在控制台创建桶（默认名 `glucopilot`），`.env` 设 `STORAGE_PROVIDER=minio` 与 `MINIO_*`（见 `.env.example`）。未起 MinIO 时保持 `STORAGE_PROVIDER=local` 即可。
+团队联调统一连接已部署的 MinIO，使用本项目独立私有桶 `glucopilot`。每位成员仅在自己的 `.env` 配置 `STORAGE_PROVIDER=minio`、`MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_BUCKET`，保持目标服务和桶一致。具体约定与迁移步骤见 [图片存储说明](docs/IMAGE-STORAGE.md)。
+
+dev会读取本机`.env`，其中的`STORAGE_PROVIDER`会覆盖本地存储默认值。已有文件保存在本机时应明确使用`local`；建议将`LOCAL_UPLOAD_DIR`设置为已有上传目录的绝对路径，避免IDE工作目录改变后落到另一个`data/uploads`。切换到OSS/MinIO不会自动搬迁旧本地文件，云端迁移需要单独处理。私密配置只留在本机。

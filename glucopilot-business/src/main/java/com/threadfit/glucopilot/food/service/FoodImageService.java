@@ -76,6 +76,7 @@ public class FoodImageService {
         row.setBizType(MediaBizType.CMS.getCode());
         row.setBizId(BIZ_ID);
         row.setStorageProvider(storage.provider().getCode());
+        row.setBucketName(storage.bucket());
         row.setStorageKey(key);
         // file_url 为非空列，先插入再用数据库生成的 ID 建立永久资源地址。
         row.setFileUrl("");

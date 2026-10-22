@@ -73,6 +73,7 @@ class UserAccountServiceTest {
 
         assertEquals(1, me.getAccountStatus());
         assertEquals("138****0000", me.getPhoneMasked());
+        assertEquals(account().getPhone(),me.getPhone());
         assertEquals("吴先生", me.getProfile().getNickname());
         assertEquals(2, me.getHealth().getDiabetesType());
         assertEquals(true, me.getSettings().getDisclaimerAgreed());
@@ -100,6 +101,20 @@ class UserAccountServiceTest {
         assertEquals("吴先生", accountCaptor.getValue().getUsername());
     }
 
+    @Test void signatureCanBeSavedWithoutChangingOtherProfileFields() {
+        when(userProfileMapper.selectOne(any())).thenReturn(profile());
+        var request=new UserDtos.ProfilePatchRequest();request.setBio("  认真记录生活  ");
+        service.patchProfile(USER_ID,request);
+        var value=ArgumentCaptor.forClass(UserProfile.class);verify(userProfileMapper).update(value.capture(),any(LambdaUpdateWrapper.class));
+        assertEquals("认真记录生活",value.getValue().getBio());assertNull(value.getValue().getNickname());
+    }
+
+    @Test void signatureCanBeClearedExplicitly() {
+        when(userProfileMapper.selectOne(any())).thenReturn(profile());
+        var request=new UserDtos.ProfilePatchRequest();request.setBio("  ");service.patchProfile(USER_ID,request);
+        var value=ArgumentCaptor.forClass(UserProfile.class);verify(userProfileMapper).update(value.capture(),any(LambdaUpdateWrapper.class));assertEquals("",value.getValue().getBio());
+    }
+
     @Test
     void patchProfileRejectsAvatarUrlFromOtherUser() {
         when(mediaFileService.findAvailableAvatar(USER_ID, "https://cdn.example.com/a.jpg"))
@@ -114,8 +129,9 @@ class UserAccountServiceTest {
     @Test
     void patchProfileAcceptsOwnedAvatarUrl() {
         when(userProfileMapper.selectOne(any())).thenReturn(profile());
+        MediaFile avatar = new MediaFile();avatar.setId(55L);
         when(mediaFileService.findAvailableAvatar(USER_ID, "https://cdn.example.com/a.jpg"))
-                .thenReturn(new MediaFile());
+                .thenReturn(avatar);
 
         UserDtos.ProfilePatchRequest request = new UserDtos.ProfilePatchRequest();
         request.setAvatarUrl("https://cdn.example.com/a.jpg");
@@ -123,7 +139,7 @@ class UserAccountServiceTest {
 
         ArgumentCaptor<UserProfile> entityCaptor = ArgumentCaptor.forClass(UserProfile.class);
         verify(userProfileMapper).update(entityCaptor.capture(), any(LambdaUpdateWrapper.class));
-        assertEquals("https://cdn.example.com/a.jpg", entityCaptor.getValue().getAvatarUrl());
+        assertEquals("/api/v1/media-files/avatars/55", entityCaptor.getValue().getAvatarUrl());
     }
 
     @Test

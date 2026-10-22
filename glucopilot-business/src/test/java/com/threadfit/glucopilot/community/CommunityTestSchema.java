@@ -16,9 +16,9 @@ public final class CommunityTestSchema {
             s.execute("ALTER TABLE community_article_draft ADD COLUMN video_ids TEXT DEFAULT '[]' NOT NULL");
             s.execute("CREATE TABLE IF NOT EXISTS community_report(id BIGINT AUTO_INCREMENT PRIMARY KEY,reporter_id BIGINT,target_type VARCHAR(16),target_id BIGINT,reason VARCHAR(32),details VARCHAR(500),state VARCHAR(16),resolution VARCHAR(32),resolution_note VARCHAR(1000),created_at TIMESTAMP,resolved_at TIMESTAMP)");
         }
-        var feedback=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V36__community_report_feedback.sql"));
+        var feedback=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V37__community_report_feedback.sql"));
         feedback.setSqlScriptEncoding("UTF-8");feedback.populate(connection);
-        var access=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V37__community_visibility_views_preferences.sql"));
+        var access=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V38__community_visibility_views_preferences.sql"));
         access.setSqlScriptEncoding("UTF-8");access.populate(connection);
         try(var tables=connection.getMetaData().getTables(null,null,"media_file",null)) {
             if(tables.next())try(var s=connection.createStatement()) {

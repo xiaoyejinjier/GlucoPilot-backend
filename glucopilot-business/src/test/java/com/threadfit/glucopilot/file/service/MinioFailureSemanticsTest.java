@@ -34,4 +34,15 @@ class MinioFailureSemanticsTest {
         when(client.getObject(any(GetObjectArgs.class))).thenThrow(new IOException("signed-request-details"));
         var error=assertThrows(BizException.class,()->storage.getObject("key"));assertEquals(ErrorCode.INTERNAL_ERROR,error.getErrorCode());assertEquals("文件存储暂时不可用，请稍后重试",error.getMessage());
     }
+    @Test void sameOriginCredentialUploadsOnceAndKeepsPrivateObjectKey()throws Exception{
+        var request=new org.springframework.mock.web.MockHttpServletRequest();request.setScheme("https");request.setServerName("backend.example.test");request.setServerPort(443);
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(new org.springframework.web.context.request.ServletRequestAttributes(request));
+        try{
+            var credential=storage.createUploadCredential(com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType.AVATAR,"jpg",3L,2L);
+            assertTrue(credential.getUploadUrl().startsWith("https://backend.example.test/api/v1/media-files/minio-uploads/"));
+            String token=credential.getUploadUrl().substring(credential.getUploadUrl().lastIndexOf('/')+1);
+            storage.acceptUpload(token,new byte[]{1,2,3});verify(client).putObject(any(PutObjectArgs.class));
+            assertThrows(IllegalArgumentException.class,()->storage.acceptUpload(token,new byte[]{1,2,3}));
+        }finally{org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();}
+    }
 }

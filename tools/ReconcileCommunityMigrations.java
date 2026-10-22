@@ -30,7 +30,7 @@ public class ReconcileCommunityMigrations {
     static Flyway flyway(String schema, boolean outOfOrder) {
         var configuration = Flyway.configure().dataSource(url(schema), user, password)
                 .locations("filesystem:" + migrations.toString().replace('\\', '/'))
-                .outOfOrder(outOfOrder).cleanDisabled(true).baselineOnMigrate(false);
+                .outOfOrder(outOfOrder).target("35").cleanDisabled(true).baselineOnMigrate(false);
         // Preflight validates all applied checksums while the seven explicitly checked scripts are pending.
         if (outOfOrder) configuration.ignoreMigrationPatterns("*:pending");
         return configuration.load();

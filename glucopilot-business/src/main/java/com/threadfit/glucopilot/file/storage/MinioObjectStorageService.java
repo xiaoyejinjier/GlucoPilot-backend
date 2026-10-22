@@ -7,24 +7,26 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.file.config.StorageProperties;
 import com.threadfit.glucopilot.file.vo.FileVos.UploadCredential;
 import io.minio.GetObjectArgs;
-import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
+import io.minio.PutObjectArgs;
 import io.minio.StatObjectArgs;
 import io.minio.errors.ErrorResponseException;
-import io.minio.http.Method;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.time.Instant;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
- * MinIO 对象存储实现（provider=minio，可连接团队共享服务）。
- * <p>完整走「凭证 → 直传 → 登记 → 读取」全链路，
- * 保持与 OSS 相同的业务校验。直传使用预签名 PUT URL（有效 {@link ObjectStorageService#EXPIRE_SECONDS} 秒）。
- * <p><b>注意</b>：签发预签名 URL 时刻意不携带 Content-Type——
- * 真正的 MIME 校验推迟到登记接口 {@code MediaFileService#register} 进行，
- * 避免前端在「预签名阶段」通过 Content-Type 绕过白名单。
+ * MinIO object storage with same-origin one-time PUT credentials.
+ * Existing private objects remain readable through authorized business routes.
+ * Missing objects are distinguished from connectivity and permission failures.
  */
 @Slf4j
 @Service
@@ -33,42 +35,53 @@ public class MinioObjectStorageService implements ObjectStorageService {
 
     private final StorageProperties props;
     private final MinioClient minioClient;
+    private final ConcurrentMap<String, PendingUpload> pendingUploads = new ConcurrentHashMap<>();
 
     public MinioObjectStorageService(StorageProperties props) {
         this.props = props;
-        // 按配置初始化 MinIO 客户端（endpoint / AK / SK）
         this.minioClient = MinioClient.builder()
                 .endpoint(props.getEndpoint())
                 .credentials(props.getAccessKey(), props.getSecretKey())
                 .build();
     }
 
-    /** 生成 storageKey 并签发预签名 PUT URL 供客户端直传；客户端直传后凭同一 storageKey 走登记。 */
     @Override
     public UploadCredential createUploadCredential(MediaBizType bizType, String ext, long sizeBytes, Long userId) {
-        // storageKey = {bizType}/{yyyy}/{MM}/{userId}/{uuid}.{ext}，第 3 段 userId 供登记时防伪
+        Instant now = Instant.now();
+        pendingUploads.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
         String storageKey = buildStorageKey(bizType, ext, userId);
+        String token = UUID.randomUUID().toString().replace("-", "");
+        pendingUploads.put(token, new PendingUpload(storageKey, sizeBytes, now.plusSeconds(EXPIRE_SECONDS)));
+        // 同源代理：避免管理端浏览器跨域 PUT 到 :9000（第三方镜像常无 CORS）
+        String uploadUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
+                .path("/api/v1/media-files/minio-uploads/{token}")
+                .buildAndExpand(token)
+                .toUriString();
+        return UploadCredential.builder()
+                .uploadUrl(uploadUrl)
+                .storageKey(storageKey)
+                .expireIn((long) EXPIRE_SECONDS)
+                .build();
+    }
+
+    /** 消费一次性凭证并写入 MinIO。 */
+    public void acceptUpload(String token, byte[] bytes) {
+        PendingUpload pending = pendingUploads.remove(token);
+        if (pending == null || pending.expiresAt().isBefore(Instant.now())) {
+            throw new IllegalArgumentException("上传凭证不存在或已过期");
+        }
+        if (bytes == null || bytes.length != pending.sizeBytes()) {
+            throw new IllegalArgumentException("上传文件大小与凭证不一致");
+        }
         try {
-            // 签发 PUT 直传 URL，有效期 EXPIRE_SECONDS(300s)
-            String uploadUrl = minioClient.getPresignedObjectUrl(
-                    GetPresignedObjectUrlArgs.builder()
-                            .method(Method.PUT)
-                            .bucket(props.getBucket())
-                            .object(storageKey)
-                            .expiry(EXPIRE_SECONDS)
-                            .build());
-            return UploadCredential.builder()
-                    .uploadUrl(uploadUrl)
-                    .storageKey(storageKey)
-                    .expireIn((long) EXPIRE_SECONDS)
-                    .build();
+            minioClient.putObject(PutObjectArgs.builder()
+                    .bucket(props.getBucket())
+                    .object(pending.storageKey())
+                    .stream(new ByteArrayInputStream(bytes), bytes.length, -1)
+                    .contentType("application/octet-stream")
+                    .build());
         } catch (Exception e) {
-            // 必须留痕：这里失败的真实原因通常是「MinIO 容器没起 / 端口不通 / 桶不存在」，
-            // 而对外只能给一句「生成上传凭证失败」。若没有日志，现场就只剩那句话，
-            // 排查会直接往错的方向找（本项目真实发生过：容器没启动，却被当成存储代码有问题）。
-            log.warn("MinIO 生成上传凭证失败 bucket={} endpoint={} key={}",
-                    props.getBucket(), props.getEndpoint(), storageKey, e);
-            throw new BizException(ErrorCode.INTERNAL_ERROR, "生成上传凭证失败");
+            throw unavailable("write",e);
         }
     }
 
@@ -105,7 +118,6 @@ public class MinioObjectStorageService implements ObjectStorageService {
         return props.getBucket();
     }
 
-    /** 服务端读取对象完整字节（用于「图片送模型」场景，不产生公开 URL）。读失败必须留痕。 */
     @Override
     public byte[] getObject(String storageKey) {
         try (InputStream in = minioClient.getObject(GetObjectArgs.builder()
@@ -130,4 +142,5 @@ public class MinioObjectStorageService implements ObjectStorageService {
         log.warn("MinIO {} failed type={} code={}",operation,error.getClass().getSimpleName(),code);
         return new BizException(ErrorCode.INTERNAL_ERROR,"文件存储暂时不可用，请稍后重试");
     }
+    private record PendingUpload(String storageKey, long sizeBytes, Instant expiresAt) {}
 }

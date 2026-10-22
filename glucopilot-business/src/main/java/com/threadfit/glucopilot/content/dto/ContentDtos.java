@@ -50,6 +50,7 @@ public final class ContentDtos {
         private String contentBody;
         private java.util.List<com.threadfit.glucopilot.community.PublicationDtos.ArticleImage> images;
         private java.util.List<com.threadfit.glucopilot.community.PublicationDtos.ArticleImage> videos;
+        private java.util.List<com.threadfit.glucopilot.community.PublicationDtos.Tag> tags;
         private LocalDateTime publishAt;
         private Integer likeCount;
         private Integer collectCount;

@@ -12,9 +12,9 @@ MINIO_SECRET_KEY=replace-locally
 MINIO_BUCKET=glucopilot
 ```
 
-上述配置对应 `dev` profile。`prod` 当前仍使用 `application-prod.yaml` 中的 OSS 配置，不能只替换 `STORAGE_PROVIDER` 就直接用于生产。
+上述配置对应 `dev` profile。合入主线后，`prod`默认也使用MinIO，并保留按`STORAGE_PROVIDER`选择OSS的配置；生产必须单独核对目标服务、桶及凭据，不能直接复制个人配置。
 
-所有成员需要使用同一套媒体登记数据与存储目标。仅拉取 GitHub 代码不会同步个人数据库、`.env` 或图片。局域网联调时，后端需要访问 MinIO；小程序使用预签名 PUT 直传，因此手机也需要能够访问 MinIO 地址。服务器关机、网络隔离或切换到其他桶仍会导致图片无法读取。
+所有成员需要使用同一套媒体登记数据与存储目标。仅拉取 GitHub 代码不会同步个人数据库、`.env` 或图片。局域网联调时，后端需要访问MinIO；MinIO凭证现在返回后端同源的一次性PUT代理`/api/v1/media-files/minio-uploads/{token}`，小程序/管理端只需访问后端，Content-Type须为application/octet-stream，后端按凭证大小写入真实对象。OSS等外部预签名上传仍不额外注入Content-Type以免破坏签名。服务器关机、网络隔离或切换到其他桶仍会导致图片无法读取。
 
 头像上传继续走“凭证 → PUT → 登记 → 更新个人资料”。登记返回稳定的 `/api/v1/media-files/avatars/{mediaId}`，小程序将其解析为当前后端地址，由后端从私有桶读取字节。数据库及用户缓存保留这个身份地址，展示时下载的手机临时路径不写回资料。不为显示头像公开整个桶，不把短期签名下载链接保存为长期头像地址。
 

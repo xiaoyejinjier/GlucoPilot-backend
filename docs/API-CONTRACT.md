@@ -18,7 +18,7 @@ POST /community/articles/{id}/views无body，验证当前用户具有阅读权�
 
 PUT /community/articles/{id}/hidden {hidden:boolean}幂等保存本人的减少展示偏好；前端菜单显示“举报 / 减少此类内容”，隐藏成功后从本人列表移除。ARTICLE举报成功同事务保存本人隐藏，取消举报表单不隐藏。隐藏不影响其他用户、文章全局状态或管理员审核。
 
-V37增加文章权限、指定读者、浏览去重、本人隐藏表和签名/草稿权限字段。社区/作者/收藏/旧资讯列表、文章详情、评论回复、点赞收藏、图片视频及互动通知都按阅读权限过滤；无权统一404，不通过媒体或旧接口绕过。管理员保持原审核权限，可检查待审及私密投稿。
+V38增加文章权限、指定读者、浏览去重、本人隐藏表和签名/草稿权限字段。社区/作者/收藏/旧资讯列表、文章详情、评论回复、点赞收藏、图片视频及互动通知都按阅读权限过滤；无权统一404，不通过媒体或旧接口绕过。管理员保持原审核权限，可检查待审及私密投稿。
 
 ## 本人举报反馈（2026-10-21）
 
@@ -28,7 +28,7 @@ PUT /api/v1/community/reports/{id}/read 无body，幂等标记该条已处理举
 
 GET /community/information/summary增加reports（本人未读处理反馈数）、latestReportId（用于提醒游标）；total包含reports。记录页“提醒与回复”在有未读处理反馈时显示“举报反馈”，点击进入本人举报列表；列表/详情中的反馈阅读成功后刷新全局未读。管理员说明直接展示给举报人，管理端须明确此用途。沿用5秒前台轮询，不发送外部消息。
 
-V36仅为community_report增加target_title、feedback_read_at和本人反馈查询索引，不回填伪造的管理员反馈、不修改旧处理结论；已有已处理举报作为未读反馈可查看。
+V37仅为community_report增加target_title、feedback_read_at和本人反馈查询索引，不回填伪造的管理员反馈、不修改旧处理结论；已有已处理举报作为未读反馈可查看。
 
 存储故障区分：MinIO明确返回NoSuchKey/NoSuchObject时视为对象缺失；连接中断、超时、鉴权或服务错误返回500业务错误“文件存储暂时不可用，请稍后重试”，不能将其误报为未上传/不存在。食品配图登记同时保存bucket_name，已有永久图片业务地址不变。
 
@@ -239,19 +239,25 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 反馈管理、用户管理和九时段用户每日明细使用同样的分页交互：默认 10 条、可选 10/20/50/100 条，表格内部滚动，分页栏展示总数、当前页和记录区间。页码与每页条数改变时重新请求各自服务端接口，筛选条件只在提交查询时生效并随翻页保留；反馈状态、用户状态变更或数据减少导致当前页越界时自动回退。九时段按“用户 + 日期”分页，`overview` 统计整个查询范围，不按当前页记录数计算，也不得随翻页丢失已提交的日期范围。
 
-## 管理端内容媒体（资讯/轮播）
+## 管理端内容媒体（资讯图 / 轮播图 / 资讯视频）
 
-媒体素材页管理资讯配图与轮播图：上传 JPG/PNG（单张 1 字节至 5MB），走对象存储「凭证 → PUT → 登记」。开发可选用 `STORAGE_PROVIDER=local` 或 `minio`；生产为阿里云 OSS。稳定访问地址为 `/api/v1/cms/images/{id}`（服务端读私有对象，不把预签名 URL 写入 CMS 表）。
+媒体素材页管理资讯配图、轮播图与资讯视频：走对象存储「凭证 → PUT → 登记」。开发可用 `STORAGE_PROVIDER=local` 或 `minio`；**部署默认 MinIO**（不默认阿里云 OSS）。稳定地址由服务端读私有对象，不把预签名 URL 写入 CMS 表。
+
+| purpose | MIME | 大小上限 | biz_id | 稳定公开 URL |
+| --- | --- | --- | --- | --- |
+| `news` / `banner` | `image/jpeg`、`image/png` | 5MB | `CONTENT_NEWS` / `CONTENT_BANNER` | `/api/v1/cms/images/{id}` |
+| `news-video` | `video/mp4` | 100MB | `CONTENT_NEWS_VIDEO` | `/api/v1/cms/videos/{id}` |
 
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
-| `GET /admin/v1/cms-media?purpose=` | `content:media:manage` | `purpose` 可选 `news` / `banner` / 省略（全部）；返回素材列表 |
+| `GET /admin/v1/cms-media?purpose=` | `content:media:manage` | `purpose` 可选 `news` / `banner` / `news-video` / 省略（全部） |
 | `POST /admin/v1/cms-media/upload-credentials` | `content:media:manage` | 请求 `{ purpose, bizType: 5, mimeType, sizeBytes }` |
 | `POST /admin/v1/cms-media` | `content:media:manage` | 请求 `{ purpose, bizType: 5, storageKey, mimeType, sizeBytes }`；建议带 `X-Idempotency-Key` |
 | `DELETE /admin/v1/cms-media/{id}` | `content:media:manage` | 软删除（`file_status=0`），仅本人运营账号上传的素材 |
 | `GET /api/v1/cms/images/{id}` | 公开 | 返回已登记 CMS 图片二进制 |
+| `GET /api/v1/cms/videos/{id}` | 公开 | 返回已登记 CMS 视频（MP4）二进制 |
 
-`media_file` 使用 `biz_type=CMS(5)`，`biz_id=CONTENT_NEWS` 或 `CONTENT_BANNER`，`ops_id` 为当前运营，`user_id` 为空。Banner `image` / 资讯 `coverUrl` 可填上述稳定相对路径。
+`media_file` 使用 `biz_type=CMS(5)`，`ops_id` 为当前运营，`user_id` 为空。Banner `image` / 资讯 `coverUrl` / `videoUrl` 填上述稳定相对路径。资讯正文 `contentBody` 为 **HTML**（管理端富文本）；小程序详情用 `rich-text` 渲染，正文插图使用 `/api/v1/cms/images/{id}`。
 
 ## 管理端食物图片
 
@@ -465,7 +471,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 2. 客户端直接把文件字节 PUT 到该 URL（有效期 300 秒，不经过后端）；
 3. `POST /api/v1/media-files` 登记 → 得到 `mediaId`，此后才能用于 2.24。
 
-开发环境默认使用后端自带的本地文件存储，不要求开发者另外安装 MinIO。此时第 1 步返回的是同一后端生成的一次性 PUT URL（`/api/v1/media-files/local-uploads/{token}`），该 URL 与本地文件读取地址仅在 `storage.provider=local` 时开放；向该本地上传地址 PUT 文件字节时必须携带 `Content-Type: application/octet-stream`，禁止使用 `application/json`，否则 JSON 请求过滤器会破坏二进制内容。启用 OSS 的生产环境仍使用私有 OSS 预签名 URL，并遵循凭证签名约束，不额外添加参与签名的请求头。除这一传输头差异外，调用方始终按上述三步协议处理。 课程部署可显式关闭对象存储，按下方 disabled 契约拒绝上传；本次功能不强制启用云存储，也不改变现有关闭模式。
+开发环境默认使用后端自带的本地文件存储，不要求开发者另外安装 MinIO。此时第 1 步返回的是同一后端生成的一次性 PUT URL（`/api/v1/media-files/local-uploads/{token}`），该 URL 与本地文件读取地址仅在 `storage.provider=local` 时开放；向该本地上传地址 PUT 文件字节时必须携带 `Content-Type: application/octet-stream`，禁止使用 `application/json`，否则 JSON 请求过滤器会破坏二进制内容。`storage.provider=minio` 时开发态同样签发同源代理 PUT（`/api/v1/media-files/minio-uploads/{token}`），由后端写入 MinIO，避免浏览器依赖桶 CORS。部署默认 MinIO；若显式 `STORAGE_PROVIDER=aliyun-oss` 则使用私有 OSS 预签名 URL，并遵循凭证签名约束。除这一传输头差异外，调用方始终按上述三步协议处理。课程部署可显式关闭对象存储，按下方 disabled 契约拒绝上传。
 
 **2.25 的 SSE 事件契约不变**：仍是 `delta` / `done` / `error`，`done` 必带完整正文。图片轮次对客户端**完全透明**——服务端内部先调用视觉模型产出客观描述，再把描述交给文本模型组织回答，2.25 的入参出参与文本轮次一模一样，前端不需要区分也不需要新增事件。
 
@@ -514,7 +520,19 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ## 设备数据同步
 
-用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。
+用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。传入 deviceSn 时须已绑定当前用户且启用，成功后刷新 last_sync_at。
+
+## 用户端设备管理
+
+唯一认设备靠 deviceSn；选适配器用 provider 字符串（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT）。会话内「待适配」草稿不写库，确认绑定后才进入下列接口。
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| GET /api/v1/devices | C 端登录 | 当前用户已绑定设备列表（含禁用项，前端按 status 展示） |
+| POST /api/v1/devices/bind | C 端登录 | 自助绑定：SN 空闲则新建并归属当前用户；已有空闲档案可认领；已被他人占用则冲突。建议写操作带 X-Idempotency-Key |
+| POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
+
+绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。
 
 ## 管理端设备档案
 

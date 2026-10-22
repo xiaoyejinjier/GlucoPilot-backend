@@ -33,7 +33,6 @@ public class AdminCmsService {
 
     public List<AdminCmsDtos.NewsItem> listNews() {
         return newsMapper.selectList(new LambdaQueryWrapper<CmsNews>()
-                        .eq(CmsNews::getCommunityManaged, 0)
                         .orderByDesc(CmsNews::getId))
                 .stream().map(this::toNews).toList();
     }
@@ -41,7 +40,6 @@ public class AdminCmsService {
     @Transactional
     public AdminCmsDtos.NewsItem saveNews(AdminCmsDtos.NewsSaveRequest req) {
         CmsNews row = req.getId() == null ? new CmsNews() : requireNews(req.getId());
-        requireOfficial(row);
         row.setTitle(req.getTitle().trim());
         row.setSummaryText(req.getSummary());
         row.setChannelCode(channelCode(req.getChannel()));
@@ -72,14 +70,12 @@ public class AdminCmsService {
 
     @Transactional
     public void removeNews(Long id) {
-        requireOfficial(requireNews(id));
         softDelete(newsMapper, requireNews(id).getId(), CmsNews::getId, CmsNews::getIsDeleted, CmsNews::getDeletedAt, CmsNews::getDeletedBy);
     }
 
     @Transactional
     public void setNewsStatus(Long id, String status) {
         CmsNews row = requireNews(id);
-        requireOfficial(row);
         row.setPublishStatus(statusCode(status));
         if (row.getPublishStatus() == 1 && row.getPublishAt() == null) {
             row.setPublishAt(LocalDateTime.now());
@@ -92,11 +88,6 @@ public class AdminCmsService {
                         .orderByAsc(CmsBanner::getSortNo)
                         .orderByDesc(CmsBanner::getId))
                 .stream().map(this::toBanner).toList();
-    }
-
-    private void requireOfficial(CmsNews row) {
-        if (Integer.valueOf(1).equals(row.getCommunityManaged()))
-            throw new BizException(ErrorCode.BIZ_REJECTED, "社区投稿请在社区审核中处理，不能直接发布或改写");
     }
 
     @Transactional
@@ -147,7 +138,7 @@ public class AdminCmsService {
                 .channel(channel)
                 .type(n.getContentType() != null && n.getContentType() == 2 ? "video" : "article")
                 .coverUrl(n.getCoverUrl() == null ? "" : n.getCoverUrl())
-                .coverText(n.getContentType() != null && n.getContentType() == 2 ? "▶" : "资讯")
+                .coverText("")
                 .videoUrl(n.getVideoUrl())
                 .content(n.getContentBody() == null ? "" : n.getContentBody())
                 .status(status)

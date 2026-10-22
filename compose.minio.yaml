@@ -1,19 +1,62 @@
-# 本机联调 MinIO（不作为团队共享数据源）。用法：
+# 本机联调 MinIO（非团队共享存储）。用法：
 #   docker compose -f compose.minio.yaml up -d
-#   控制台 http://127.0.0.1:9001  默认账号/密码见下方环境变量
-#   在控制台创建桶 glucopilot（或与 MINIO_BUCKET 一致）后，.env 设 STORAGE_PROVIDER=minio
+# 控制台：http://127.0.0.1:9001（默认 minioadmin / minioadmin）
+# minio/mc 镜像：第三方 netvark/*（国内加速器拉官方 minio/* 易 403 时用）
+# minio-init：建桶。浏览器上传由后端同源代理写入 MinIO（不依赖桶 CORS）。
+# 若镜像支持 CORS，仍尝试写入开发用 CORS XML（失败可忽略）。
 name: glucopilot-minio
 services:
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: netvark/minio:latest
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - minio-data:/data
+
+  minio-init:
+    image: netvark/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-glucopilot}
+    # netvark/mc 默认 ENTRYPOINT=mc，必须显式改成 sh
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo waiting for minio...
+        i=0
+        until mc alias set local http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"; do
+          i=$$((i+1))
+          if [ "$$i" -gt 60 ]; then echo minio not ready; exit 1; fi
+          sleep 1
+        done
+        mc mb -p "local/$$MINIO_BUCKET" || true
+        cat > /tmp/cors.xml <<'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <CORSRule>
+            <AllowedOrigin>*</AllowedOrigin>
+            <AllowedMethod>GET</AllowedMethod>
+            <AllowedMethod>PUT</AllowedMethod>
+            <AllowedMethod>POST</AllowedMethod>
+            <AllowedMethod>HEAD</AllowedMethod>
+            <AllowedHeader>*</AllowedHeader>
+            <ExposeHeader>ETag</ExposeHeader>
+            <ExposeHeader>Content-Length</ExposeHeader>
+            <ExposeHeader>Content-Type</ExposeHeader>
+            <MaxAgeSeconds>3600</MaxAgeSeconds>
+          </CORSRule>
+        </CORSConfiguration>
+        EOF
+        mc cors set "local/$$MINIO_BUCKET" /tmp/cors.xml
+        echo bucket ready: $$MINIO_BUCKET cors applied
+
 volumes:
   minio-data:

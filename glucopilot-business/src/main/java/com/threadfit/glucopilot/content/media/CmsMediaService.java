@@ -33,65 +33,78 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * CMS 资讯/轮播图素材：走统一对象存储（local / MinIO / OSS），稳定地址不依赖预签名过期。
+ * CMS 资讯/轮播图/资讯视频素材：走统一对象存储（local / MinIO / OSS），稳定地址不依赖预签名过期。
  */
 @Service
 @RequiredArgsConstructor
 public class CmsMediaService {
-    private static final long MAX_BYTES = 5L * 1024 * 1024;
+    private static final long MAX_IMAGE_BYTES = 5L * 1024 * 1024;
+    private static final long MAX_VIDEO_BYTES = 100L * 1024 * 1024;
     private static final long MAX_PIXELS = 16_000_000;
     private static final String BIZ_NEWS = "CONTENT_NEWS";
     private static final String BIZ_BANNER = "CONTENT_BANNER";
-    private static final Set<String> PURPOSES = Set.of("news", "banner");
-    private static final Map<String, String> FORMATS = Map.of("image/jpeg", "jpg", "image/png", "png");
+    private static final String BIZ_NEWS_VIDEO = "CONTENT_NEWS_VIDEO";
+    private static final String MIME_MP4 = "video/mp4";
+    private static final Set<String> IMAGE_PURPOSES = Set.of("news", "banner");
+    private static final Set<String> ALL_PURPOSES = Set.of("news", "banner", "news-video");
+    private static final Map<String, String> IMAGE_FORMATS =
+            Map.of("image/jpeg", "jpg", "image/png", "png");
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final ObjectStorageService storage;
     private final MediaFileMapper mediaFileMapper;
 
-    /** 按用途筛选可用素材；purpose 为空或 all 时返回全部 CMS 内容图。 */
+    /** 按用途筛选；purpose 为空或 all 时返回全部 CMS 素材（图+视频）。 */
     public List<MediaItem> list(String purpose) {
-        QueryWrapper<MediaFile> q = cmsImages().orderByDesc("id");
+        QueryWrapper<MediaFile> q = cmsMedia().orderByDesc("id");
         if (StringUtils.hasText(purpose) && !"all".equalsIgnoreCase(purpose)) {
-            q.eq("biz_id", bizId(purpose));
+            q.eq("biz_id", bizId(normalizePurpose(purpose)));
         }
         return mediaFileMapper.selectList(q).stream().map(this::toItem).toList();
     }
 
-    /** 签发直传凭证；对象 Key 第三段为负的 opsId，与 C 端用户 Key 隔离。 */
     public FileVos.UploadCredential credentials(UploadCredentialRequest request, Long opsId) {
-        normalizePurpose(request.getPurpose());
-        validate(request.getBizType(), request.getMimeType(), request.getSizeBytes());
-        // 负数仅用于对象 Key，与 C 端用户的正数 Key 隔离，不写入用户外键。
-        return storage.createUploadCredential(MediaBizType.CMS,
-                FORMATS.get(request.getMimeType()), request.getSizeBytes(), -opsId);
+        String purpose = normalizePurpose(request.getPurpose());
+        validate(purpose, request.getBizType(), request.getMimeType(), request.getSizeBytes());
+        String ext = extensionOf(request.getMimeType());
+        return storage.createUploadCredential(MediaBizType.CMS, ext, request.getSizeBytes(), -opsId);
     }
 
-    /** 校验归属与真实图片后写入 media_file，fileUrl 使用稳定公开路径。 */
     @Transactional
     public MediaItem register(RegisterRequest request, Long opsId) {
         String purpose = normalizePurpose(request.getPurpose());
-        validate(request.getBizType(), request.getMimeType(), request.getSizeBytes());
+        validate(purpose, request.getBizType(), request.getMimeType(), request.getSizeBytes());
         String key = request.getStorageKey();
-        String extension = FORMATS.get(request.getMimeType());
+        String extension = extensionOf(request.getMimeType());
         if (key == null || !key.matches("5/\\d{4}/\\d{2}/-" + opsId + "/[a-fA-F0-9-]{32,36}\\." + extension)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "图片上传凭证不属于当前账号");
+            throw new BizException(ErrorCode.BAD_REQUEST, "上传凭证不属于当前账号");
         }
         if (!storage.objectExists(key)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "图片尚未上传，请重新上传");
+            throw new BizException(ErrorCode.BAD_REQUEST, "文件尚未上传，请重新上传");
         }
 
-        MediaFile existing = mediaFileMapper.selectOne(cmsImages()
+        MediaFile existing = mediaFileMapper.selectOne(cmsMedia()
                 .eq("ops_id", opsId).eq("storage_key", key).last("LIMIT 1"));
         if (existing != null) {
             return toItem(existing);
         }
 
         byte[] bytes = storage.getObject(key);
-        if (bytes.length != request.getSizeBytes() || bytes.length > MAX_BYTES) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "实际图片大小与上传凭证不一致");
+        long max = isVideo(request.getMimeType()) ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+        if (bytes.length != request.getSizeBytes() || bytes.length > max) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "实际文件大小与上传凭证不一致");
         }
-        ImageInfo info = inspectImage(bytes, request.getMimeType());
+
+        Integer width = null;
+        Integer height = null;
+        if (isVideo(request.getMimeType())) {
+            inspectMp4(bytes);
+        } else {
+            ImageInfo info = inspectImage(bytes, request.getMimeType());
+            width = info.width();
+            height = info.height();
+        }
+
         MediaFile row = new MediaFile();
         row.setOpsId(opsId);
         row.setBizType(MediaBizType.CMS.getCode());
@@ -102,17 +115,16 @@ public class CmsMediaService {
         row.setFileUrl("");
         row.setMimeType(request.getMimeType());
         row.setSizeBytes((long) bytes.length);
-        row.setWidthPx(info.width());
-        row.setHeightPx(info.height());
+        row.setWidthPx(width);
+        row.setHeightPx(height);
         row.setSha256Hex(sha256(bytes));
         row.setFileStatus(1);
         mediaFileMapper.insert(row);
-        row.setFileUrl(imagePath(row.getId()));
+        row.setFileUrl(publicPath(row));
         mediaFileMapper.updateById(row);
         return toItem(row);
     }
 
-    /** 软删除：仅标记不可用，不在此处物理删 MinIO/OSS 对象。 */
     @Transactional
     public void remove(Long id, Long opsId) {
         MediaFile row = mediaFileMapper.selectById(id);
@@ -126,12 +138,17 @@ public class CmsMediaService {
     }
 
     public MediaFile requireImage(Long id) {
-        MediaFile row = mediaFileMapper.selectById(id);
-        if (row == null || !Objects.equals(row.getBizType(), MediaBizType.CMS.getCode())
-                || !isCmsBizId(row.getBizId()) || row.getOpsId() == null || row.getUserId() != null
-                || !Objects.equals(row.getFileStatus(), 1) || row.getMimeType() == null
-                || !FORMATS.containsKey(row.getMimeType())) {
+        MediaFile row = requireCms(id);
+        if (row.getMimeType() == null || !IMAGE_FORMATS.containsKey(row.getMimeType())) {
             throw new BizException(ErrorCode.NOT_FOUND, "内容图片不存在");
+        }
+        return row;
+    }
+
+    public MediaFile requireVideo(Long id) {
+        MediaFile row = requireCms(id);
+        if (!MIME_MP4.equals(row.getMimeType())) {
+            throw new BizException(ErrorCode.NOT_FOUND, "内容视频不存在");
         }
         return row;
     }
@@ -140,9 +157,19 @@ public class CmsMediaService {
         return storage.getObject(row.getStorageKey());
     }
 
-    private QueryWrapper<MediaFile> cmsImages() {
+    private MediaFile requireCms(Long id) {
+        MediaFile row = mediaFileMapper.selectById(id);
+        if (row == null || !Objects.equals(row.getBizType(), MediaBizType.CMS.getCode())
+                || !isCmsBizId(row.getBizId()) || row.getOpsId() == null || row.getUserId() != null
+                || !Objects.equals(row.getFileStatus(), 1)) {
+            throw new BizException(ErrorCode.NOT_FOUND, "内容媒体不存在");
+        }
+        return row;
+    }
+
+    private QueryWrapper<MediaFile> cmsMedia() {
         return new QueryWrapper<MediaFile>().eq("biz_type", MediaBizType.CMS.getCode())
-                .in("biz_id", BIZ_NEWS, BIZ_BANNER)
+                .in("biz_id", BIZ_NEWS, BIZ_BANNER, BIZ_NEWS_VIDEO)
                 .eq("file_status", 1).isNull("user_id").isNotNull("ops_id");
     }
 
@@ -150,7 +177,7 @@ public class CmsMediaService {
         return MediaItem.builder()
                 .id(String.valueOf(row.getId()))
                 .purpose(purposeOf(row.getBizId()))
-                .fileUrl(imagePath(row.getId()))
+                .fileUrl(publicPath(row))
                 .mimeType(row.getMimeType())
                 .sizeBytes(row.getSizeBytes())
                 .widthPx(row.getWidthPx())
@@ -160,40 +187,97 @@ public class CmsMediaService {
                 .build();
     }
 
-    private String imagePath(Long id) {
-        return "/api/v1/cms/images/" + id;
+    private String publicPath(MediaFile row) {
+        if (MIME_MP4.equals(row.getMimeType())) {
+            return "/api/v1/cms/videos/" + row.getId();
+        }
+        return "/api/v1/cms/images/" + row.getId();
     }
 
     private String normalizePurpose(String purpose) {
         if (!StringUtils.hasText(purpose)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请选择素材用途：news 或 banner");
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择素材用途：news、banner 或 news-video");
         }
         String normalized = purpose.trim().toLowerCase(Locale.ROOT);
-        if (!PURPOSES.contains(normalized)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "素材用途仅支持 news 或 banner");
+        if (!ALL_PURPOSES.contains(normalized)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "素材用途仅支持 news、banner 或 news-video");
         }
         return normalized;
     }
 
     private String bizId(String purpose) {
-        return "banner".equals(purpose) ? BIZ_BANNER : BIZ_NEWS;
+        return switch (purpose) {
+            case "banner" -> BIZ_BANNER;
+            case "news-video" -> BIZ_NEWS_VIDEO;
+            default -> BIZ_NEWS;
+        };
     }
 
     private String purposeOf(String bizId) {
-        return BIZ_BANNER.equals(bizId) ? "banner" : "news";
+        if (BIZ_BANNER.equals(bizId)) {
+            return "banner";
+        }
+        if (BIZ_NEWS_VIDEO.equals(bizId)) {
+            return "news-video";
+        }
+        return "news";
     }
 
     private boolean isCmsBizId(String bizId) {
-        return BIZ_NEWS.equals(bizId) || BIZ_BANNER.equals(bizId);
+        return BIZ_NEWS.equals(bizId) || BIZ_BANNER.equals(bizId) || BIZ_NEWS_VIDEO.equals(bizId);
     }
 
-    private void validate(Integer bizType, String mimeType, Long sizeBytes) {
-        if (!Objects.equals(bizType, MediaBizType.CMS.getCode())
-                || mimeType == null || !FORMATS.containsKey(mimeType)) {
+    private boolean isVideo(String mimeType) {
+        return MIME_MP4.equals(mimeType);
+    }
+
+    private String extensionOf(String mimeType) {
+        if (MIME_MP4.equals(mimeType)) {
+            return "mp4";
+        }
+        String ext = IMAGE_FORMATS.get(mimeType);
+        if (ext == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "不支持的文件格式");
+        }
+        return ext;
+    }
+
+    private void validate(String purpose, Integer bizType, String mimeType, Long sizeBytes) {
+        if (!Objects.equals(bizType, MediaBizType.CMS.getCode()) || mimeType == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择合法的内容媒体文件");
+        }
+        if ("news-video".equals(purpose)) {
+            if (!MIME_MP4.equals(mimeType)) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "资讯视频仅支持 MP4（video/mp4）");
+            }
+            if (sizeBytes == null || sizeBytes <= 0 || sizeBytes > MAX_VIDEO_BYTES) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "视频大小不能超过 100MB");
+            }
+            return;
+        }
+        if (!IMAGE_PURPOSES.contains(purpose) || !IMAGE_FORMATS.containsKey(mimeType)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择 JPG 或 PNG 格式的内容图片");
         }
-        if (sizeBytes == null || sizeBytes <= 0 || sizeBytes > MAX_BYTES) {
+        if (sizeBytes == null || sizeBytes <= 0 || sizeBytes > MAX_IMAGE_BYTES) {
             throw new BizException(ErrorCode.BAD_REQUEST, "图片大小不能超过 5MB");
+        }
+    }
+
+    /** ISO BMFF：前若干字节含 ASCII "ftyp"。 */
+    private void inspectMp4(byte[] bytes) {
+        if (bytes == null || bytes.length < 12) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "不是有效的 MP4 文件");
+        }
+        boolean ftyp = false;
+        int limit = Math.min(bytes.length - 4, 64);
+        for (int i = 0; i <= limit; i++) {
+            if (bytes[i] == 'f' && bytes[i + 1] == 't' && bytes[i + 2] == 'y' && bytes[i + 3] == 'p') {
+                ftyp = true;
+                break;
+            }
+        }
+        if (!ftyp) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "视频内容与 MP4 格式不一致");
         }
     }
 

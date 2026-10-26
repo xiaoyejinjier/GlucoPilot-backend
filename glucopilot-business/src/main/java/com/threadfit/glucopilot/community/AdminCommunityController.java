@@ -40,6 +40,20 @@ public class AdminCommunityController {
     public ApiResponse<Void> retry(@PathVariable long id) { service.retry(RequestContext.requireOpsId(),id,true);return ApiResponse.ok(); }
 
     /**
+     * 评论审核列表（含被 AI 隐藏的评论）。
+     * <p>
+     * 与恢复接口配套：这张列表回答问题"今天被藏了哪些、为什么"，恢复接口负责"藏错了要放开"。
+     * 只有列表没有恢复，误判无法纠正；只有恢复没有列表，运营根本找不出误判。
+     */
+    @GetMapping("/comments")
+    @PreAuthorize("@ss.hasPermi('content:news:list')")
+    public ApiResponse<PageResult<AdminComment>> comments(@RequestParam(required=false) String status,
+            @RequestParam(required=false) String verdict,@RequestParam(required=false) Integer hidden,
+            @RequestParam(required=false) String keyword,@Valid PageQuery q) {
+        return ApiResponse.ok(service.adminComments(status,verdict,hidden,keyword,q));
+    }
+
+    /**
      * 恢复被 AI 判违规并隐藏的评论（误杀兜底）。
      * <p>
      * 为什么必须有人工恢复入口：评论是"先发后审"，机器判 REJECT 会立即隐藏；

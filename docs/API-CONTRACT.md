@@ -613,3 +613,7 @@ snapshot格式：schemaVersion=1；sampledAt为UTC ISO时间；host={cpuPercent(
 - 记录页保留九时段录入入口；曲线横轴固定六个实测节点。三个正餐推荐预测叠加在对应餐后位置，用绿色虚线和白底空心点显示；实测曲线最后绘制，使用更粗实线和实心点。
 - 记录页右上角“已记”只数有效实测节点，分母固定 6。预测不写入 glucose_record，不混入实测均值、最高/最低值或血糖告警。正餐保存状态与预测图例使用绿色。
 - 周曲线分别绘制实测日均值和推荐预测日均值；缺失预测保留空值。无需新建表或迁移已有数据。
+
+- 社区评论审核补充：GET /admin/v1/community/comments 分页列出评论的 AI 审核结果，含已被隐藏的评论（status=SKIPPED/PENDING/REVIEWING/DONE、verdict=PENDING/PASS/REJECT/ERROR、hidden=0/1、keyword 匹配正文或作者昵称且最多80字、pageSize 上限50），要求 content:news:list。列表不过公开可见性过滤，文章事后下架也不影响历史评论出现在审核视角；返回原文、所属文章、作者社区号与昵称，以及 aiCategory/aiSeverity/aiConfidence（仅 REJECT 有值）、aiReason、aiModel、aiPromptVer、hidden。
+- 误杀兜底：POST /admin/v1/community/comments/{id}/restore 仅把 is_hidden 归零，不改写 ai_verdict（保留机器判定与 ADMIN/RESTORE 日志），幂等；要求管理员角色与 content:news:edit。评论为先发后审，AI 判 REJECT 立即隐藏；ai_verdict=ERROR 的评论不隐藏（模型故障不应让社区停摆）但也不算通过，运营需按「AI 判定：异常」复查。
+- 管理端页面：文章审核沿用 GET/POST /admin/v1/community/articles 与 review/retry-ai；评论审核对应「社区评论管理」页，数据来自上述列表接口。

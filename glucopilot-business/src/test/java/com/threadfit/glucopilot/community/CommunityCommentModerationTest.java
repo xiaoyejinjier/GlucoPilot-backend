@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.community;
 
 import com.threadfit.glucopilot.common.api.PageQuery;
+import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
@@ -44,6 +46,7 @@ class CommunityCommentModerationTest {
     private Connection migrationConnection;
     private CommunityModerationQueue queue;
     private CommunityService community;
+    private CommunityPublicationService publication;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -90,6 +93,7 @@ class CommunityCommentModerationTest {
                 + "VALUES(20,2,'PUBLISHED',1,'PASS')");
 
         var publication = new CommunityPublicationService(jdbc, mock(CmsNewsMapper.class), new CommunityService(jdbc));
+        this.publication = publication;
         community = new CommunityService(jdbc);
         queue = new CommunityModerationQueue(jdbc, new DataSourceTransactionManager(Objects.requireNonNull(ds)),
                 publication);
@@ -258,5 +262,77 @@ class CommunityCommentModerationTest {
         long id = insertComment("普通评论", "c-idempotent");
 
         assertFalse(queue.restoreComment(99L, id), "没有隐藏过就没什么可恢复，返回 false 但不报错");
+    }
+
+    // ---------------------------------------------------------------- 管理端列表
+
+    @Test
+    void 管理端列表能查到被隐藏的评论并带上判定依据() {
+        long id = insertComment("包治糖尿病，停药三天见效", "c-admin-1");
+        var job = queue.claimComment();
+        assertTrue(queue.finish(job, reject("medical_claim", 3, 95), "deepseek-v4-pro", "moderation@v1"));
+
+        assertEquals(0, community.commentCount(20), "前提：公开侧已经看不到它");
+        var page = publication.adminComments(null, null, 1, null, new PageQuery());
+
+        assertEquals(1, page.getTotal(), "管理端必须能看到被隐藏的评论，否则运营找不出误判");
+        var item = page.getRecords().getFirst();
+        assertEquals(Long.toString(id), item.id());
+        assertEquals(20, item.newsId());
+        assertEquals("社区文章", item.articleTitle(), "列表要能定位到是哪篇文章下的评论");
+        assertEquals("包治糖尿病，停药三天见效", item.content(), "管理员必须读到原文才能判断是否误杀");
+        assertEquals("u3", item.authorKey());
+        assertEquals("评论者", item.authorNickname());
+        assertEquals("DONE", item.aiStatus());
+        assertEquals("REJECT", item.aiVerdict());
+        assertEquals("medical_claim", item.aiCategory());
+        assertEquals(3, item.aiSeverity().intValue());
+        assertEquals(95, item.aiConfidence().intValue());
+        assertEquals("deepseek-v4-pro", item.aiModel());
+        assertEquals("moderation@v1", item.aiPromptVer(), "带上提示词版本才能复现当时的判定");
+        assertTrue(item.hidden());
+        assertNotNull(item.createdAt());
+    }
+
+    @Test
+    void 管理端列表可按审核结论与关键词筛选() {
+        long spam = insertComment("加微信领降糖神药", "c-admin-spam");
+        insertComment("我每天走八千步，血糖平稳", "c-admin-ok");
+        assertTrue(queue.finish(queue.claimComment(), reject("illegal_goods", 2, 80), "m", "moderation@v1"));
+        assertTrue(queue.finish(queue.claimComment(), ModerationVerdict.pass("个人经验分享"), "m", "moderation@v1"));
+
+        assertEquals(2, publication.adminComments(null, null, null, null, new PageQuery()).getTotal());
+        assertEquals(1, publication.adminComments("DONE", "REJECT", null, null, new PageQuery()).getTotal());
+        assertEquals(1, publication.adminComments(null, "PASS", null, null, new PageQuery()).getTotal());
+        assertEquals(0, publication.adminComments(null, "ERROR", null, null, new PageQuery()).getTotal(),
+                "ERROR 要能被单独筛出来复查：既没通过也不该被隐藏");
+        assertEquals(1, publication.adminComments(null, null, 1, null, new PageQuery()).getTotal());
+        assertEquals(1, publication.adminComments(null, null, 0, null, new PageQuery()).getTotal());
+        assertEquals(1, publication.adminComments(null, null, null, "降糖", new PageQuery()).getTotal(),
+                "关键词命中评论正文");
+        assertEquals(2, publication.adminComments(null, null, null, "评论者", new PageQuery()).getTotal(),
+                "关键词命中作者昵称");
+        assertEquals(Long.toString(spam), String.valueOf(
+                publication.adminComments(null, "REJECT", null, null, new PageQuery()).getRecords().getFirst().id()));
+    }
+
+    @Test
+    void 管理端列表排除已删除评论并接受参数校验() {
+        long deleted = insertComment("会被删除的评论", "c-admin-del");
+        long kept = insertComment("保留下来的评论", "c-admin-keep");
+        jdbc.update("UPDATE community_comment SET is_deleted=1 WHERE id=?", deleted);
+
+        var page = publication.adminComments(null, null, null, null, new PageQuery());
+        assertEquals(1, page.getTotal(), "逻辑删除的评论不该出现在审核列表里");
+        assertEquals(Long.toString(kept), page.getRecords().getFirst().id());
+
+        assertThrows(BizException.class,
+                () -> publication.adminComments("WHATEVER", null, null, null, new PageQuery()), "未知审核状态直接拒绝");
+        assertThrows(BizException.class,
+                () -> publication.adminComments(null, "MAYBE", null, null, new PageQuery()), "未知判定同样拒绝");
+        assertThrows(BizException.class,
+                () -> publication.adminComments(null, null, 2, null, new PageQuery()), "hidden 只接受 0/1");
+        assertThrows(BizException.class,
+                () -> publication.adminComments(null, null, null, "字".repeat(81), new PageQuery()), "搜索词上限 80 字");
     }
 }

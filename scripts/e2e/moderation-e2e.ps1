@@ -193,6 +193,18 @@ Check '公开列表能看到干净评论' ($afterIds -contains $goodCommentId) '
 # ---------------------------------------------------------------- 6. 管理端恢复
 Write-Host "6) 管理端恢复被误杀的评论" -ForegroundColor Gray
 if ($bc[1] -eq 'REJECT') {
+    # 审核列表是运营找误判的唯一入口：先确认它真能查出被隐藏的评论，再谈恢复。
+    $hiddenList = Invoke-Api -Method GET -Url "$adminApi/community/comments?hidden=1&pageSize=50" -Headers $adminHeaders -Tag 'mod-admin-list-hidden'
+    Check '管理端评论列表接口可用' ($hiddenList.Code -eq 200) "HTTP $($hiddenList.Code) $($hiddenList.Raw)"
+    $hiddenItems = @($hiddenList.Body.data.records | Where-Object { [long]$_.id -eq $badCommentId })
+    Check '被隐藏的评论出现在审核列表里' ($hiddenItems.Count -eq 1) "列表共 $($hiddenList.Body.data.total) 条，未找到 id=$badCommentId"
+    if ($hiddenItems.Count -eq 1) {
+        $hiddenItem = $hiddenItems[0]
+        Check '列表带出所属文章与作者' ("$($hiddenItem.articleTitle)|$($hiddenItem.authorKey)" -match '^.+\|u\d+$') "articleTitle=$($hiddenItem.articleTitle) authorKey=$($hiddenItem.authorKey)"
+        Check '列表带出判定类别（与库一致）' ($hiddenItem.aiCategory -eq $bc[2]) "aiCategory=$($hiddenItem.aiCategory) 期望 $($bc[2])"
+        Check '列表标记该评论已隐藏' ($hiddenItem.hidden -eq $true) "hidden=$($hiddenItem.hidden)"
+    }
+
     $restore = Invoke-Api -Method POST -Url "$adminApi/community/comments/$badCommentId/restore" -Headers $adminHeaders -Tag 'mod-restore'
     Check '恢复接口调用成功' ($restore.Code -eq 200) "HTTP $($restore.Code) $($restore.Raw)"
     Check '被隐藏的评论重新可见（库里）' ((Sql "SELECT is_hidden FROM sugar_health.community_comment WHERE id = $badCommentId;") -eq '0') 'is_hidden 仍为 1'
@@ -201,6 +213,10 @@ if ($bc[1] -eq 'REJECT') {
     $restored = Invoke-Api -Method GET -Url "$api/news/$goodId/comments?pageSize=20" -Headers $headers -Tag 'mod-list-restored'
     $restoredIds = @($restored.Body.data.records | ForEach-Object { [long]$_.id })
     Check '公开列表又能看到这条评论' ($restoredIds -contains $badCommentId) '恢复后列表仍看不到'
+
+    $afterHidden = Invoke-Api -Method GET -Url "$adminApi/community/comments?hidden=1&pageSize=50" -Headers $adminHeaders -Tag 'mod-admin-list-after'
+    $afterHiddenIds = @($afterHidden.Body.data.records | ForEach-Object { [long]$_.id })
+    Check '恢复后不再出现在「已隐藏」筛选里' (-not ($afterHiddenIds -contains $badCommentId)) '恢复后仍被当成已隐藏'
 } else {
     Write-Host "   （违规评论未被判 REJECT，跳过恢复断言：模型误杀率需要关注）" -ForegroundColor Yellow
 }

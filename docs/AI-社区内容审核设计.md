@@ -36,8 +36,9 @@
 | 类别枚举 | `ModerationCategories`（12 类） | 按设计 §5.6 |
 | 结构化证据 | `community_moderation_hit`（新表）+ 文章/评论的 `ai_category/ai_severity/ai_confidence/ai_prompt_ver` | 按设计 §5.3，但**只记类别/严重度/置信度**；`start_offset/snippet_hash` 暂空（提示词未要求模型回吐原句，解析器已支持 `evidence` 行，后续放开即可） |
 | 评论审核 | `community_comment` 11 个新列 + `claimComment/finishComment` + `is_hidden` + `VISIBLE_COMMENT` 过滤 | 按设计 D5（先发后审、命中即隐藏）；**V43 用两步默认值**：历史评论标 `SKIPPED`，避免上线当天全量重审 |
+| 评论审核后台 | `GET /admin/v1/community/comments`（契约 4.26，按审核状态/判定/是否隐藏/关键词筛选）+ 管理端页面「社区评论管理」（`GlucoPilot-admin` 的 `CommunityCommentsView.vue`） | 补上设计的运维闭环：没有列表，运营既找不出被隐藏的评论，也复查不了 `ERROR` |
 | 误杀恢复 | `POST /admin/v1/community/comments/{id}/restore`（契约 4.25） | 按设计 D7；只改 `is_hidden`，保留 `ai_verdict` |
-| E2E | `scripts/e2e/moderation-e2e.ps1`（31 条断言，真实模型） | 按设计 §12 |
+| E2E | `scripts/e2e/moderation-e2e.ps1`（37 条断言，真实模型） | 按设计 §12；含管理端列表可见性断言 |
 
 ### 与设计的差异（本期主动缩小范围）
 
@@ -57,7 +58,10 @@
    （`@EnableScheduling` 的 worker 每轮重新取生效版本）。改完用 `prompt-e2e` 之外的手工样本先试。
 2. **按类别统计**：`SELECT category_code, severity, COUNT(*) FROM community_moderation_hit GROUP BY 1,2`；
    误杀率靠抽样 `ai_verdict='PASS'` 的文章/评论人工复看。
-3. **误杀恢复**：`POST /admin/v1/community/comments/{id}/restore`（文章侧沿用既有 `review` 的人工终审）。
+3. **误杀恢复**：管理端「社区评论管理」页按「已被隐藏」筛选 → 「恢复显示」；接口等价于
+   `POST /admin/v1/community/comments/{id}/restore`（文章侧沿用既有 `review` 的人工终审）。
+   复核口径：列表里 `ai_verdict=ERROR` 的评论**没有被隐藏**（模型故障不该让社区停摆），
+   需要运营主动按「AI 判定：异常」筛出来看一眼。
 4. **关闭 AI 初审**：`community.moderation.enabled=false`（worker 不再跑，内容停在待审/未审，**不会自动放行**）。
 
 ### 已知观察点（实测）

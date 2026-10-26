@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.device.adapter;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.threadfit.glucopilot.common.constant.GlucoseNodes;
 import com.threadfit.glucopilot.device.adapter.support.UnitConversion;
 import com.threadfit.glucopilot.device.model.UnifiedGlucoseSample;

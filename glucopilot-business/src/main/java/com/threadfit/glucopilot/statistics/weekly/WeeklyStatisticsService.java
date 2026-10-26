@@ -28,6 +28,7 @@ public class WeeklyStatisticsService {
 
     private final GlucoseRecordService glucoseRecordService;
     private final GlucoseTrendService glucoseTrendService;
+    private final MealPredictionStatisticsService mealPredictionStatisticsService;
 
     public StatisticsDtos.WeekView week(Long userId, LocalDate startDate, LocalDate endDate) {
         LocalDate from;
@@ -42,6 +43,7 @@ public class WeeklyStatisticsService {
 
         List<GlucoseDtos.TrendPoint> series = glucoseTrendService.dailySeries(
                 glucoseRecordService.listRange(userId, from, to), from, to);
+        var predictions = mealPredictionStatisticsService.dailySeries(userId, from, to);
 
         List<StatisticsDtos.WeekPoint> points = series.stream()
                 .map(p -> StatisticsDtos.WeekPoint.builder()
@@ -49,6 +51,10 @@ public class WeeklyStatisticsService {
                         .label(labelOf(p.getDate()))
                         .avg(p.getAvg())
                         .count(p.getCount())
+                        .predictedAvg(predictions.containsKey(p.getDate())
+                                ? predictions.get(p.getDate()).average() : null)
+                        .predictionCount(predictions.containsKey(p.getDate())
+                                ? predictions.get(p.getDate()).count() : 0)
                         .build())
                 .toList();
 

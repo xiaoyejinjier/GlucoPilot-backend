@@ -51,6 +51,7 @@ class FoodServiceTest {
         category.setId(1L);
         category.setCategoryName("主食类");
         category.setSortNo(1);
+        category.setImageUrl("/api/v1/foods/images/14");
         when(foodCategoryMapper.selectList(any())).thenReturn(List.of(category));
 
         // Act：调用真正的 Service 方法。
@@ -60,6 +61,11 @@ class FoodServiceTest {
         assertEquals(1, items.size());
         assertEquals("1", items.get(0).getId());
         assertEquals("主食类", items.get(0).getCategoryName());
+        assertEquals("/api/v1/foods/images/14", items.get(0).getImageUrl());
+        category.setImageUrl("/api/v1/foods/images/15");
+        assertEquals("/api/v1/foods/images/15", service.listFoodCategories().get(0).getImageUrl());
+        category.setImageUrl(null);
+        assertEquals("", service.listFoodCategories().get(0).getImageUrl());
     }
 
     /** 验证食品详情会根据 categoryId 补充对应的分类名称。 */

@@ -53,6 +53,10 @@ public final class StatisticsDtos {
         private String label;
         private BigDecimal avg;
         private Integer count;
+        /** 当日已有正餐的推荐吃法预测均值；不含实测值。 */
+        private BigDecimal predictedAvg;
+        /** 参与预测均值的有效正餐数，0–3。 */
+        private Integer predictionCount;
     }
 
     @Data

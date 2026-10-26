@@ -34,7 +34,7 @@ public class ContentController {
     public ApiResponse<PageResult<ContentDtos.NewsListItem>> news(
             @RequestParam(required = false) Integer channelCode,
             @Valid PageQuery query) {
-        return ApiResponse.ok(contentService.pageNews(channelCode, query));
+        return ApiResponse.ok(contentService.pageNews(channelCode, query,RequestContext.getUserId()));
     }
 
     @GetMapping("/news/{id}")

@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.device.dto;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -67,5 +67,18 @@ public final class DeviceDtos {
         private String provider;
         @Size(max = 64)
         private String deviceName;
+    }
+
+    /** 设备同步流水（近 N 次）。 */
+    @Data
+    @Builder
+    public static class SyncLogItem {
+        private String id;
+        private String provider;
+        private Integer sampleCount;
+        private Integer createdCount;
+        private String remark;
+        /** 同步时间，对应 gmt_create */
+        private LocalDateTime syncedAt;
     }
 }

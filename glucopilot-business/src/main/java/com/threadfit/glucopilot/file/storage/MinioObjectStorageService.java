@@ -24,10 +24,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * MinIO 开发实现（provider=minio）。
- * <p>浏览器直传预签名 URL 依赖桶 CORS；部分第三方 MinIO 镜像不支持 CORS API。
- * 因此开发态签发<strong>同源后端代理 PUT</strong>（与 local 相同协议），后端再写入 MinIO，
- * 管理端/小程序无需跨域。登记与读取仍走真实 MinIO 对象。
+ * MinIO object storage with same-origin one-time PUT credentials.
+ * Existing private objects remain readable through authorized business routes.
+ * Missing objects are distinguished from connectivity and permission failures.
  */
 @Slf4j
 @Service
@@ -82,16 +81,17 @@ public class MinioObjectStorageService implements ObjectStorageService {
                     .contentType("application/octet-stream")
                     .build());
         } catch (Exception e) {
-            log.warn("MinIO putObject 失败 bucket={} key={}", props.getBucket(), pending.storageKey(), e);
-            throw new IllegalStateException("写入 MinIO 失败", e);
+            throw unavailable("write",e);
         }
     }
 
+    /** 对象定位地址，不保证匿名可读；私有资源通过对应业务的后端读取接口展示。 */
     @Override
     public String resolvePublicUrl(String storageKey) {
         return props.getEndpoint() + "/" + props.getBucket() + "/" + storageKey;
     }
 
+    /** 对象缺失与存储故障分别处理，连接失败不能伪装成未上传。 */
     @Override
     public boolean objectExists(String storageKey) {
         try {
@@ -101,12 +101,10 @@ public class MinioObjectStorageService implements ObjectStorageService {
                     .build());
             return true;
         } catch (ErrorResponseException e) {
-            log.debug("MinIO statObject 未命中 bucket={} key={}", props.getBucket(), storageKey, e);
-            return false;
+            if (isMissing(e)) return false;
+            throw unavailable("stat",e);
         } catch (Exception e) {
-            log.warn("MinIO statObject 异常 bucket={} endpoint={} key={}",
-                    props.getBucket(), props.getEndpoint(), storageKey, e);
-            return false;
+            throw unavailable("stat",e);
         }
     }
 
@@ -127,12 +125,22 @@ public class MinioObjectStorageService implements ObjectStorageService {
                 .object(storageKey)
                 .build())) {
             return in.readAllBytes();
+        } catch (ErrorResponseException e) {
+            if(isMissing(e))throw new BizException(ErrorCode.NOT_FOUND,"文件不存在");
+            throw unavailable("read",e);
         } catch (Exception e) {
-            log.warn("MinIO 读取对象失败 bucket={} key={}", props.getBucket(), storageKey, e);
-            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+            throw unavailable("read",e);
         }
     }
 
-    private record PendingUpload(String storageKey, long sizeBytes, Instant expiresAt) {
+    private static boolean isMissing(ErrorResponseException error) {
+        return error.errorResponse()!=null&&java.util.Set.of("NoSuchKey","NoSuchObject").contains(error.errorResponse().code());
     }
+    private static BizException unavailable(String operation,Exception error) {
+        // SDK异常的toString可能附带签名请求头；只记录故障类型及错误码。
+        String code=error instanceof ErrorResponseException response&&response.errorResponse()!=null?response.errorResponse().code():error.getClass().getSimpleName();
+        log.warn("MinIO {} failed type={} code={}",operation,error.getClass().getSimpleName(),code);
+        return new BizException(ErrorCode.INTERNAL_ERROR,"文件存储暂时不可用，请稍后重试");
+    }
+    private record PendingUpload(String storageKey, long sizeBytes, Instant expiresAt) {}
 }

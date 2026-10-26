@@ -14,12 +14,12 @@
 
 ## 一键：本机 MinIO（对象存储联调）
 
-1. 打开 Docker Desktop  
+1. 打开 Docker Desktop
 2. 双击 **`一键配置并启动MinIO.cmd`**
 
 - `STORAGE_PROVIDER=minio`，拉起 MinIO、建桶 `glucopilot`
 - 浏览器上传走后端同源代理再写入 MinIO（不依赖桶 CORS，兼容第三方镜像）
-- 会先检查镜像（`netvark/minio` / `netvark/mc`）；已有则跳过拉取  
+- 会先检查镜像（`netvark/minio` / `netvark/mc`）；已有则跳过拉取
 - 控制台：http://127.0.0.1:9001 （`minioadmin` / `minioadmin`）
 
 同事任选其一即可；两种模式下 CMS 素材上传协议相同（凭证 → PUT → 登记）。

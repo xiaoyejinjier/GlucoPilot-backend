@@ -37,6 +37,7 @@ class ContentActionConcurrencyTest {
         jdbc.execute("CREATE TABLE user_account(id BIGINT PRIMARY KEY,account_status INT DEFAULT 1,is_deleted INT DEFAULT 0)");
         jdbc.execute("CREATE TABLE community_blogger(id BIGINT PRIMARY KEY,user_id BIGINT)");
         com.threadfit.glucopilot.community.CommunityTestSchema.applyDraftMigration(schemaConnection);
+        for(long id=1;id<=10;id++)jdbc.update("INSERT INTO user_account(id) VALUES(?)",id);
         jdbc.update("INSERT INTO cms_news(id,title,channel_code,publish_at,publish_status) VALUES(1,'并发文章',4,CURRENT_TIMESTAMP,1)");
         var configuration=new MybatisConfiguration();configuration.setMapUnderscoreToCamelCase(true);
         GlobalConfigUtils.setGlobalConfig(configuration,new GlobalConfig().setDbConfig(new GlobalConfig.DbConfig()).setMetaObjectHandler(new AuditMetaObjectHandler()));
@@ -54,6 +55,12 @@ class ContentActionConcurrencyTest {
             assertEquals(10,jdbc.queryForObject("SELECT COUNT(*) FROM news_user_action WHERE is_liked=1 AND is_collected=1",Integer.class));
             tx.execute(s->{var req=new ContentDtos.NewsActionRequest();req.setLiked(false);return service.updateNewsAction(1L,1L,req);});
             assertEquals(9,jdbc.queryForObject("SELECT like_count FROM cms_news WHERE id=1",Integer.class));
+            jdbc.update("INSERT INTO community_article(news_id,author_user_id,state) VALUES(1,1,'PUBLISHED')");
+            jdbc.update("UPDATE cms_news SET community_managed=1 WHERE id=1");
+            jdbc.update("INSERT INTO community_article_access(news_id,visibility) VALUES(1,'PRIVATE')");
+            assertEquals(0,service.pageNews(null,new com.threadfit.glucopilot.common.api.PageQuery(),2L).getRecords().size());
+            assertEquals(0,service.pageNews(null,new com.threadfit.glucopilot.common.api.PageQuery()).getRecords().size());
+            assertEquals(1,service.pageNews(null,new com.threadfit.glucopilot.common.api.PageQuery(),1L).getRecords().size());
         } finally {pool.shutdownNow();jdbc.execute("DROP ALL OBJECTS");}
         }
     }

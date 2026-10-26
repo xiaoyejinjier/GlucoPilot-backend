@@ -24,6 +24,7 @@ public final class ContentDtos {
     @Data
     @Builder
     public static class NewsListItem {
+        private Long viewCount;
         private String id;
         private String title;
         private String summaryText;
@@ -38,6 +39,7 @@ public final class ContentDtos {
     @Data
     @Builder
     public static class NewsDetail {
+        private Long viewCount;
         private String id;
         private String title;
         private String summaryText;

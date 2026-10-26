@@ -21,6 +21,7 @@ public final class CommunityDtos {
                           String rootCommentId,String replyToCommentId,Profile replyToAuthor,
                           List<Comment> replies,long replyCount,boolean replyHasMore,String replyNextAfterId) {}
     public record Replies(List<Comment> records,boolean hasMore,String nextAfterId) {}
+    public record CommentContext(String commentId,Comment root) {}
     public record Message(String id, String senderId, String recipientId, String content,
                           LocalDateTime createdAt, LocalDateTime readAt, boolean mine) {}
     public record Messages(List<Message> records, boolean hasMore, String nextBeforeId) {}

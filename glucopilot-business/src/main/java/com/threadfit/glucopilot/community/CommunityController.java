@@ -20,11 +20,13 @@ public class CommunityController {
     @PutMapping("/community/profiles/{key}/following")
     public ApiResponse<Profile> follow(@PathVariable String key,@Valid @RequestBody Following request) { return ApiResponse.ok(service.follow(user(),key,request.following())); }
     @GetMapping("/community/following")
-    public ApiResponse<PageResult<Profile>> following(@Valid PageQuery q) { return ApiResponse.ok(service.follows(user(),q)); }
+    public ApiResponse<PageResult<Profile>> following(@RequestParam(required=false) String keyword,@Valid PageQuery q) { return ApiResponse.ok(service.follows(user(),keyword,q)); }
     @GetMapping("/community/collections")
-    public ApiResponse<PageResult<com.threadfit.glucopilot.content.dto.ContentDtos.NewsListItem>> collections(@Valid PageQuery q) { return ApiResponse.ok(service.collections(user(),q)); }
+    public ApiResponse<PageResult<com.threadfit.glucopilot.content.dto.ContentDtos.NewsListItem>> collections(@RequestParam(required=false) String keyword,@Valid PageQuery q) { return ApiResponse.ok(service.collections(user(),keyword,q)); }
     @GetMapping("/news/{id}/comments")
     public ApiResponse<PageResult<Comment>> comments(@PathVariable long id,@Valid PageQuery q) { return ApiResponse.ok(service.comments(user(),id,q)); }
+    @GetMapping("/news/{id}/comments/{commentId}/context")
+    public ApiResponse<CommentContext> commentContext(@PathVariable long id,@PathVariable long commentId) { return ApiResponse.ok(service.commentContext(user(),id,commentId)); }
     @PostMapping("/news/{id}/comments")
     public ApiResponse<Comment> comment(@PathVariable long id,@Valid @RequestBody CommentRequest request) { return ApiResponse.ok(service.addComment(user(),id,request)); }
     @PostMapping("/news/{id}/comments/{targetId}/replies")

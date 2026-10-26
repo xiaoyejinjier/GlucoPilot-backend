@@ -14,9 +14,9 @@ public class CommunityPublicationController {
     private final CommunityPublicationService service;
     public CommunityPublicationController(CommunityPublicationService service) { this.service=service; }
     @GetMapping("/tags")
-    public ApiResponse<List<Tag>> tags() { RequestContext.requireUserId();return ApiResponse.ok(service.tags()); }
+    public ApiResponse<List<Tag>> tags() { return ApiResponse.ok(service.tags(RequestContext.requireUserId())); }
     @GetMapping("/tags/mine")
-    public ApiResponse<List<Tag>> myTags() {return ApiResponse.ok(service.myTags(RequestContext.requireUserId()));}
+    public ApiResponse<List<Tag>> myTags(@RequestParam(defaultValue="false") boolean includeDisabled) {return ApiResponse.ok(service.myTags(RequestContext.requireUserId(),includeDisabled));}
     @GetMapping("/profiles/{key}/articles")
     public ApiResponse<PageResult<Article>> authorArticles(@PathVariable String key,@Valid PageQuery q) {return ApiResponse.ok(service.byAuthor(RequestContext.requireUserId(),key,q));}
     @GetMapping("/articles")

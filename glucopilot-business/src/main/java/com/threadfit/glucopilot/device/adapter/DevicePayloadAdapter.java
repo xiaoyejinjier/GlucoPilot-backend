@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.device.adapter;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.threadfit.glucopilot.device.model.UnifiedGlucoseSample;
 
 import java.util.List;

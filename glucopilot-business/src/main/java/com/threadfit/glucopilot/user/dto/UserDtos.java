@@ -28,6 +28,7 @@ public final class UserDtos {
     @Builder
     public static class ProfileView {
         private String nickname;
+        private String bio;
         private String avatarUrl;
         private String avatarText;
         /** 0未知1男2女 */
@@ -52,6 +53,7 @@ public final class UserDtos {
     @Builder
     public static class MeResponse {
         private String communityKey;
+        private String phone;
         private Integer accountStatus;
         private String phoneMasked;
         private String emailMasked;
@@ -65,6 +67,8 @@ public final class UserDtos {
     public static class ProfilePatchRequest {
         @Size(max = 64)
         private String nickname;
+        @Size(max = 160)
+        private String bio;
         @Size(max = 512)
         private String avatarUrl;
         @Size(max = 8)

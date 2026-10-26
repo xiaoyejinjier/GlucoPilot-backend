@@ -26,4 +26,10 @@ public interface MealRecordService {
 
     /** 管理端健康档案用：窗口内饮食汇总（记录天数 / 均碳 / 均热 / 高频食物）。 */
     MealVos.ArchiveSummary archiveSummary(Long userId, LocalDate from, LocalDate to);
+
+    /**
+     * 账号注销：物理删除该用户的饮食数据（先明细后主表）。
+     * <p>独立事务、幂等；由注销 worker 调用，不经过 controller。
+     */
+    void purgeAccountData(Long userId);
 }

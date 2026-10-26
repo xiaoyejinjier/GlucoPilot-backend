@@ -21,4 +21,10 @@ public interface HealthProfileService {
      * @return 保存后的健康档案视图
      */
     HealthView saveHealth(Long userId, HealthSaveRequest request);
+
+    /**
+     * 账号注销：物理删除健康档案。
+     * <p>这是敏感健康数据，注销后不留任何行（含逻辑删除态）。
+     */
+    void purgeAccountData(Long userId);
 }

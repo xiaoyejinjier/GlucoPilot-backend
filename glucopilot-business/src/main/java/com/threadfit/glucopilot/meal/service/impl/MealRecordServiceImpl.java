@@ -196,6 +196,19 @@ public class MealRecordServiceImpl implements MealRecordService {
                 .collect(Collectors.groupingBy(MealRecord::getUserId, Collectors.counting()));
     }
 
+    /**
+     * 账号注销：物理删除该用户全部饮食数据。
+     * <p>
+     * 顺序不可颠倒——{@code meal_food_item} 没有 user_id，只能靠 {@code meal_id}
+     * 反查归属；主表一删，明细就永远定位不到了。
+     */
+    @Override
+    @Transactional
+    public void purgeAccountData(Long userId) {
+        mealFoodItemMapper.purgeByUserId(userId);
+        mealRecordMapper.purgeByUserId(userId);
+    }
+
     @Override
     public MealVos.ArchiveSummary archiveSummary(Long userId, LocalDate from, LocalDate to) {
         List<MealRecord> records = mealRecordMapper.selectList(new LambdaQueryWrapper<MealRecord>()

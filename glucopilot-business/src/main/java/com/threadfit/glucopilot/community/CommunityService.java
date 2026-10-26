@@ -247,6 +247,29 @@ public class CommunityService {
         if(jdbc.queryForObject("SELECT COUNT(*) FROM user_account WHERE id IN (?,?) AND is_deleted=0 AND account_status=1",Long.class,recipient,actor)!=2)return;
         jdbc.update("INSERT INTO community_notification(recipient_id,actor_id,kind,target_id,news_id,comment_id) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id",recipient,actor,kind,target,news,comment);
     }
+    /**
+     * 账号注销：删除社区行为数据并匿名化博主身份。
+     * <p>
+     * 明确<b>不删</b>的东西（V36 口径，删了会破坏别人的数据）：
+     * <ul>
+     *   <li>{@code community_comment_like} / {@code news_user_action}：点赞/收藏行保留且计入显示数；</li>
+     *   <li>{@code community_message}：私信对端的历史不可单方面删除；</li>
+     *   <li>文章、评论、资讯：公开内容保留，作者经 {@code user_profile} 显示"已注销用户"。</li>
+     * </ul>
+     * 博主行不能删：文章通过 {@code cms_news.blogger_id} 指过来，删了作者解析直接 404；
+     * 只能把 user_id 摘掉、昵称改成匿名值。
+     */
+    @Transactional
+    public void purgeAccountData(long userId) {
+        jdbc.update("DELETE FROM community_follow WHERE follower_id=?",userId);
+        jdbc.update("DELETE FROM community_article_reader WHERE user_id=?",userId);
+        jdbc.update("DELETE FROM community_article_view WHERE user_id=?",userId);
+        jdbc.update("DELETE FROM community_article_hidden WHERE user_id=?",userId);
+        jdbc.update("DELETE FROM community_article_draft WHERE user_id=?",userId);
+        jdbc.update("DELETE FROM community_notification WHERE recipient_id=?",userId);
+        jdbc.update("DELETE FROM community_report WHERE reporter_id=?",userId);
+        jdbc.update("UPDATE community_blogger SET user_id=NULL,nickname='已注销用户',avatar_url=NULL,bio='' WHERE user_id=?",userId);
+    }
     public void notifyAction(long actor,long news,String kind,boolean enabled) {
         if(!Set.of("LIKE","COLLECT").contains(kind))throw new IllegalArgumentException("kind");
         if(!enabled){jdbc.update("DELETE FROM community_notification WHERE actor_id=? AND kind=? AND target_id=?",actor,kind,news);return;}

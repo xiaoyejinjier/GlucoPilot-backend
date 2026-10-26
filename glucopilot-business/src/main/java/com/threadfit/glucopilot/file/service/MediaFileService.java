@@ -32,4 +32,10 @@ public interface MediaFileService {
      * 否则会出现"单条查得到、批量查不到"（或反之）这种最难查的不一致。
      */
     List<MediaFile> listOwnedByIds(Collection<Long> mediaIds, Long userId, MediaBizType bizType);
+
+    /**
+     * 账号注销：删除 C 端业务媒体（bizType 1..6）的对象与行；社区配图/视频（7/8）保留。
+     * <p>独立事务、幂等；由注销 worker 经 user 模块编排调用。
+     */
+    void purgeAccountData(Long userId);
 }

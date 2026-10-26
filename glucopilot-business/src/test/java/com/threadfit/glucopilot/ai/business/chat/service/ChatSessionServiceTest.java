@@ -43,6 +43,11 @@ class ChatSessionServiceTest {
     private ChatSessionMapper chatSessionMapper;
     @Mock
     private com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper chatMessageMapper;
+    /** 注销清理用：本用例不涉及，只要求构造参数齐备。 */
+    @Mock
+    private com.threadfit.glucopilot.ai.business.chat.mapper.ChatContextMapper chatContextMapper;
+    @Mock
+    private com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper chatToolCallMapper;
     @Mock
     private AiChatClientRegistry chatClientRegistry;
     @Mock
@@ -52,8 +57,9 @@ class ChatSessionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, new AIProperties(),
-                chatClientRegistry, promptTemplateService, org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService.class));
+        service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, chatContextMapper,
+                chatToolCallMapper, new AIProperties(), chatClientRegistry, promptTemplateService,
+                org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService.class));
     }
 
     @Test

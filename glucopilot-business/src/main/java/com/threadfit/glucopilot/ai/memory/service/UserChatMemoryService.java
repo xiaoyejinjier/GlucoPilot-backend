@@ -58,6 +58,14 @@ public interface UserChatMemoryService {
     int deleteAllForUser(Long userId);
 
     /**
+     * 账号注销：物理删除该用户全部长期记忆。
+     * <p>
+     * 与 {@link #deleteAllForUser} 的区别是"逻辑删除 vs 物理删除"：注销后不能留行，
+     * 否则系统仍然"记得"这个已经不存在的人。
+     */
+    void purgeAccountData(Long userId);
+
+    /**
      * 异步抽取某个会话的长期记忆。
      * <p>
      * <b>不阻塞、不抛异常</b>：单飞（同一会话同时只跑一个抽取任务），失败只记日志——

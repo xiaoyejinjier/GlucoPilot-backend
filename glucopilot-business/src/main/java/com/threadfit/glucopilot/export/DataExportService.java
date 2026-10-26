@@ -42,6 +42,11 @@ public class DataExportService {
         } catch(Exception ex) {String message=ex instanceof BizException?ex.getMessage():"文件生成失败，请稍后重试";jdbc.update("UPDATE data_export_task SET task_status=3,error_msg=?,finished_at=CURRENT_TIMESTAMP WHERE id=?",message,id);}
         return get(viewer,id);
     }
+    /** 账号注销：物理删除导出任务与导出文件（data_export_file 是 LONGBLOB，无对象存储副本）。 */
+    @Transactional public void purgeAccountData(long user){
+        jdbc.update("DELETE FROM data_export_file WHERE task_id IN (SELECT id FROM data_export_task WHERE user_id=?)",user);
+        jdbc.update("DELETE FROM data_export_task WHERE user_id=?",user);
+    }
     private void sheet(XSSFWorkbook book,String name,String[] headers,String[] keys,List<Map<String,Object>> rows){var sheet=book.createSheet(name);var header=sheet.createRow(0);var style=book.createCellStyle();var font=book.createFont();font.setBold(true);style.setFont(font);for(int i=0;i<headers.length;i++){var cell=header.createCell(i);cell.setCellValue(headers[i]);cell.setCellStyle(style);sheet.setColumnWidth(i,(i==2?32:22)*256);}int at=1;for(var values:rows){var row=sheet.createRow(at++);for(int i=0;i<keys.length;i++){Object value=values.get(keys[i]);if(value==null)continue;var cell=row.createCell(i);if(value instanceof Number n)cell.setCellValue(n.doubleValue());else cell.setCellValue(value.toString());}}sheet.createFreezePane(0,1);sheet.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0,Math.max(0,rows.size()),0,headers.length-1));}
     public byte[] file(Long viewer,long id){var task=get(viewer,id);if(!task.status().equals("done"))throw new BizException(ErrorCode.CONFLICT,"导出文件尚未生成，请稍后再试");var bytes=jdbc.queryForList("SELECT file_bytes FROM data_export_file WHERE task_id=?",byte[].class,id);if(bytes.isEmpty())throw missing();return bytes.getFirst();}
 }

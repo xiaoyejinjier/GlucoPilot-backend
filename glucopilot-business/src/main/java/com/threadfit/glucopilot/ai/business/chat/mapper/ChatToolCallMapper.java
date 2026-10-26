@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.business.chat.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatToolCall;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
@@ -29,4 +30,13 @@ public interface ChatToolCallMapper extends BaseMapper<ChatToolCall> {
             + "WHERE session_id = #{sessionId} AND result_digest IS NOT NULL AND result_digest <> '' "
             + "ORDER BY id DESC LIMIT #{limit}")
     List<ChatToolCall> selectRecentDigests(@Param("sessionId") Long sessionId, @Param("limit") Integer limit);
+
+    /**
+     * 账号注销：物理删除工具调用记录。
+     * <p>
+     * result_digest 是工具的返回摘要，里面可能有血糖区间等健康事实，
+     * 所以它必须与对话正文一起删，不能因为"只是元数据"就留下。
+     */
+    @Delete("DELETE FROM chat_tool_call WHERE user_id = #{userId}")
+    int purgeByUserId(@Param("userId") Long userId);
 }

@@ -80,4 +80,8 @@ public final class AuthDtos {
     public static class EmailCodeResponse {
         private Integer expireIn;
     }
+
+    /** 会话解析结果：userId + 账号状态（null 视为无效会话）。 */
+    public record SessionPrincipal(Long userId, Integer accountStatus) {
+    }
 }

@@ -130,6 +130,14 @@ public class AdminUserService {
         if (account == null) {
             throw new BizException(ErrorCode.NOT_FOUND, "用户不存在");
         }
+        // 注销中的 2/3/4 是注销流程自己的中间态与终态，管理员不能直接改成 NORMAL。
+        // 改回 NORMAL 等于替用户撤销注销——管理员不该有这个权力（方案 §3.4 / §7 明确不代撤销）。
+        int current = account.getAccountStatus() == null ? -1 : account.getAccountStatus();
+        if (current == CodeEnum.AccountStatus.CANCELLING.getCode()
+                || current == CodeEnum.AccountStatus.CANCELLED.getCode()
+                || current == CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
+            throw new BizException(ErrorCode.CONFLICT, "该账号处于注销流程中或已注销，不可在此修改状态");
+        }
         account.setAccountStatus(accountStatus);
         userAccountMapper.updateById(account);
         return AdminUserDtos.UpdatedResult.builder().updated(true).build();

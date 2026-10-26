@@ -2,6 +2,8 @@ package com.threadfit.glucopilot.ai.business.chat.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatContextEntity;
+import org.apache.ibatis.annotations.Delete;
+import org.apache.ibatis.annotations.Param;
 
 /**
  * 分片审计写入（chat_context，③ 期）。
@@ -15,4 +17,13 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatContextEntity;
  * 在它变成决定之前，不给出"顺手删掉"的入口。
  */
 public interface ChatContextMapper extends BaseMapper<ChatContextEntity> {
+
+    /**
+     * 账号注销：物理删除该用户的分片审计数据。
+     * <p>
+     * 与上面"刻意不提供删除封装"不冲突：那条约定说的是<b>业务</b>删除会话时不该顺手删审计；
+     * 账号注销是法定义务，必须删。
+     */
+    @Delete("DELETE FROM chat_context WHERE user_id = #{userId}")
+    int purgeByUserId(@Param("userId") Long userId);
 }

@@ -22,6 +22,7 @@ import com.threadfit.glucopilot.file.service.MediaFileService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -106,6 +107,13 @@ public class OcrTaskServiceImpl implements OcrTaskService {
             throw new BizException(ErrorCode.NOT_FOUND, "OCR 任务不存在或不属于当前用户");
         }
         return toView(task);
+    }
+
+    /** 账号注销：物理删除识别任务记录（含识别出的血糖读数，属敏感健康数据）。 */
+    @Transactional
+    @Override
+    public void purgeAccountData(Long userId) {
+        taskMapper.purgeByUserId(userId);
     }
 
     private void recognize(Long taskId, Long userId, MediaFile media) {

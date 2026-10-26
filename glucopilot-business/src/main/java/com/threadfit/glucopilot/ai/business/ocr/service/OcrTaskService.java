@@ -20,4 +20,10 @@ public interface OcrTaskService {
 
     /** 2.22 查询任务详情（只能查自己的）。 */
     OcrDtos.TaskView detail(Long id, Long userId);
+
+    /**
+     * 账号注销：物理删除该用户的识别任务记录。
+     * <p>识别结果含血糖读数，属敏感健康数据，注销后不留行。
+     */
+    void purgeAccountData(Long userId);
 }

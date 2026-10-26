@@ -196,6 +196,17 @@ public class GlucoseRecordService {
                 GlucoseRecord::getIsDeleted, GlucoseRecord::getDeletedAt, GlucoseRecord::getDeletedBy);
     }
 
+    /**
+     * 账号注销：物理删除该用户全部血糖记录。
+     * <p>
+     * 独立事务、幂等：worker 重试时重复调用没有副作用。刻意不复用 {@link #remove}——
+     * 单条删除是逻辑删除（用户可感知的"删除按钮"），注销要求真的从库里消失。
+     */
+    @Transactional
+    public void purgeAccountData(Long userId) {
+        glucoseRecordMapper.purgeByUserId(userId);
+    }
+
     /** 区间记录（含首尾），升序，供统计、趋势与分时段复用。 */
     public List<GlucoseRecord> listRange(Long userId, LocalDate from, LocalDate to) {
         return glucoseRecordMapper.selectList(new LambdaQueryWrapper<GlucoseRecord>()

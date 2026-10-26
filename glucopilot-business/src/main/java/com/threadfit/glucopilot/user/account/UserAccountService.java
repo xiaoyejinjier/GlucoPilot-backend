@@ -177,6 +177,18 @@ public class UserAccountService {
         return created;
     }
 
+    /**
+     * 账号注销：写墓碑 + 资料脱敏（同一事务）。
+     * <p>
+     * 两件事必须一起成功：只脱敏不写墓碑，账号还能登录；只写墓碑不脱敏，
+     * 社区仍能显示真实昵称/头像。这是清理链路的最后一步，调用前所有业务数据已删完。
+     */
+    @Transactional
+    public void anonymizeAccount(Long userId) {
+        userProfileMapper.anonymizeByUserId(userId);
+        userAccountMapper.tombstoneById(userId);
+    }
+
     private static String nullIfBlank(String value) {
         if (value == null) {
             return null;

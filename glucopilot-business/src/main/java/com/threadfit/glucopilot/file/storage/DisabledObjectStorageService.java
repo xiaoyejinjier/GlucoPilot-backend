@@ -38,6 +38,15 @@ public class DisabledObjectStorageService implements ObjectStorageService {
         throw unavailable();
     }
 
+    /**
+     * 存储未启用 = 本环境没有任何对象；删除直接视为成功。
+     * <p>不能抛 {@link #unavailable()}：否则注销清理会因为这个环境没配存储而永远重试失败。
+     */
+    @Override
+    public void deleteObject(String storageKey) {
+        // no-op
+    }
+
     @Override
     public StorageProvider provider() {
         throw unavailable();

@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.auth.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.threadfit.glucopilot.auth.client.WechatAuthClient;
 import com.threadfit.glucopilot.auth.dto.AuthDtos;
 import com.threadfit.glucopilot.auth.entity.AuthEmailCode;
@@ -70,7 +71,7 @@ public class AuthService {
             account = createUserWithOpenid(identity.openid(), identity.unionId());
             isNew = true;
         }
-        assertAccountUsable(account);
+        assertAccountLoginable(account);
         touchLogin(account);
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.WECHAT.getCode());
         return toSessionResponse(session, account, isNew);
@@ -78,8 +79,8 @@ public class AuthService {
 
     public AuthDtos.SmsCodeResponse sendSmsCode(AuthDtos.SmsCodeRequest request) {
         String scene = request.getScene().trim().toLowerCase();
-        if (!"login".equals(scene) && !"bind".equals(scene)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind");
+        if (!"login".equals(scene) && !"bind".equals(scene) && !"cancel".equals(scene) && !"recover".equals(scene)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind/cancel/recover");
         }
         long now = System.currentTimeMillis();
         AtomicLong last = smsCooldown.computeIfAbsent(request.getPhone(), k -> new AtomicLong(0));
@@ -121,7 +122,7 @@ public class AuthService {
             userAccountMapper.updateById(account);
             isNew = true;
         } else {
-            assertAccountUsable(account);
+            assertAccountLoginable(account);
         }
         touchLogin(account);
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.PHONE.getCode());
@@ -130,8 +131,8 @@ public class AuthService {
 
     public AuthDtos.EmailCodeResponse sendEmailCode(AuthDtos.EmailCodeRequest request) {
         String scene = request.getScene().trim().toLowerCase();
-        if (!"login".equals(scene) && !"bind".equals(scene)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind");
+        if (!"login".equals(scene) && !"bind".equals(scene) && !"cancel".equals(scene) && !"recover".equals(scene)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind/cancel/recover");
         }
         String email = EmailUtils.normalize(request.getEmail());
         long now = System.currentTimeMillis();
@@ -174,7 +175,7 @@ public class AuthService {
             userAccountMapper.updateById(account);
             isNew = true;
         } else {
-            assertAccountUsable(account);
+            assertAccountLoginable(account);
         }
         touchLogin(account);
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.EMAIL.getCode());
@@ -206,6 +207,63 @@ public class AuthService {
         UserAccount account = userAccountMapper.selectById(session.getUserId());
         assertAccountUsable(account);
         return session;
+    }
+
+    /**
+     * 解析 C 端会话：token 有效且账号非注销中/已注销时返回 userId + 账号状态；
+     * 否则返回 null（无效 / 注销中 / 已注销）。状态门禁由 {@code UserSessionAuthFilter} 处理。
+     */
+    public AuthDtos.SessionPrincipal resolveSession(String accessToken) {
+        if (accessToken == null || accessToken.isBlank()) {
+            return null;
+        }
+        UserSession session = userSessionMapper.selectOne(new LambdaQueryWrapper<UserSession>()
+                .eq(UserSession::getAccessToken, accessToken)
+                .eq(UserSession::getIsValid, 1)
+                .last("LIMIT 1"));
+        if (session == null || session.getExpireAt() == null
+                || session.getExpireAt().isBefore(LocalDateTime.now())) {
+            return null;
+        }
+        UserAccount account = userAccountMapper.selectById(session.getUserId());
+        if (account == null) {
+            return null;
+        }
+        Integer status = account.getAccountStatus();
+        if (status != null
+                && (status == CodeEnum.AccountStatus.CANCELLING.getCode()
+                    || status == CodeEnum.AccountStatus.CANCELLED.getCode())) {
+            return null;
+        }
+        return new AuthDtos.SessionPrincipal(session.getUserId(), status);
+    }
+
+    /** 注销/管理员操作时，批量失效某用户的全部有效会话。 */
+    public void revokeAllSessions(Long userId) {
+        userSessionMapper.update(null, new LambdaUpdateWrapper<UserSession>()
+                .eq(UserSession::getUserId, userId)
+                .eq(UserSession::getIsValid, 1)
+                .set(UserSession::getIsValid, 0));
+    }
+
+    /**
+     * 账号注销：清理 auth 域数据。
+     * <p>
+     * 手机号/邮箱必须由调用方在墓碑置空<b>之前</b>读出来传进来：验证码表没有 user_id，
+     * 墓碑一旦把 {@code phone/email} 置空，这两张表就再也定位不到该用户的记录了。
+     *
+     * @param phone 注销前的手机号（可空）
+     * @param email 注销前的邮箱（可空）
+     */
+    @Transactional
+    public void purgeAccountData(Long userId, String phone, String email) {
+        userSessionMapper.purgeByUserId(userId);
+        if (phone != null && !phone.isBlank()) {
+            authSmsCodeMapper.purgeByPhone(phone);
+        }
+        if (email != null && !email.isBlank()) {
+            authEmailCodeMapper.purgeByEmail(email);
+        }
     }
 
     /** 登录与绑定手机号共用：校验并消费最近一条未使用验证码。 */
@@ -302,6 +360,23 @@ public class AuthService {
         Integer status = account.getAccountStatus();
         if (status == null || status != CodeEnum.AccountStatus.NORMAL.getCode()) {
             throw new BizException(ErrorCode.FORBIDDEN, "账号不可用");
+        }
+    }
+
+    /** 登录放行：NORMAL / DISABLED / CANCELLED_RECOVERABLE 可登录（门禁另做限制），注销中/已注销拒绝。 */
+    private void assertAccountLoginable(UserAccount account) {
+        if (account == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
+        Integer status = account.getAccountStatus();
+        if (status == null) {
+            throw new BizException(ErrorCode.FORBIDDEN, "账号状态异常");
+        }
+        if (status == CodeEnum.AccountStatus.CANCELLING.getCode()) {
+            throw new BizException(ErrorCode.FORBIDDEN, "账号注销处理中，无法登录");
+        }
+        if (status == CodeEnum.AccountStatus.CANCELLED.getCode()) {
+            throw new BizException(ErrorCode.FORBIDDEN, "账号已注销，无法登录");
         }
     }
 

@@ -103,6 +103,17 @@ public class UserDeviceService {
         if (changed != 1) throw new BizException(ErrorCode.CONFLICT, "设备归属已变更，请刷新后重试");
     }
 
+    /**
+     * 账号注销：物理删除该用户的设备绑定行。
+     * <p>
+     * 与自助解绑刻意不同：解绑只把 user_id 置空（设备档案留着给别人认领），
+     * 注销则是"这个人不能再被定位"，行里还有 last_sync_at 等使用痕迹，所以直接删行。
+     */
+    @Transactional
+    public void purgeAccountData(Long userId) {
+        userDeviceMapper.purgeByUserId(userId);
+    }
+
     private static String defaultName(String provider) {
         return switch (provider) {
             case DeviceProviders.HUAWEI -> "华为健康设备";

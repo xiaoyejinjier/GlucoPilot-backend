@@ -58,6 +58,8 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
+    private final com.threadfit.glucopilot.ai.business.chat.mapper.ChatContextMapper chatContextMapper;
+    private final com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper chatToolCallMapper;
     private final AIProperties aiProperties;
     private final AiChatClientRegistry chatClientRegistry;
     private final AiPromptTemplateService promptTemplateService;
@@ -117,6 +119,22 @@ public class ChatSessionServiceImpl implements ChatSessionService {
             extractMemoryQuietly(userId, previous.getId());
         }
         return created;
+    }
+
+    /**
+     * 账号注销：物理删除该用户的全部对话数据。
+     *
+     * <p>顺序按"子表先、父表后"：会话是归属锚点，先删会话会让其余三张表失去定位依据。
+     * 工具调用放最后但仍在会话之前——它的 {@code result_digest} 可能带健康事实，
+     * 不能因为"只是元数据"而漏删。
+     */
+    @Override
+    @Transactional
+    public void purgeAccountData(Long userId) {
+        chatMessageMapper.purgeByUserId(userId);
+        chatContextMapper.purgeByUserId(userId);
+        chatToolCallMapper.purgeByUserId(userId);
+        chatSessionMapper.purgeByUserId(userId);
     }
 
     /**

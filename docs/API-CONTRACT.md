@@ -1,5 +1,15 @@
 # API 契约
 
+## 账号注销（2026-10-23）
+
+快速注销、验证通过即生效，不设强制冷静期；用户可选 7 天可恢复，默认不勾选。本人发起，管理端不代发起、不代撤销；当前无资产/权益/订单/会员/券/积分模块，确认页不展示、不拦截、不建空卡片。accountStatus 新增 3=已注销、4=已注销可恢复；注销 mode 为 1=立即、2=七天可恢复，status 为 0=待执行、1=执行中、2=已执行、3=已恢复、4=失败。
+
+新增 GET /api/v1/users/me/cancellation 查询本人状态（无申请时 cancellation 为 null，否则含 status、mode、reasonCode、verifyChannel、requestedAt、isolateUntil、executedAt、recoveredAt）；POST /api/v1/users/me/cancellation/code 自动选择已绑定手机或邮箱发码，返回 {channel,maskedTarget,expiresIn,cooldownSeconds}，均未绑定返回 400 并引导绑定；POST /api/v1/users/me/cancellation 接收 {mode,reasonCode?,verifyCode}，仅 NORMAL/DISABLED 可提交，已有 PENDING/RUNNING 幂等返回现状，成功后立即失效全部 user_session，mode=1 置 accountStatus=2 异步清理，mode=2 置 4 并返回 isolateUntil=申请时间+7 天；POST /api/v1/users/me/cancellation/recovery 接收 {verifyCode}，仅 accountStatus=4 且未到 isolateUntil 可恢复，成功后 24 小时内不可再次申请，窗口过期或状态 2/3 返回 409。验证码 scene=cancel，60 秒冷却，连续 5 次失败锁定 24 小时（429）。
+
+登录响应含 accountStatus：4 允许登录并进入恢复引导，0 允许登录但仅可办理注销或退出，2/3 拒绝登录。0/4 状态的会话除 /users/me、/users/me/cancellation 及子路径、退出登录、发码、/app-config 外一律 403。注销后 openid、phone、email 置空释放唯一键，同微信/手机/邮箱再登录为全新账号并重新确认免责声明。
+
+数据处置：立即注销在会话失效后异步物理删除血糖、饮食、健康档案、AI 会话/消息/记忆/OCR、个人媒体（bizType 1–6）、设置/设备/反馈/导出文件；社区公开内容匿名保留（作者显示“已注销用户”，配图视频 bizType 7/8 随内容保留）；点赞收藏保留并计数（沿用 V36 口径），关注/阅读/隐藏/草稿/通知/本人举报删除；私信保留但禁止回复。墓碑时 user_account 置空 openid/union_id/phone/email/last_login_ip、username=“已注销用户”、account_status=3，user_profile 昵称=“已注销用户”并清空头像/签名；is_deleted 必须保持 0，否则全局逻辑删除会使管理端与作者解析查不到。7 天模式窗口内数据保留但不可访问，期满执行同一清理。管理端 P0 支持 accountStatus=0..4 筛选、详情返回注销摘要、状态 2/3/4 拒绝启用禁用，不提供代发起/代撤销；协助恢复（同通道核验+二级审批+留痕）排 P1；已注销用户健康档案返回空态并提示“健康数据已删除”。V39 新建 user_account_cancellation、放宽 openid 为 NULL、扩展 chk_ua_status 至 0..4。前端注销或“暂不使用”后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
+
 ## 用户端设备管理集成（2026-10-21）
 
 合入GitHub设备实现：GET /api/v1/devices返回本人未删除的设备列表（含停用项）；POST /api/v1/devices/bind接收{deviceSn,provider,deviceName?}，SN最长64、名称最长64、provider属于既有DeviceProviders。返回{id,deviceSn,deviceName,provider,deviceStatus,lastSyncAt,bound:true}，空闲SN可认领，本人重复请求不新增档案，他人占用返回409，停用设备不由自助绑定重新启用。POST /api/v1/devices/{id}/unbind仅本人操作，明确清空user_id并保留档案，不能改变他人归属。沿用user_device，无新增迁移。

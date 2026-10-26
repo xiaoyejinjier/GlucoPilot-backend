@@ -570,7 +570,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ## 设备数据同步
 
-用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。传入 deviceSn 时须已绑定当前用户且启用，成功后刷新 last_sync_at。
+用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。传入 deviceSn 时须已绑定当前用户且启用，成功后刷新 last_sync_at，并写入 device_sync_log 一条流水（sample_count / created_count）。
 
 ## 用户端设备管理
 
@@ -581,8 +581,9 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 | GET /api/v1/devices | C 端登录 | 当前用户已绑定设备列表（含禁用项，前端按 status 展示） |
 | POST /api/v1/devices/bind | C 端登录 | 自助绑定：SN 空闲则新建并归属当前用户；已有空闲档案可认领；已被他人占用则冲突。建议写操作带 X-Idempotency-Key |
 | POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
+| GET /api/v1/devices/{id}/sync-logs?limit=10 | C 端登录 | 本人设备近 N 次同步流水（默认 10，最大 50）；按时间倒序；他人设备 id 业务拒绝 |
 
-绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。
+绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
 
 ## 管理端设备档案
 

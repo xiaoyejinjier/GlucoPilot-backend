@@ -9,7 +9,7 @@ RUN mvn -B -q -pl ruoyi-admin -am -DskipTests package
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
-RUN addgroup -S glucopilot && adduser -S glucopilot -G glucopilot
+RUN apk add --no-cache ffmpeg && addgroup -S glucopilot && adduser -S glucopilot -G glucopilot
 COPY --from=build /workspace/ruoyi-admin/target/ruoyi-admin.jar /app/app.jar
 
 RUN mkdir -p /app/uploads && chown glucopilot:glucopilot /app/uploads

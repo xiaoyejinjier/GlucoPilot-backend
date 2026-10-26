@@ -34,7 +34,9 @@ public class CommunityService {
         if(q.getPageNum()<1 || q.getPageSize()<1 || q.getPageSize()>50) throw new BizException(ErrorCode.BAD_REQUEST,"每页条数应为1～50");
     }
     private boolean following(Long viewer,String key) {
-        return viewer!=null && jdbc.queryForObject("SELECT COUNT(*) FROM community_follow WHERE follower_id=? AND target_key=? AND following=1",Long.class,viewer,key)>0;
+        if(viewer==null)return false;
+        if(key.startsWith("u"))return jdbc.queryForObject("SELECT COUNT(*) FROM community_follow WHERE follower_id=? AND following=1 AND (target_key=? OR target_key IN (SELECT CONCAT('b',id) FROM community_blogger WHERE user_id=? AND enabled=1))",Long.class,viewer,key,Long.parseLong(key.substring(1)))>0;
+        return jdbc.queryForObject("SELECT COUNT(*) FROM community_follow WHERE follower_id=? AND target_key=? AND following=1",Long.class,viewer,key)>0;
     }
     public Profile profile(Long viewer,String key) {
         if(key==null || !key.matches("[ub][1-9][0-9]{0,18}")) throw missing();
@@ -50,7 +52,8 @@ public class CommunityService {
                 (rs,n)->{long linked=rs.getLong("linked_id");String user=rs.wasNull()?null:Long.toString(linked);
                     return new Profile(key,user,rs.getString("nickname"),rs.getString("avatar_url"),rs.getString("bio"),following(viewer,key),user!=null && Objects.equals(viewer,linked));},id);
         if(rows.isEmpty()) throw missing();
-        return rows.getFirst();
+        var publisher=rows.getFirst();
+        return publisher.userId()==null?publisher:profile(viewer,"u"+publisher.userId());
     }
     public Profile newsAuthor(Long viewer,long newsId) {
         var linked=jdbc.queryForList("SELECT b.user_id FROM cms_news n JOIN community_blogger b ON b.id=n.blogger_id JOIN user_account u ON u.id=b.user_id AND "+ACTIVE+" WHERE n.id=? AND n.is_deleted=0",Long.class,newsId);
@@ -63,7 +66,9 @@ public class CommunityService {
         if(jdbc.queryForList("SELECT id FROM user_account WHERE id=? AND is_deleted=0 AND account_status=1 FOR UPDATE",Long.class,viewer).isEmpty())throw missing();
         Profile target=profile(viewer,key);
         if(target.isSelf()) throw new BizException(ErrorCode.BAD_REQUEST,"不能关注自己");
-        jdbc.update("INSERT INTO community_follow(follower_id,target_key,following) VALUES(?,?,?) ON DUPLICATE KEY UPDATE following=?,updated_at=CURRENT_TIMESTAMP",viewer,key,desired?1:0,desired?1:0);
+        String canonical=target.key();
+        jdbc.update("INSERT INTO community_follow(follower_id,target_key,following) VALUES(?,?,?) ON DUPLICATE KEY UPDATE following=?,updated_at=CURRENT_TIMESTAMP",viewer,canonical,desired?1:0,desired?1:0);
+        if(target.userId()!=null)jdbc.update("UPDATE community_follow SET following=0,updated_at=CURRENT_TIMESTAMP WHERE follower_id=? AND target_key IN (SELECT CONCAT('b',id) FROM community_blogger WHERE user_id=?) AND following=1",viewer,Long.parseLong(target.userId()));
         if(target.userId()!=null && target.followed()!=desired) {
             long recipient=Long.parseLong(target.userId());
             if(desired) notifyEvent(recipient,viewer,"FOLLOW",recipient,null,null);
@@ -73,9 +78,14 @@ public class CommunityService {
     }
     private static final String VALID_FOLLOW = " FROM community_follow f WHERE f.follower_id=? AND f.following=1 AND ((LEFT(f.target_key,1)='u' AND EXISTS(SELECT 1 FROM user_account u WHERE CONCAT('u',u.id)=f.target_key AND "+ACTIVE+")) OR (LEFT(f.target_key,1)='b' AND EXISTS(SELECT 1 FROM community_blogger b WHERE CONCAT('b',b.id)=f.target_key AND b.enabled=1))) ";
     public PageResult<Profile> follows(long viewer,PageQuery q) {
+        return follows(viewer,null,q);
+    }
+    public PageResult<Profile> follows(long viewer,String keyword,PageQuery q) {
         requireUser(viewer);page(q);
-        long total=jdbc.queryForObject("SELECT COUNT(*)"+VALID_FOLLOW,Long.class,viewer);
-        var keys=jdbc.queryForList("SELECT f.target_key"+VALID_FOLLOW+" ORDER BY f.updated_at DESC,f.target_key LIMIT ? OFFSET ?",String.class,viewer,q.getPageSize(),q.offset());
+        String term=listKeyword(keyword,32);
+        String from=VALID_FOLLOW+" AND (EXISTS(SELECT 1 FROM user_account u LEFT JOIN user_profile p ON p.user_id=u.id AND p.is_deleted=0 WHERE f.target_key=CONCAT('u',u.id) AND LOCATE(?,COALESCE(NULLIF(p.nickname,''),'社区用户'))>0) OR EXISTS(SELECT 1 FROM community_blogger b LEFT JOIN user_profile bp ON bp.user_id=b.user_id AND bp.is_deleted=0 WHERE f.target_key=CONCAT('b',b.id) AND LOCATE(?,CASE WHEN b.user_id IS NULL THEN b.nickname ELSE COALESCE(NULLIF(bp.nickname,''),'社区用户') END)>0))";
+        long total=jdbc.queryForObject("SELECT COUNT(*)"+from,Long.class,viewer,term,term);
+        var keys=jdbc.queryForList("SELECT f.target_key"+from+" ORDER BY f.updated_at DESC,f.target_key LIMIT ? OFFSET ?",String.class,viewer,term,term,q.getPageSize(),q.offset());
         return PageResult.of(q.getPageNum(),q.getPageSize(),total,keys.stream().map(key->profile(viewer,key)).toList());
     }
     public PageResult<Profile> search(long viewer,String keyword,PageQuery q) {
@@ -88,13 +98,22 @@ public class CommunityService {
         return PageResult.of(q.getPageNum(),q.getPageSize(),total,ids.stream().map(id->profile(viewer,"u"+id)).toList());
     }
     public PageResult<ContentDtos.NewsListItem> collections(long viewer,PageQuery q) {
+        return collections(viewer,null,q);
+    }
+    private String listKeyword(String keyword,int max) {
+        String term=Objects.toString(keyword,"").trim();
+        if(term.length()>max)throw new BizException(ErrorCode.BAD_REQUEST,"搜索词最多"+max+"字");
+        return term;
+    }
+    public PageResult<ContentDtos.NewsListItem> collections(long viewer,String keyword,PageQuery q) {
         requireUser(viewer);page(q);
-        String from=" FROM news_user_action a JOIN cms_news n ON n.id=a.news_id WHERE a.user_id=? AND a.is_deleted=0 AND a.is_collected=1 AND "+ArticleAccessService.publishedSql("n")+" AND "+ArticleAccessService.readableSql("n",viewer);
-        long total=jdbc.queryForObject("SELECT COUNT(*)"+from,Long.class,viewer);
+        String term=listKeyword(keyword,80);
+        String from=" FROM news_user_action a JOIN cms_news n ON n.id=a.news_id WHERE a.user_id=? AND a.is_deleted=0 AND a.is_collected=1 AND "+ArticleAccessService.publishedSql("n")+" AND "+ArticleAccessService.readableSql("n",viewer)+" AND LOCATE(?,n.title)>0";
+        long total=jdbc.queryForObject("SELECT COUNT(*)"+from,Long.class,viewer,term);
         var rows=jdbc.query("SELECT n.*"+from+" ORDER BY a.gmt_modified DESC,n.id DESC LIMIT ? OFFSET ?",(rs,i)->ContentDtos.NewsListItem.builder()
                 .id(rs.getString("id")).title(rs.getString("title")).summaryText(rs.getString("summary_text"))
                 .channelCode(rs.getInt("channel_code")).contentType(rs.getInt("content_type")).coverUrl(rs.getString("cover_url"))
-                .publishAt(rs.getTimestamp("publish_at").toLocalDateTime()).likeCount(rs.getInt("like_count")).collectCount(rs.getInt("collect_count")).viewCount(viewCount(rs.getLong("id"))).build(),viewer,q.getPageSize(),q.offset());
+                .publishAt(rs.getTimestamp("publish_at").toLocalDateTime()).likeCount(rs.getInt("like_count")).collectCount(rs.getInt("collect_count")).viewCount(viewCount(rs.getLong("id"))).build(),viewer,term,q.getPageSize(),q.offset());
         return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
     }
     public long commentCount(long newsId) {
@@ -122,6 +141,18 @@ public class CommunityService {
         var rows=jdbc.query("SELECT c.* FROM community_comment c WHERE "+filter+" ORDER BY c.id DESC LIMIT ? OFFSET ?",(rs,i)->comment(viewer,rs),news,q.getPageSize(),q.offset());
         long total=jdbc.queryForObject("SELECT COUNT(*) FROM community_comment c WHERE "+filter,Long.class,news);
         return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
+    }
+    public CommentContext commentContext(long viewer,long news,long targetId) {
+        requireUser(viewer);requireReadable(viewer,news);
+        var targets=jdbc.query("SELECT c.* FROM community_comment c WHERE c.id=? AND c.news_id=? AND "+VISIBLE_COMMENT,(rs,i)->comment(viewer,rs,false),targetId,news);
+        if(targets.isEmpty())throw missing();var target=targets.getFirst();long rootId=Long.parseLong(target.rootCommentId());
+        var roots=jdbc.query("SELECT c.* FROM community_comment c WHERE c.id=? AND c.news_id=? AND c.root_comment_id IS NULL AND "+VISIBLE_COMMENT,(rs,i)->comment(viewer,rs),rootId,news);
+        if(roots.isEmpty())throw missing();var root=roots.getFirst();
+        if(targetId!=rootId && root.replies().stream().noneMatch(reply->reply.id().equals(target.id()))) {
+            var replies=new ArrayList<>(root.replies());replies.add(target);replies.sort(Comparator.comparingLong(reply->Long.parseLong(reply.id())));
+            root=new Comment(root.id(),root.content(),root.createdAt(),root.author(),root.mine(),root.rootCommentId(),root.replyToCommentId(),root.replyToAuthor(),List.copyOf(replies),root.replyCount(),root.replyHasMore(),root.replyNextAfterId());
+        }
+        return new CommentContext(target.id(),root);
     }
     private long replyCount(long news,long root) { return jdbc.queryForObject("SELECT COUNT(*) FROM community_comment c WHERE c.news_id=? AND c.root_comment_id=? AND "+VISIBLE_COMMENT,Long.class,news,root); }
     public Replies replies(long viewer,long news,long root,Long after,int size) {

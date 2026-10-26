@@ -100,6 +100,36 @@ class CommunityServiceTest {
         jdbc.update("UPDATE user_account SET is_deleted=1 WHERE id=2");
         error(ErrorCode.NOT_FOUND,()->service.profile(1L,"u2"));
     }
+    @Test void followingSearchUsesOnlyFollowedDisplayNamesWithLiteralTermsAndConsistentPages() {
+        jdbc.update("UPDATE user_profile SET nickname='林医生' WHERE user_id=2");
+        jdbc.update("UPDATE user_profile SET nickname='林糖友' WHERE user_id=3");
+        tx.execute(s->service.follow(1,"u2",true));tx.execute(s->service.follow(1,"u3",true));tx.execute(s->service.follow(1,"b1",true));
+        var q=page();q.setPageSize(1);var first=service.follows(1," 林 ",q);assertEquals(2,first.getTotal());assertEquals(2,first.getPages());
+        q.setPageNum(2);assertNotEquals(first.getRecords().getFirst().key(),service.follows(1,"林",q).getRecords().getFirst().key());
+        assertEquals(1,service.follows(1,"编辑",page()).getTotal());assertEquals(0,service.follows(2,"林",page()).getTotal());
+        assertEquals(0,service.follows(1,"%_",page()).getTotal());assertEquals(3,service.follows(1,"",page()).getTotal());
+        error(ErrorCode.BAD_REQUEST,()->service.follows(1,"x".repeat(33),page()));
+        jdbc.update("UPDATE user_account SET account_status=0 WHERE id=2");assertEquals(1,service.follows(1,"林",page()).getTotal());
+    }
+    @Test void editorialBloggerAliasPreservesFollowingAndCanBeCancelledAfterAccountBinding() {
+        tx.execute(s->service.follow(1,"b1",true));jdbc.update("UPDATE community_blogger SET user_id=2 WHERE id=1");
+        assertEquals("u2",service.profile(1L,"b1").key());assertTrue(service.profile(1L,"u2").followed());
+        assertTrue(service.follows(1,"测试用户2",page()).getRecords().getFirst().followed());
+        assertFalse(tx.execute(s->service.follow(1,"b1",false)).followed());assertEquals(0,service.follows(1,page()).getTotal());
+        assertTrue(tx.execute(s->service.follow(1,"b1",true)).followed());assertEquals(1,service.follows(1,page()).getTotal());
+        assertEquals("u2",service.follows(1,page()).getRecords().getFirst().key());
+    }
+    @Test void collectionSearchOnlyMatchesOwnReadableTitlesAndUsesFilteredPagination() {
+        jdbc.update("UPDATE cms_news SET title='控糖甲' WHERE id=10");jdbc.update("UPDATE cms_news SET title='控糖乙' WHERE id=11");
+        jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_collected) VALUES(1,10,1),(1,11,1),(2,10,1)");
+        var q=page();q.setPageSize(1);var first=service.collections(1,"控糖",q);assertEquals(2,first.getTotal());assertEquals(2,first.getPages());
+        q.setPageNum(2);assertNotEquals(first.getRecords().getFirst().getId(),service.collections(1,"控糖",q).getRecords().getFirst().getId());
+        assertEquals(1,service.collections(2,"甲",page()).getTotal());assertEquals(0,service.collections(3,"控糖",page()).getTotal());
+        assertEquals(0,service.collections(1,"%_",page()).getTotal());assertEquals(2,service.collections(1," ",page()).getTotal());
+        jdbc.update("INSERT INTO community_article_hidden(news_id,user_id) VALUES(10,1)");assertEquals(1,service.collections(1,"控糖",page()).getTotal());
+        jdbc.update("UPDATE cms_news SET publish_status=2 WHERE id=11");assertEquals(0,service.collections(1,"控糖",page()).getTotal());
+        error(ErrorCode.BAD_REQUEST,()->service.collections(1,"x".repeat(81),page()));
+    }
     @Test void searchOnlyUsesPublicNicknamesAndEscapesWildcardSemantics() throws Exception {
         assertEquals(3,service.search(1,"测试",page()).getTotal());
         assertEquals(0,service.search(1,"private-phone",page()).getTotal());
@@ -157,6 +187,27 @@ class CommunityServiceTest {
         error(ErrorCode.NOT_FOUND,()->service.replies(3,11,Long.parseLong(root.id()),null,10));
         error(ErrorCode.BAD_REQUEST,()->service.replies(3,10,Long.parseLong(root.id()),0L,10));
         error(ErrorCode.BAD_REQUEST,()->service.replies(3,10,Long.parseLong(root.id()),null,51));
+    }
+    @Test void commentContextLocatesOldRootAndCollapsedReplyWithoutSkippingReplyCursor() {
+        var root=comment(1,10,"通知对应的旧评论","focus-root-0001");
+        var replies=new ArrayList<Comment>();for(int i=0;i<8;i++)replies.add(reply(2,10,root.id(),"回复"+i,"focus-reply-000"+i));
+        for(int i=0;i<25;i++)comment(3,10,"更新的评论"+i,"focus-new-root-00"+i);
+        assertTrue(service.comments(4,10,page()).getRecords().stream().noneMatch(c->c.id().equals(root.id())));
+        var context=service.commentContext(4,10,Long.parseLong(replies.getLast().id()));
+        assertEquals(replies.getLast().id(),context.commentId());assertEquals(root.id(),context.root().id());assertEquals(4,context.root().replies().size());assertEquals(8,context.root().replyCount());assertTrue(context.root().replyHasMore());
+        assertEquals(List.of(replies.get(0).id(),replies.get(1).id(),replies.get(2).id(),replies.getLast().id()),context.root().replies().stream().map(Comment::id).toList());
+        assertEquals(replies.get(2).id(),context.root().replyNextAfterId());
+        assertEquals(replies.get(3).id(),service.replies(4,10,Long.parseLong(root.id()),Long.valueOf(context.root().replyNextAfterId()),3).records().getFirst().id());
+        assertEquals(root.id(),service.commentContext(4,10,Long.parseLong(root.id())).commentId());
+    }
+    @Test void commentContextRejectsDeletedDisabledForeignAndInaccessibleTargets() {
+        var root=comment(1,10,"原评论","focus-root-0001");var target=reply(2,10,root.id(),"回复","focus-reply-0001");long id=Long.parseLong(target.id());
+        error(ErrorCode.NOT_FOUND,()->service.commentContext(4,11,id));
+        jdbc.update("UPDATE user_account SET account_status=0 WHERE id=2");error(ErrorCode.NOT_FOUND,()->service.commentContext(4,10,id));jdbc.update("UPDATE user_account SET account_status=1 WHERE id=2");
+        jdbc.update("INSERT INTO community_article_access(news_id,visibility) VALUES(10,'PRIVATE')");error(ErrorCode.NOT_FOUND,()->service.commentContext(4,10,id));jdbc.update("DELETE FROM community_article_access WHERE news_id=10");
+        jdbc.update("UPDATE cms_news SET publish_status=2 WHERE id=10");error(ErrorCode.NOT_FOUND,()->service.commentContext(4,10,id));jdbc.update("UPDATE cms_news SET publish_status=1 WHERE id=10");
+        service.deleteComment(2,10,id);error(ErrorCode.NOT_FOUND,()->service.commentContext(4,10,id));
+        var another=reply(3,10,root.id(),"仍可见的回复","focus-reply-0002");service.deleteComment(1,10,Long.parseLong(root.id()));error(ErrorCode.NOT_FOUND,()->service.commentContext(4,10,Long.parseLong(another.id())));
     }
     @Test void removingRootHidesThreadButRemovingOneReplyKeepsOtherPeoplesReplies() {
         var root=comment(1,10,"原始评论","thread-root-001");var first=reply(2,10,root.id(),"中间回复","thread-child-01");
@@ -252,9 +303,24 @@ class CommunityServiceTest {
         var json=new ObjectMapper().readTree(response.getContentAsByteArray());assertEquals(0,json.get("code").asInt());assertEquals("community-check",json.get("requestId").asText());
         assertEquals(400,mvc.perform(post("/api/v1/news/10/comments").contentType("application/json").content("{\"content\":\"\",\"clientRequestId\":\"bad\"}")).andReturn().getResponse().getStatus());
         var root=comment(2,10,"原始评论","thread-http-root");
+        var context=mvc.perform(get("/api/v1/news/10/comments/"+root.id()+"/context")).andReturn().getResponse();
+        assertEquals(200,context.getStatus());var contextJson=new ObjectMapper().readTree(context.getContentAsByteArray());assertEquals(root.id(),contextJson.get("data").get("commentId").asText());assertEquals("community-check",contextJson.get("requestId").asText());
+        assertEquals(404,mvc.perform(get("/api/v1/news/11/comments/"+root.id()+"/context")).andReturn().getResponse().getStatus());
         assertEquals(200,mvc.perform(post("/api/v1/news/10/comments").contentType("application/json").content("{\"content\":\"真实回复\",\"clientRequestId\":\"thread-http-reply\",\"replyToCommentId\":\""+root.id()+"\"}")).andReturn().getResponse().getStatus());
         var replies=mvc.perform(get("/api/v1/news/10/comments/"+root.id()+"/replies")).andReturn().getResponse();
         assertEquals(200,replies.getStatus());assertTrue(replies.getContentAsString().contains("真实回复"));
         assertEquals(404,mvc.perform(get("/api/v1/news/11/comments/"+root.id()+"/replies")).andReturn().getResponse().getStatus());
+    }
+    @Test void listSearchHttpKeepsAuthenticationKeywordValidationAndRequestId() throws Exception {
+        var mvc=MockMvcBuilders.standaloneSetup(new CommunityController(service)).setControllerAdvice(new GlobalExceptionHandler()).build();
+        assertEquals(401,mvc.perform(get("/api/v1/community/following").param("keyword","用户")).andReturn().getResponse().getStatus());
+        RequestContext.setUserId(1L);RequestContext.setRequestId("list-search-check");
+        tx.execute(s->service.follow(1,"u2",true));jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_collected) VALUES(1,10,1)");
+        for(var entry:Map.of("/api/v1/community/following","用户2","/api/v1/community/collections","文章甲").entrySet()){
+            var response=mvc.perform(get(entry.getKey()).param("keyword",entry.getValue())).andReturn().getResponse();assertEquals(200,response.getStatus());
+            var json=new ObjectMapper().readTree(response.getContentAsByteArray());assertEquals("list-search-check",json.path("requestId").asString(""));assertEquals(1,json.path("data").path("total").asInt(-1));
+        }
+        assertEquals(400,mvc.perform(get("/api/v1/community/following").param("keyword","x".repeat(33))).andReturn().getResponse().getStatus());
+        assertEquals(400,mvc.perform(get("/api/v1/community/collections").param("keyword","x".repeat(81))).andReturn().getResponse().getStatus());
     }
 }

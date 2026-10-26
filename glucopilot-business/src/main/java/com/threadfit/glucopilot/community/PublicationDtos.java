@@ -6,7 +6,10 @@ import java.util.List;
 
 public final class PublicationDtos {
     private PublicationDtos() {}
-    public record Tag(String code, String name) {}
+    public record Tag(String code, String name, String type, int enabled) {
+        public Tag(String code,String name) { this(code,name,code!=null && code.startsWith("custom_")?"USER":"OFFICIAL",1); }
+        public Tag(String code,String name,int enabled) { this(code,name,code!=null && code.startsWith("custom_")?"USER":"OFFICIAL",enabled); }
+    }
     public record Submit(@NotBlank @Size(max=80) String title,
                          @NotNull @Size(max=8000) String body,
                          @Size(max=3) List<String> tagCodes,

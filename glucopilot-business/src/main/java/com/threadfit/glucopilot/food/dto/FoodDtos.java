@@ -27,6 +27,9 @@ public final class FoodDtos {
         /** 分类名称，例如“主食类”。 */
         private String categoryName;
 
+        /** 与管理端共用 food_category.image_url；未设置时为空字符串。 */
+        private String imageUrl;
+
         /** 分类展示顺序，数值越小越靠前。 */
         private Integer sortNo;
     }

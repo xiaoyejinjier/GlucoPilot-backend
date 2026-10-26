@@ -57,6 +57,44 @@ class AdminCommunityArticlesTest {
     private void peer(long id){jdbc.update("INSERT INTO user_account(id) VALUES(?)",id);jdbc.update("INSERT INTO user_profile(user_id,nickname,bio) VALUES(?,?,'认真记录生活')",id,"好友"+id);}
     private void mutual(long id){jdbc.update("INSERT INTO community_follow(follower_id,target_key,following) VALUES(2,?,1),(?,'u2',1)","u"+id,id);}
 
+    @Test void editorialArticlesAppearAfterRealFinalReviewWithNoSyntheticUserAccount() {
+        article(30,"编辑部科普",1,0);
+        jdbc.update("INSERT INTO community_article(news_id,seed_key,state,ai_verdict) VALUES(30,'editorial-fixture','PENDING_ADMIN','PASS')");
+        jdbc.update("INSERT INTO community_article_tag(news_id,tag_id) SELECT 30,id FROM community_tag WHERE code='diet'");
+        assertFalse(service.feed(2,null,false,null,new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("30")));
+        assertThrows(BizException.class,()->service.get(2L,30,false));
+        var published=tx().execute(s->service.review(99,30,new Review(1,"APPROVE","已核对原文")));
+        assertEquals("PUBLISHED",published.state());assertEquals("b1",published.author().key());assertNull(published.author().userId());
+        assertTrue(service.feed(2,"diet",false,null,new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("30")));
+        assertTrue(service.byAuthor(2,"b1",new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("30")));
+        assertEquals("完整正文",service.get(2L,30,false).body());access().requireReadable(null,30);
+        jdbc.update("INSERT INTO community_follow(follower_id,target_key,following) VALUES(2,'b1',1)");
+        assertTrue(service.feed(2,null,true,null,new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("30")));
+        jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_collected) VALUES(2,30,1)");
+        assertEquals("30",new CommunityService(jdbc).collections(2,new PageQuery()).getRecords().getFirst().getId());
+        jdbc.update("UPDATE cms_news SET publish_at=DATEADD('DAY',1,CURRENT_TIMESTAMP) WHERE id=30");
+        assertThrows(BizException.class,()->access().requireReadable(2L,30));
+        jdbc.update("UPDATE cms_news SET publish_at=CURRENT_TIMESTAMP WHERE id=30");
+        jdbc.update("INSERT INTO community_article_access(news_id,visibility) VALUES(30,'PRIVATE')");
+        assertThrows(BizException.class,()->service.get(2L,30,false));
+        jdbc.update("DELETE FROM community_article_access WHERE news_id=30");
+        access().hidden(2,30,true);
+        assertFalse(service.feed(2,null,false,null,new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("30")));
+        assertEquals(0,new CommunityService(jdbc).collections(2,new PageQuery()).getTotal());
+    }
+    @Test void editorialFallbackRequiresEnabledStandalonePublisherAndNeverRevivesDisabledUsers() {
+        peer(3);jdbc.update("UPDATE user_account SET account_status=0 WHERE id=3");
+        jdbc.update("INSERT INTO community_blogger(id,user_id,nickname,enabled) VALUES(40,NULL,'停用编辑部',0),(41,3,'关联停用用户',1)");
+        for(long id:List.of(30L,31L,32L,33L,34L))article(id,"不可公开的发布身份",1,1);
+        jdbc.update("UPDATE cms_news SET blogger_id=40 WHERE id=30");
+        jdbc.update("UPDATE cms_news SET blogger_id=999 WHERE id=31");
+        jdbc.update("UPDATE cms_news SET blogger_id=41 WHERE id=32");
+        jdbc.update("INSERT INTO community_article(news_id,author_user_id,state) VALUES(30,NULL,'PUBLISHED'),(31,NULL,'PUBLISHED'),(32,NULL,'PUBLISHED'),(33,999,'PUBLISHED'),(34,3,'PUBLISHED')");
+        var ids=service.feed(2,null,false,null,new PageQuery()).getRecords().stream().map(Article::id).toList();
+        for(long id:List.of(30L,31L,32L,33L,34L)){assertFalse(ids.contains(Long.toString(id)));assertThrows(BizException.class,()->service.get(2L,id,false));}
+        assertTrue(ids.contains("21"));
+    }
+
     @Test void privateArticlesAreFilteredAcrossDetailFeedsCollectionsCommentsAndLegacyNews() {
         peer(3);var policy=tx().execute(s->access().change(2,21,new ArticleAccessService.Change("PRIVATE",List.of(),0)));
         assertEquals("PRIVATE",policy.visibility());assertEquals(1,policy.revision());assertEquals("PRIVATE",service.get(2L,21,false).visibility());
@@ -419,6 +457,45 @@ class AdminCommunityArticlesTest {
         assertTrue(first.tags().stream().anyMatch(t->t.code().equals("diet")));
         assertEquals(first.tags().stream().filter(t->t.code().startsWith("custom_")).findFirst().orElseThrow().code(),second.tags().getFirst().code());
         assertEquals(7,jdbc.queryForObject("SELECT COUNT(*) FROM community_tag",Integer.class));
+    }
+    @Test void administratorCategoriesAppearBeforeAnyArticleAndDeletionCannotBeRecreatedByUsers() {
+        var tags=new CommunityTagService(jdbc);
+        var created=tx().execute(s->tags.create(new CommunityTagService.Change("控糖早餐",20,1)));
+        assertEquals("OFFICIAL",created.type());assertTrue(created.code().startsWith("topic_"));
+        assertTrue(service.tags(Long.valueOf(2)).stream().anyMatch(t->t.code().equals(created.code())));
+        assertEquals(created.code(),tx().execute(s->tags.create(new CommunityTagService.Change("控糖早餐",20,1))).code());
+        tx().executeWithoutResult(s->tags.remove(created.code()));tx().executeWithoutResult(s->tags.remove(created.code()));
+        assertFalse(service.tags(Long.valueOf(2)).stream().anyMatch(t->t.code().equals(created.code())));
+        assertThrows(BizException.class,()->tx().execute(s->service.edit(2,20,new Submit("分享记录","今天认真记录早餐和血糖，希望分享坚持记录的日常经验。",List.of(created.code()),List.of(),"deleted-topic-1",1))));
+        assertThrows(BizException.class,()->tx().execute(s->service.edit(2,20,new Submit("分享记录","今天认真记录早餐和血糖，希望分享坚持记录的日常经验。",List.of(),List.of("控糖早餐"),"deleted-topic-2",1))));
+        assertEquals(1,tags.list("早餐","OFFICIAL",0,new PageQuery()).getTotal());
+        tx().execute(s->tags.update(created.code(),new CommunityTagService.Change("控糖早餐",2,1)));
+        assertTrue(service.tags(Long.valueOf(2)).stream().anyMatch(t->t.code().equals(created.code())));
+    }
+    @Test void otherIncludesVisibleCustomArticlesWithoutExposingPrivateUnpublishedNames() {
+        jdbc.update("INSERT INTO community_tag(code,name,sort_no) VALUES('other','其他',9999),('custom_public','早餐搭配',100),('custom_private','私人标签',100)");
+        jdbc.update("INSERT INTO community_article_tag(news_id,tag_id) SELECT 21,id FROM community_tag WHERE code='custom_public'");
+        jdbc.update("INSERT INTO community_article_tag(news_id,tag_id) SELECT 20,id FROM community_tag WHERE code='custom_private'");
+        var available=service.tags(Long.valueOf(2));assertTrue(available.stream().anyMatch(t->t.code().equals("custom_public")&&t.type().equals("USER")));
+        assertFalse(available.stream().anyMatch(t->t.code().equals("custom_private")));
+        assertTrue(service.feed(2,"other",false,null,new PageQuery()).getRecords().stream().anyMatch(a->a.id().equals("21")));
+        var tags=new CommunityTagService(jdbc);tx().executeWithoutResult(s->tags.remove("custom_public"));
+        assertTrue(service.feed(2,"other",false,null,new PageQuery()).getRecords().isEmpty());
+        assertTrue(service.myTags(2,true).stream().anyMatch(t->t.code().equals("custom_public")&&t.enabled()==0));
+        assertFalse(service.myTags(2).stream().anyMatch(t->t.code().equals("custom_public")));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM community_article_tag a JOIN community_tag t ON t.id=a.tag_id WHERE a.news_id=21 AND t.code='custom_public'",Integer.class));
+        assertNotNull(service.get(2L,21,false));
+    }
+    @Test void otherIsReservedAndOldDraftCannotSaveOrPublishRemovedTopics() {
+        jdbc.update("INSERT INTO community_tag(code,name,sort_no) VALUES('other','其他',9999)");var tags=new CommunityTagService(jdbc);
+        assertThrows(BizException.class,()->tx().executeWithoutResult(s->tags.remove("other")));
+        assertThrows(BizException.class,()->tx().execute(s->tags.update("other",new CommunityTagService.Change("别的",2,1))));
+        var request=new CommunityDraftService.Payload("草稿","还没写完",List.of("diet"),List.of(),List.of(),"topic-draft-01",null,null,null,List.of());
+        var draft=tx().execute(s->drafts().create(2,request));assertNotNull(draft);
+        tx().executeWithoutResult(s->tags.remove("diet"));
+        assertThrows(BizException.class,()->tx().execute(s->drafts().create(2,new CommunityDraftService.Payload("新草稿","",List.of("diet"),List.of(),List.of(),"topic-draft-02",null,null,null,List.of()))));
+        assertThrows(BizException.class,()->tx().execute(s->drafts().publish(2,Long.parseLong(draft.id()),new CommunityDraftService.Publish(1,"topic-publish-1"))));
+        assertEquals("草稿",drafts().get(2,Long.parseLong(draft.id())).title());
     }
     @Test void moderationQueueRequiresMatchingVersionAndNeverPublishesByItself() {
         var queue=new CommunityModerationQueue(jdbc,new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())),service);

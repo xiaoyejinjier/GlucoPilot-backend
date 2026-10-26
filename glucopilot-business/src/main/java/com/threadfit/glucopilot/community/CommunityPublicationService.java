@@ -37,7 +37,7 @@ public class CommunityPublicationService {
         if(q.getPageNum()<1 || q.getPageSize()<1 || q.getPageSize()>50) throw new BizException(ErrorCode.BAD_REQUEST,"每页1～50条");
     }
     public List<Tag> tags() { return tags(null); }
-    public List<Tag> tags(Long viewer) { return jdbc.query("SELECT t.code,t.name FROM community_tag t WHERE t.enabled=1 AND (t.code IN ('diet','type1','type2','medication','exercise','daily') OR EXISTS(SELECT 1 FROM community_article_tag atg JOIN cms_news n ON n.id=atg.news_id LEFT JOIN community_article a ON a.news_id=n.id WHERE atg.tag_id=t.id AND n.is_deleted=0 AND n.publish_status=1 AND n.publish_at<=CURRENT_TIMESTAMP AND (n.community_managed=0 OR a.state='PUBLISHED') AND "+ArticleAccessService.readableSql("n",viewer)+")) ORDER BY t.sort_no,t.id",(rs,n)->new Tag(rs.getString(1),rs.getString(2))); }
+    public List<Tag> tags(Long viewer) { return jdbc.query("SELECT t.code,t.name FROM community_tag t WHERE t.enabled=1 AND (LEFT(t.code,7)<>'custom_' OR EXISTS(SELECT 1 FROM community_article_tag atg JOIN cms_news n ON n.id=atg.news_id LEFT JOIN community_article a ON a.news_id=n.id WHERE atg.tag_id=t.id AND n.is_deleted=0 AND n.publish_status=1 AND n.publish_at<=CURRENT_TIMESTAMP AND (n.community_managed=0 OR a.state='PUBLISHED') AND "+ArticleAccessService.readableSql("n",viewer)+")) ORDER BY t.sort_no,t.id",(rs,n)->new Tag(rs.getString(1),rs.getString(2))); }
     public List<Tag> tags(long id) { return jdbc.query("SELECT t.code,t.name FROM community_article_tag a JOIN community_tag t ON t.id=a.tag_id WHERE a.news_id=? AND t.enabled=1 ORDER BY t.sort_no,t.id",(rs,n)->new Tag(rs.getString(1),rs.getString(2)),id); }
     private List<String> codes(Submit request) {
         if(request.title()==null || request.title().trim().isEmpty() || request.title().trim().length()>80 || request.body()==null || (request.body().trim().length()<20 && (request.imageMediaIds()==null || request.imageMediaIds().isEmpty()) && (request.videoMediaIds()==null || request.videoMediaIds().isEmpty())) || request.body().length()>8000
@@ -45,12 +45,20 @@ public class CommunityPublicationService {
         List<String> predefined=request.tagCodes()==null?List.of():request.tagCodes();
         List<String> custom=request.customTags()==null?List.of():request.customTags();
         if(predefined.size()>3 || custom.size()>3 || predefined.size()+custom.size()<1) throw new BizException(ErrorCode.BAD_REQUEST,"请选择或填写1～3个标签");
-        Set<String> allowed=new HashSet<>(jdbc.queryForList("SELECT code FROM community_tag WHERE enabled=1",String.class));
+        Set<String> allowed=new HashSet<>(jdbc.queryForList("SELECT code FROM community_tag WHERE enabled=1 ORDER BY id FOR UPDATE",String.class));
         if(predefined.stream().anyMatch(code->code==null || !allowed.contains(code))) throw new BizException(ErrorCode.BAD_REQUEST,"标签不存在或已停用");
         Set<String> resolved=new TreeSet<>(predefined);
         for(String raw:custom) resolved.add(customTag(raw));
         if(resolved.size()>3) throw new BizException(ErrorCode.BAD_REQUEST,"最多选择3个标签");
         return List.copyOf(resolved);
+    }
+    void validateDraftTags(List<String> codes,List<String> custom) {
+        Set<String> allowed=new HashSet<>(jdbc.queryForList("SELECT code FROM community_tag WHERE enabled=1 ORDER BY id FOR UPDATE",String.class));
+        if(codes.stream().anyMatch(code->!allowed.contains(code)))throw new BizException(ErrorCode.BAD_REQUEST,"标签已删除或停用，请重新选择标签");
+        for(String raw:custom) {
+            String name=java.text.Normalizer.normalize(Objects.toString(raw,""),java.text.Normalizer.Form.NFKC).trim();
+            if(jdbc.queryForObject("SELECT COUNT(*) FROM community_tag WHERE LOWER(name)=LOWER(?) AND enabled=0",Long.class,name)>0)throw new BizException(ErrorCode.BAD_REQUEST,"标签已删除或停用，请重新选择标签");
+        }
     }
     private String customTag(String raw) {
         String name=java.text.Normalizer.normalize(Objects.toString(raw,""),java.text.Normalizer.Form.NFKC).replaceFirst("^\\s*#+","").trim().replaceAll("\\s+"," ");
@@ -145,14 +153,15 @@ public class CommunityPublicationService {
     public PageResult<Article> feed(long viewer,String tag,boolean following,String keyword,PageQuery q) {
         user(viewer,false);page(q);List<Object> args=new ArrayList<>();
         String filter=ArticleAccessService.publishedSql("n");
-        if(tag!=null && !tag.isBlank()) {filter+=" AND EXISTS(SELECT 1 FROM community_article_tag atg JOIN community_tag t ON t.id=atg.tag_id WHERE atg.news_id=n.id AND t.code=? AND t.enabled=1)";args.add(tag);}
+        if(tag!=null && !tag.isBlank()) {filter+=" AND EXISTS(SELECT 1 FROM community_article_tag atg JOIN community_tag t ON t.id=atg.tag_id WHERE atg.news_id=n.id AND "+(tag.equals("other")?"(t.code='other' OR LEFT(t.code,7)='custom_')":"t.code=?")+" AND t.enabled=1)";if(!tag.equals("other"))args.add(tag);}
         if(following) {filter+=" AND EXISTS(SELECT 1 FROM community_follow f WHERE f.follower_id=? AND f.following=1 AND (f.target_key=CONCAT('u',a.author_user_id) OR f.target_key=CONCAT('b',n.blogger_id) OR f.target_key=CONCAT('u',(SELECT b.user_id FROM community_blogger b WHERE b.id=n.blogger_id))))";args.add(viewer);}
         if(keyword!=null && !keyword.isBlank()) {if(keyword.length()>80) throw new BizException(ErrorCode.BAD_REQUEST,"搜索词最多80字");filter+=" AND LOCATE(?,n.title)>0";args.add(keyword.trim());}
         return list(viewer,false,filter,args,q);
     }
-    public List<Tag> myTags(long viewer) {
+    public List<Tag> myTags(long viewer) { return myTags(viewer,false); }
+    public List<Tag> myTags(long viewer,boolean includeDisabled) {
         user(viewer,false);
-        return jdbc.query("SELECT DISTINCT t.code,t.name FROM community_article_tag atg JOIN community_tag t ON t.id=atg.tag_id JOIN community_article a ON a.news_id=atg.news_id JOIN cms_news n ON n.id=a.news_id WHERE a.author_user_id=? AND n.is_deleted=0 AND t.enabled=1 ORDER BY t.name LIMIT 100",(rs,i)->new Tag(rs.getString(1),rs.getString(2)),viewer);
+        return jdbc.query("SELECT DISTINCT t.code,t.name,t.enabled FROM community_article_tag atg JOIN community_tag t ON t.id=atg.tag_id JOIN community_article a ON a.news_id=atg.news_id JOIN cms_news n ON n.id=a.news_id WHERE a.author_user_id=? AND n.is_deleted=0 AND (t.enabled=1 OR ?=1) ORDER BY t.name LIMIT 100",(rs,i)->new Tag(rs.getString(1),rs.getString(2),rs.getInt(3)),viewer,includeDisabled?1:0);
     }
     public PageResult<Article> byAuthor(long viewer,String key,PageQuery q) {
         user(viewer,false);page(q);var profile=community.profile(viewer,key);

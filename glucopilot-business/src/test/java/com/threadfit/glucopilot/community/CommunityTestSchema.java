@@ -9,6 +9,9 @@ public final class CommunityTestSchema {
             s.execute("CREATE TABLE IF NOT EXISTS data_export_task(id BIGINT PRIMARY KEY,user_id BIGINT)");
             s.execute("CREATE TABLE IF NOT EXISTS user_profile(user_id BIGINT PRIMARY KEY,nickname VARCHAR(64),avatar_url VARCHAR(512),is_deleted INT DEFAULT 0)");
             s.execute("CREATE TABLE IF NOT EXISTS community_article(news_id BIGINT PRIMARY KEY,state VARCHAR(24),author_user_id BIGINT)");
+            s.execute("CREATE TABLE IF NOT EXISTS community_blogger(id BIGINT PRIMARY KEY,user_id BIGINT,enabled INT DEFAULT 1)");
+            s.execute("ALTER TABLE community_blogger ADD COLUMN IF NOT EXISTS enabled INT DEFAULT 1");
+            s.execute("ALTER TABLE cms_news ADD COLUMN IF NOT EXISTS blogger_id BIGINT DEFAULT 1");
             s.execute("CREATE TABLE IF NOT EXISTS community_follow(follower_id BIGINT,target_key VARCHAR(32),following INT,PRIMARY KEY(follower_id,target_key))");
         }
         var migration=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V34__drafts_notifications_exports.sql"));migration.setSqlScriptEncoding("UTF-8");migration.populate(connection);

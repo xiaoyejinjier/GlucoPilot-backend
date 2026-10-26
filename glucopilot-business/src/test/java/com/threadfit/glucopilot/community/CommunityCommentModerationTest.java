@@ -35,7 +35,7 @@ import static org.mockito.Mockito.mock;
  *   <li><b>恢复</b>：管理端恢复只把 {@code is_hidden} 归零，<b>保留</b>原 {@code ai_verdict}
  *       （"机器判过违规"是发生过的事实，删掉就解释不清），并写一条 ADMIN/RESTORE 日志。</li>
  * </ol>
- * 另外验证 V37 迁移的两步默认值意图：历史评论是 {@code SKIPPED}（不会被一次性拉去重审），
+ * 另外验证 V43 迁移的两步默认值意图：历史评论是 {@code SKIPPED}（不会被一次性拉去重审），
  * 新插入的评论是 {@code PENDING}（自动进审核队列）。
  */
 class CommunityCommentModerationTest {
@@ -76,12 +76,18 @@ class CommunityCommentModerationTest {
             migration.populate(migrationConnection);
         }
         CommunityTestSchema.applyDraftMigration(migrationConnection);
+        // applyDraftMigration 已经顺带跑了 V37（举报反馈）与 V38（可见性），
+        // 评论读取要经过的 ArticleAccessService 依赖那几张表，因此不需要在这里重复建。
         CommunityTestSchema.applyModerationMigration(migrationConnection);
 
         jdbc.update("INSERT INTO user_account(id) VALUES(2),(3)");
         jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(2,'作者'),(3,'评论者')");
         jdbc.update("INSERT INTO cms_news(id,title,summary_text,content_body,channel_code,publish_at,publish_status,community_managed) "
                 + "VALUES(20,'社区文章','摘要','正文',4,CURRENT_TIMESTAMP,1,1)");
+        // 评论读取要先过 ArticleAccessService.requireReadable：社区文章必须处于 PUBLISHED，
+        // 且 author 是有效账号（user_account 2），否则一律 404「文章不存在或不可查看」。
+        jdbc.update("INSERT INTO community_article(news_id,author_user_id,state,revision,ai_verdict) "
+                + "VALUES(20,2,'PUBLISHED',1,'PASS')");
 
         var publication = new CommunityPublicationService(jdbc, mock(CmsNewsMapper.class), new CommunityService(jdbc));
         community = new CommunityService(jdbc);
@@ -122,7 +128,7 @@ class CommunityCommentModerationTest {
 
         assertEquals("PENDING", jdbc.queryForObject(
                 "SELECT ai_status FROM community_comment WHERE id=?", String.class, first),
-                "新插入的评论默认待审（V37 把列默认值改成 PENDING）");
+                "新插入的评论默认待审（V43 把列默认值改成 PENDING）");
 
         var job = queue.claimComment();
         assertNotNull(job);
@@ -151,7 +157,7 @@ class CommunityCommentModerationTest {
 
     @Test
     void 历史评论不会被一次性拉去重审() {
-        // 模拟 V37 上线前的存量评论：迁移把它们的 ai_status 落成 SKIPPED
+        // 模拟 V43 上线前的存量评论：迁移把它们的 ai_status 落成 SKIPPED
         long id = insertComment("存量评论", "c-legacy");
         jdbc.update("UPDATE community_comment SET ai_status='SKIPPED' WHERE id=?", id);
 

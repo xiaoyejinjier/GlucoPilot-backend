@@ -21,7 +21,7 @@
 
 ---
 
-## 0. 落地状态（2026-10-21，V37）
+## 0. 落地状态（2026-10-26，V43）
 
 本期**在社区侧既有实现上迭代**（不再新建独立模块），因为社区方已经有一版可跑的文章初审：
 `V31` 建了 `community_article`（state 状态机 + ai_verdict/ai_reason/ai_model/ai_checked_at）、
@@ -30,12 +30,12 @@
 
 | 落地项 | 实现位置 | 与本文设计的关系 |
 | --- | --- | --- |
-| 迁移 | `V37__community_moderation_ai.sql` | 替代原计划的 `V29`（版本号被社区模块占用） |
-| 提示词进库 | `SceneCode.MODERATION` + `ai.scenes.moderation` + `prompts/moderation/system.md` + V37 播种 v1 | 按设计 §8，**替代**原先硬编码在 Worker 里的 `SYSTEM` 常量 |
+| 迁移 | `V43__community_moderation_ai.sql` | 替代原计划的 `V29`（版本号被社区模块占用） |
+| 提示词进库 | `SceneCode.MODERATION` + `ai.scenes.moderation` + `prompts/moderation/system.md` + V43 播种 v1 | 按设计 §8，**替代**原先硬编码在 Worker 里的 `SYSTEM` 常量 |
 | 输出协议 | `CommunityModerationParser`（逐行字段清单） | 因提示词要过 ST 模板（禁花括号），JSON 输出改为**字段清单**，见 §8 |
 | 类别枚举 | `ModerationCategories`（12 类） | 按设计 §5.6 |
 | 结构化证据 | `community_moderation_hit`（新表）+ 文章/评论的 `ai_category/ai_severity/ai_confidence/ai_prompt_ver` | 按设计 §5.3，但**只记类别/严重度/置信度**；`start_offset/snippet_hash` 暂空（提示词未要求模型回吐原句，解析器已支持 `evidence` 行，后续放开即可） |
-| 评论审核 | `community_comment` 11 个新列 + `claimComment/finishComment` + `is_hidden` + `VISIBLE_COMMENT` 过滤 | 按设计 D5（先发后审、命中即隐藏）；**V37 用两步默认值**：历史评论标 `SKIPPED`，避免上线当天全量重审 |
+| 评论审核 | `community_comment` 11 个新列 + `claimComment/finishComment` + `is_hidden` + `VISIBLE_COMMENT` 过滤 | 按设计 D5（先发后审、命中即隐藏）；**V43 用两步默认值**：历史评论标 `SKIPPED`，避免上线当天全量重审 |
 | 误杀恢复 | `POST /admin/v1/community/comments/{id}/restore`（契约 4.25） | 按设计 D7；只改 `is_hidden`，保留 `ai_verdict` |
 | E2E | `scripts/e2e/moderation-e2e.ps1`（31 条断言，真实模型） | 按设计 §12 |
 

@@ -1,4 +1,4 @@
--- V37：社区 AI 审核（文章结构化证据 + 评论审核 + 提示词进库）
+-- V43：社区 AI 审核（文章结构化证据 + 评论审核 + 提示词进库）
 --
 -- 背景（V31 已有的一版）：
 --   * community_article 有 state 状态机（AI_PENDING→AI_REVIEWING→PENDING_ADMIN|AI_REJECTED|AI_ERROR）
@@ -132,6 +132,6 @@ confidence：0 到 100 的整数
 reason：不超过 200 字的中文说明，不要摘抄原文超过 10 个字
 
 拿不准时：危险医疗结论一律 REJECT 并说明；其余不确定情况在 reason 里写明不确定原因后再决定。
-你只做初审，不能批准公开发布。', '[]', NULL, 1, 1, 'V37：社区内容审核场景的初始版本（字段清单式输出，含类别与严重度）', 1
+你只做初审，不能批准公开发布。', '[]', NULL, 1, 1, 'V43：社区内容审核场景的初始版本（字段清单式输出，含类别与严重度）', 1
  WHERE NOT EXISTS (SELECT 1 FROM ai_prompt_template
                     WHERE BINARY scene_code = 'MODERATION' AND version_no = 1 AND is_deleted = 0);

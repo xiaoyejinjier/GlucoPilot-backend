@@ -32,14 +32,14 @@ public final class CommunityTestSchema {
     }
 
     /**
-     * V37（社区 AI 审核）的 H2 版结构。
+     * V43（社区 AI 审核）的 H2 版结构。
      * <p>
-     * 为什么不直接跑 {@code V37__community_moderation_ai.sql}：那份迁移含 MySQL 专有语法
+     * 为什么不直接跑 {@code V43__community_moderation_ai.sql}：那份迁移含 MySQL 专有语法
      * （{@code MODIFY COLUMN}）并会播种 {@code ai_prompt_template}，而社区这几个测试用 H2
      * 且不建 AI 侧的表。这里只补出<b>被测代码真正会读写的列/表</b>，
      * 与既有 {@link #applyDraftMigration}（补 V34 的列）是同一套做法。
      * <p>
-     * 与线上 V37 的两处差异：① {@code ai_status} 默认值一步写 'PENDING'（线上分两步，先把存量评论
+     * 与线上 V43 的两处差异：① {@code ai_status} 默认值一步写 'PENDING'（线上分两步，先把存量评论
      * 标成 'SKIPPED' 再改默认值；H2 测试库没有存量数据）；② 不播种审核提示词。
      */
     public static void applyModerationMigration(Connection connection) throws Exception {

@@ -190,6 +190,18 @@ $after = Invoke-Api -Method GET -Url "$api/news/$goodId/comments?pageSize=20" -H
 $afterIds = @($after.Body.data.records | ForEach-Object { [long]$_.id })
 Check '公开列表能看到干净评论' ($afterIds -contains $goodCommentId) '干净评论没出现在列表里'
 
+# ---------------------------------------------------------------- 5b. 我的评论列表
+Write-Host "5b) 我的评论列表能看到自己发的评论（含被隐藏的）" -ForegroundColor Gray
+$mine = Invoke-Api -Method GET -Url "$api/community/comments/mine?pageSize=50" -Headers $headers -Tag 'mod-my-comments'
+Check '我的评论接口可用' ($mine.Code -eq 200) "HTTP $($mine.Code) $($mine.Raw)"
+$mineIds = @($mine.Body.data.records | ForEach-Object { [long]$_.id })
+Check '列表包含我刚发的干净评论' ($mineIds -contains $goodCommentId) "未找到 id=$goodCommentId"
+Check '列表包含被 AI 隐藏的评论' ($mineIds -contains $badCommentId) '作者自己也看不到被隐藏的评论，等于「发了却没有」'
+$mineBad = @($mine.Body.data.records | Where-Object { [long]$_.id -eq $badCommentId })
+if ($mineBad.Count -eq 1) {
+    Check '被隐藏的评论标记 hidden=true' ($mineBad[0].hidden -eq $true) "hidden=$($mineBad[0].hidden)"
+    Check '带出所属文章与可查看标记' (($mineBad[0].newsId -eq $goodId) -and ($mineBad[0].articleAvailable -eq $true)) "newsId=$($mineBad[0].newsId) available=$($mineBad[0].articleAvailable)"
+} else { Ng '被隐藏的评论带判定标记' '记录缺失' }
 # ---------------------------------------------------------------- 6. 管理端恢复
 Write-Host "6) 管理端恢复被误杀的评论" -ForegroundColor Gray
 if ($bc[1] -eq 'REJECT') {
@@ -217,6 +229,10 @@ if ($bc[1] -eq 'REJECT') {
     $afterHidden = Invoke-Api -Method GET -Url "$adminApi/community/comments?hidden=1&pageSize=50" -Headers $adminHeaders -Tag 'mod-admin-list-after'
     $afterHiddenIds = @($afterHidden.Body.data.records | ForEach-Object { [long]$_.id })
     Check '恢复后不再出现在「已隐藏」筛选里' (-not ($afterHiddenIds -contains $badCommentId)) '恢复后仍被当成已隐藏'
+
+    $mineAfter = Invoke-Api -Method GET -Url "$api/community/comments/mine?pageSize=50" -Headers $headers -Tag 'mod-my-comments-after'
+    $mineAfterBad = @($mineAfter.Body.data.records | Where-Object { [long]$_.id -eq $badCommentId })
+    Check '恢复后我的评论里不再标记隐藏' ($mineAfterBad.Count -eq 1 -and $mineAfterBad[0].hidden -eq $false) '恢复后仍显示为已隐藏'
 } else {
     Write-Host "   （违规评论未被判 REJECT，跳过恢复断言：模型误杀率需要关注）" -ForegroundColor Yellow
 }

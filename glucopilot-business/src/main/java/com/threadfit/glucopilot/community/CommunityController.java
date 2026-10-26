@@ -25,6 +25,15 @@ public class CommunityController {
     public ApiResponse<PageResult<com.threadfit.glucopilot.content.dto.ContentDtos.NewsListItem>> collections(@RequestParam(required=false) String keyword,@Valid PageQuery q) { return ApiResponse.ok(service.collections(user(),keyword,q)); }
     @GetMapping("/news/{id}/comments")
     public ApiResponse<PageResult<Comment>> comments(@PathVariable long id,@Valid PageQuery q) { return ApiResponse.ok(service.comments(user(),id,q)); }
+
+    /**
+     * 「我的评论」：我发出的评论与回复（含被 AI 隐藏的），新的在前。
+     * <p>
+     * 之前 C 端只有 {@code /news/{id}/comments}，任何评论操作都要先知道文章 id，
+     * 用户发完评论就再也找不回自己说过什么；被机器隐藏时更是完全无从得知。
+     */
+    @GetMapping("/community/comments/mine")
+    public ApiResponse<PageResult<MyComment>> myComments(@Valid PageQuery q) { return ApiResponse.ok(service.myComments(user(),q)); }
     @GetMapping("/news/{id}/comments/{commentId}/context")
     public ApiResponse<CommentContext> commentContext(@PathVariable long id,@PathVariable long commentId) { return ApiResponse.ok(service.commentContext(user(),id,commentId)); }
     @PostMapping("/news/{id}/comments")

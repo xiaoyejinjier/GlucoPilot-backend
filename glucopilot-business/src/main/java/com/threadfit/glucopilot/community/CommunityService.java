@@ -142,6 +142,39 @@ public class CommunityService {
         long total=jdbc.queryForObject("SELECT COUNT(*) FROM community_comment c WHERE "+filter,Long.class,news);
         return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
     }
+    /**
+     * 「我的评论」：我自己发出的评论与回复，新的在前。
+     * <p>
+     * 与 {@link #comments} 的两点不同，都是刻意的：
+     * <ol>
+     *   <li><b>不过 {@code VISIBLE_COMMENT}</b>：被 AI 隐藏的评论作者自己必须看得见（否则等于
+     *       "发了却没有"，只会引发重发和咨询），前端据 {@code hidden} 标注「已被系统隐藏」；</li>
+     *   <li><b>不要求文章仍可读</b>：文章下架/删除后评论仍是用户的历史，用
+     *       {@code articleAvailable} 告诉前端能不能点进去，而不是把记录整条吞掉。</li>
+     * </ol>
+     * 仍然排除自己删掉的评论（{@code is_deleted=1}）——那是用户主动删除，不该出现在"我发过的"里。
+     */
+    public PageResult<MyComment> myComments(long viewer,PageQuery q) {
+        requireUser(viewer);page(q);
+        String from=" FROM community_comment c LEFT JOIN cms_news n ON n.id=c.news_id "
+                + "WHERE c.user_id=? AND c.is_deleted=0 ";
+        long total=jdbc.queryForObject("SELECT COUNT(*)"+from,Long.class,viewer);
+        var rows=jdbc.query("SELECT c.id,c.news_id,c.content,c.created_at,c.root_comment_id,c.reply_to_comment_id,"
+                        +"c.is_hidden,n.title,n.is_deleted news_deleted,n.publish_status,"
+                        +"(SELECT COUNT(*) FROM community_comment r WHERE r.root_comment_id=c.id AND r.is_deleted=0 AND r.is_hidden=0) reply_count,"
+                        +"(SELECT COUNT(*) FROM community_comment_like l WHERE l.comment_id=c.id AND l.liked=1) like_count"
+                        +from+" ORDER BY c.id DESC LIMIT ? OFFSET ?",
+                (rs,i)->new MyComment(Long.toString(rs.getLong("id")),rs.getLong("news_id"),
+                        Objects.toString(rs.getString("title"),"文章已删除"),
+                        rs.getObject("news_deleted")!=null && rs.getInt("news_deleted")==0
+                                && rs.getObject("publish_status")!=null && rs.getInt("publish_status")==1,
+                        rs.getString("content"),time(rs,"created_at"),
+                        rs.getObject("root_comment_id")==null?null:rs.getObject("root_comment_id").toString(),
+                        rs.getObject("reply_to_comment_id")==null?null:rs.getObject("reply_to_comment_id").toString(),
+                        rs.getInt("is_hidden")==1,rs.getLong("reply_count"),rs.getLong("like_count")),
+                viewer,q.getPageSize(),q.offset());
+        return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
+    }
     public CommentContext commentContext(long viewer,long news,long targetId) {
         requireUser(viewer);requireReadable(viewer,news);
         var targets=jdbc.query("SELECT c.* FROM community_comment c WHERE c.id=? AND c.news_id=? AND "+VISIBLE_COMMENT,(rs,i)->comment(viewer,rs,false),targetId,news);

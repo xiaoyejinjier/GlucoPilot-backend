@@ -258,14 +258,31 @@ public class CommunityService {
     private LocalDateTime time(ResultSet rs,String name) throws SQLException {
         var value=rs.getTimestamp(name);return value==null?null:value.toLocalDateTime();
     }
+    private MessagePermission messagePermission(long viewer,long peer) {
+        boolean follows=following(viewer,"u"+peer),mutual=follows&&following(peer,"u"+viewer);
+        boolean received=jdbc.queryForObject("SELECT COUNT(*) FROM community_message WHERE sender_id=? AND recipient_id=?",Long.class,peer,viewer)>0;
+        if(mutual||received)return new MessagePermission(true,follows,mutual,"OPEN");
+        boolean sent=jdbc.queryForObject("SELECT COUNT(*) FROM community_message WHERE sender_id=? AND recipient_id=?",Long.class,viewer,peer)>0;
+        return new MessagePermission(!sent,follows,false,sent?"WAITING_REPLY":"FIRST_MESSAGE");
+    }
     @Transactional
     public Message send(long viewer,long peer,MessageRequest request) {
-        requirePeer(viewer,peer);String content=text(request.content(),1000,request.clientRequestId());
+        String content=text(request.content(),1000,request.clientRequestId());
+        if(viewer==peer)throw new BizException(ErrorCode.BAD_REQUEST,"不能给自己发私信");
+        // Lock before any snapshot reads: concurrent first contacts see the previous committed send.
+        var users=jdbc.queryForList("SELECT id FROM user_account WHERE id IN (?,?) AND is_deleted=0 AND account_status=1 ORDER BY id FOR UPDATE",Long.class,Math.min(viewer,peer),Math.max(viewer,peer));
+        if(users.size()!=2)throw missing();
+        var previous=jdbc.query("SELECT * FROM community_message WHERE sender_id=? AND client_request_id=? FOR UPDATE",(rs,i)->message(viewer,rs),viewer,request.clientRequestId());
+        if(!previous.isEmpty())return sameMessage(previous.getFirst(),peer,content);
+        if(!messagePermission(viewer,peer).canSend())throw new BizException(ErrorCode.MESSAGE_REQUEST_PENDING);
         try { jdbc.update("INSERT INTO community_message(sender_id,recipient_id,content,client_request_id) VALUES(?,?,?,?)",viewer,peer,content,request.clientRequestId()); }
         catch(DuplicateKeyException ex) { /* Same client ID is retried without another delivery. */ }
         Message saved=jdbc.queryForObject("SELECT * FROM community_message WHERE sender_id=? AND client_request_id=? FOR UPDATE",(rs,i)->message(viewer,rs),viewer,request.clientRequestId());
         if(saved==null) throw new BizException(ErrorCode.INTERNAL_ERROR,"发送失败，请重试");
-        if(!saved.recipientId().equals(Long.toString(peer)) || !saved.content().equals(content)) throw new BizException(ErrorCode.CONFLICT,"发送标识已使用，请重新确认消息");
+        return sameMessage(saved,peer,content);
+    }
+    private Message sameMessage(Message saved,long peer,String content) {
+        if(!saved.recipientId().equals(Long.toString(peer)) || !saved.content().equals(content))throw new BizException(ErrorCode.CONFLICT,"发送标识已使用，请重新确认消息");
         return saved;
     }
     private static final String PAIR=" ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ";
@@ -276,7 +293,7 @@ public class CommunityService {
         String cursor=before==null?"":" AND id<? ";if(before!=null) args.add(before);args.add(size+1);
         var rows=jdbc.query("SELECT * FROM community_message WHERE "+PAIR+cursor+" ORDER BY id DESC LIMIT ?",(rs,i)->message(viewer,rs),args.toArray());
         boolean more=rows.size()>size;if(more) rows.removeLast();Collections.reverse(rows);
-        return new Messages(rows,more,rows.isEmpty()?null:rows.getFirst().id());
+        return new Messages(rows,more,rows.isEmpty()?null:rows.getFirst().id(),messagePermission(viewer,peer));
     }
     @Transactional
     public void read(long viewer,long peer,String through) {

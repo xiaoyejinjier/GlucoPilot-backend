@@ -305,6 +305,7 @@ class CommunityServiceTest {
         error(ErrorCode.BAD_REQUEST,()->send(1,2,"你好","bad"));
     }
     @Test void readMarkerDoesNotMarkLaterOrThirdPartyMessages() {
+        jdbc.update("INSERT INTO community_follow(follower_id,target_key) VALUES(1,'u2'),(2,'u1')");
         var first=send(2,1,"第一条","message-0001");
         var later=send(2,1,"迟到消息","message-0002");
         var other=send(2,3,"他人私信","message-0003");
@@ -316,6 +317,7 @@ class CommunityServiceTest {
         service.read(1,2,later.id());assertEquals(0,service.inbox(1,page()).getRecords().getFirst().unreadCount());
     }
     @Test void messageCursorIsExclusiveAndEachPageIsAscending() {
+        jdbc.update("INSERT INTO community_follow(follower_id,target_key) VALUES(1,'u2'),(2,'u1')");
         for(int i=0;i<5;i++) send(1,2,"消息"+i,"message-000"+i);
         var newest=service.messages(2,1,null,2);
         assertTrue(newest.hasMore());assertEquals(List.of("消息3","消息4"),newest.records().stream().map(Message::content).toList());
@@ -331,6 +333,60 @@ class CommunityServiceTest {
             assertEquals(a.get(10,TimeUnit.SECONDS),b.get(10,TimeUnit.SECONDS));
             assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM community_message",Integer.class));
         } finally {pool.shutdownNow();}
+    }
+    @Test void strangerCanSendOneMessageButReadingAndUnilateralFollowingDoNotResetQuota() {
+        var initial=service.messages(1,2,null,20).sendPermission();assertTrue(initial.canSend());assertFalse(initial.following());assertEquals("FIRST_MESSAGE",initial.state());
+        var first=send(1,2,"第一条招呼","quota-first-001");
+        assertEquals("WAITING_REPLY",service.messages(1,2,null,20).sendPermission().state());
+        assertEquals(first.id(),send(1,2,"第一条招呼","quota-first-001").id());
+        error(ErrorCode.MESSAGE_REQUEST_PENDING,()->send(1,2,"第二条","quota-second-01"));
+        service.read(2,1,first.id());error(ErrorCode.MESSAGE_REQUEST_PENDING,()->send(1,2,"已读也不能继续","quota-second-02"));
+        tx.execute(s->service.follow(1,"u2",true));assertFalse(service.messages(1,2,null,20).sendPermission().canSend());
+        tx.execute(s->service.follow(1,"u2",false));tx.execute(s->service.follow(1,"u2",true));
+        error(ErrorCode.MESSAGE_REQUEST_PENDING,()->send(1,2,"重新关注不重置","quota-second-03"));
+        assertTrue(service.messages(1,3,null,20).sendPermission().canSend());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM community_message",Integer.class));
+    }
+    @Test void recipientCanReplyWithoutFollowingAndThenBothSidesCanKeepChatting() {
+        send(1,2,"初次联系","unlock-start-01");
+        assertEquals("OPEN",service.messages(2,1,null,20).sendPermission().state());
+        send(2,1,"欢迎交流","unlock-reply-01");send(1,2,"继续交流","unlock-more-001");send(2,1,"再次回复","unlock-more-002");
+        assertTrue(service.messages(1,2,null,20).sendPermission().canSend());
+        assertFalse(service.messages(1,2,null,20).sendPermission().following());
+    }
+    @Test void mutualFollowingUnlocksFirstContactAndRemovingItKeepsHistoryQuota() {
+        tx.execute(s->service.follow(1,"u2",true));tx.execute(s->service.follow(2,"u1",true));
+        var mutual=service.messages(1,2,null,20).sendPermission();assertTrue(mutual.canSend());assertTrue(mutual.mutualFollowing());
+        send(1,2,"第一条","mutual-first-01");send(1,2,"第二条","mutual-more-001");
+        tx.execute(s->service.follow(2,"u1",false));assertFalse(service.messages(1,2,null,20).sendPermission().canSend());
+        error(ErrorCode.MESSAGE_REQUEST_PENDING,()->send(1,2,"第三条","mutual-more-002"));
+        send(2,1,"回复之后解锁","mutual-reply-01");assertTrue(service.messages(1,2,null,20).sendPermission().canSend());
+    }
+    @Test void unrelatedReplyDoesNotUnlockAnotherPairAndRetryContentStillMustMatch() {
+        send(1,2,"给甲的招呼","pair-request-01");send(3,1,"另一个人联系","pair-request-02");
+        error(ErrorCode.MESSAGE_REQUEST_PENDING,()->send(1,2,"不能解锁甲","pair-request-03"));
+        error(ErrorCode.CONFLICT,()->send(1,2,"重试改了内容","pair-request-01"));
+        error(ErrorCode.CONFLICT,()->send(1,3,"给甲的招呼","pair-request-01"));
+    }
+    @Test void concurrentDifferentFirstRequestsCannotBypassOneMessageQuota() throws Exception {
+        var pool=Executors.newFixedThreadPool(2);var start=new CountDownLatch(1);
+        try {
+            var a=pool.submit(()->{start.await();try{send(1,2,"招呼甲","quota-race-0001");return "OK";}catch(BizException e){return e.getErrorCode().name();}});
+            var b=pool.submit(()->{start.await();try{send(1,2,"招呼乙","quota-race-0002");return "OK";}catch(BizException e){return e.getErrorCode().name();}});
+            start.countDown();var results=List.of(a.get(10,TimeUnit.SECONDS),b.get(10,TimeUnit.SECONDS));
+            assertEquals(1,results.stream().filter("OK"::equals).count());assertEquals(1,results.stream().filter("MESSAGE_REQUEST_PENDING"::equals).count());
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM community_message",Integer.class));
+        }finally{pool.shutdownNow();}
+    }
+    @Test void httpReturnsPermissionAndForbiddenWaitingStateWithoutCreatingMessage() throws Exception {
+        var mvc=MockMvcBuilders.standaloneSetup(new CommunityController(service)).setControllerAdvice(new GlobalExceptionHandler()).build();
+        RequestContext.setUserId(1L);RequestContext.setRequestId("message-quota-http");
+        send(1,2,"首次联系","quota-http-0001");
+        var response=mvc.perform(get("/api/v1/community/messages/2")).andReturn().getResponse();
+        var json=new ObjectMapper().readTree(response.getContentAsByteArray());assertFalse(json.path("data").path("sendPermission").path("canSend").asBoolean(true));
+        response=mvc.perform(post("/api/v1/community/messages/2").contentType("application/json").content("{\"content\":\"第二条\",\"clientRequestId\":\"quota-http-0002\"}")).andReturn().getResponse();
+        assertEquals(403,response.getStatus());json=new ObjectMapper().readTree(response.getContentAsByteArray());assertEquals(40301,json.path("code").asInt());assertEquals("message-quota-http",json.path("requestId").asString(""));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM community_message",Integer.class));
     }
     @Test void controllerAuthenticationValidationAndRequestEnvelope() throws Exception {
         var mvc=MockMvcBuilders.standaloneSetup(new CommunityController(service)).setControllerAdvice(new GlobalExceptionHandler()).build();

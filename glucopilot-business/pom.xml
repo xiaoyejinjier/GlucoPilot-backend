@@ -56,10 +56,17 @@
             <scope>test</scope>
         </dependency>
 
-        <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-system</artifactId><version>3.9.2</version></dependency>
-<dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-framework</artifactId><version>3.9.2</version></dependency>
-<dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-quartz</artifactId><version>3.9.2</version></dependency>
-<dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-generator</artifactId><version>3.9.2</version></dependency>
+        <!--
+            兄弟模块（com.ruoyi:ruoyi-*）没有发布到任何公共仓库，只能在根目录的 reactor 里解析。
+            因此这里必须用 ${project.parent.version} 跟随根 pom 的版本号：写死 3.9.2 时，
+            一旦根 pom 改版本，构建就会退化成去阿里云镜像上找 com.ruoyi:ruoyi-system:3.9.2
+            并失败（Could not resolve dependencies）。同时 CI 必须以 -pl <module> -am 或
+            根目录全量构建的方式运行，单独构建子模块永远解析不到这些包。
+        -->
+        <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-system</artifactId><version>${project.parent.version}</version></dependency>
+        <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-framework</artifactId><version>${project.parent.version}</version></dependency>
+        <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-quartz</artifactId><version>${project.parent.version}</version></dependency>
+        <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-generator</artifactId><version>${project.parent.version}</version></dependency>
         <!-- ==================== SpringAI ==================== -->
         <dependency>
             <groupId>org.springframework.ai</groupId>

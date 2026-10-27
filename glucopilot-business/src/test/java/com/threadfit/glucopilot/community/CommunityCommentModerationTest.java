@@ -88,7 +88,9 @@ class CommunityCommentModerationTest {
         jdbc.update("INSERT INTO user_account(id) VALUES(2),(3)");
         jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(2,'作者'),(3,'评论者')");
         jdbc.update("INSERT INTO cms_news(id,title,summary_text,content_body,channel_code,publish_at,publish_status,community_managed) "
-                + "VALUES(20,'社区文章','摘要','正文',4,CURRENT_TIMESTAMP,1,1)");
+                // publish_at 提前 2 秒：CURRENT_TIMESTAMP 落库按秒取整，同秒回查可能"未来"几分之一秒，
+                // requireReadable 的 publish_at<=CURRENT_TIMESTAMP 会偶发不成立
+                + "VALUES(20,'社区文章','摘要','正文',4,DATEADD('SECOND',-2,CURRENT_TIMESTAMP),1,1)");
         // 评论读取要先过 ArticleAccessService.requireReadable：社区文章必须处于 PUBLISHED，
         // 且 author 是有效账号（user_account 2），否则一律 404「文章不存在或不可查看」。
         jdbc.update("INSERT INTO community_article(news_id,author_user_id,state,revision,ai_verdict) "

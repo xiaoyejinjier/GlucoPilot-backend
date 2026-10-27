@@ -42,6 +42,9 @@ public final class PublicationDtos {
     public record Resolution(@NotBlank String action, @NotBlank @Size(max=1000) String note) {}
     public record AiDecision(boolean passed, String reason, String model) {}
 
+    /** 管理端设置评论可见性：true 隐藏，false 恢复显示。用包装类型是为了让漏传字段报 400 而不是默认 false。 */
+    public record CommentVisibility(@NotNull Boolean hidden) {}
+
     /**
      * 管理端评论审核列表项。
      * <p>

@@ -61,6 +61,22 @@ class AdminCommunityHttpTest {
             var service=context.getBean(CommunityPublicationService.class);verify(service).review(99,7,review);verify(service).retry(99,7,true);verify(service).resolveReport(eq(99L),eq(9L),any());
         } finally { RequestContext.clear();SecurityContextHolder.clearContext(); }
     }
+    @Test void visibilityRouteRequiresAdminWritePermissionAndPassesFlagThrough() {
+        try(var context=new AnnotationConfigApplicationContext(Config.class)) {
+            var controller=context.getBean(AdminCommunityController.class);
+            var queue=context.getBean(CommunityModerationQueue.class);
+            SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("ops","n/a","content:news:list"));
+            assertThrows(AccessDeniedException.class,
+                    ()->controller.setCommentVisibility(5,new PublicationDtos.CommentVisibility(true)));
+            verifyNoInteractions(queue);
+            SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("ops","n/a","ROLE_admin","content:news:edit"));
+            RequestContext.setOpsId(99L);
+            controller.setCommentVisibility(5,new PublicationDtos.CommentVisibility(true));
+            controller.setCommentVisibility(5,new PublicationDtos.CommentVisibility(false));
+            verify(queue).setCommentHidden(99L,5L,true);
+            verify(queue).setCommentHidden(99L,5L,false);
+        } finally { RequestContext.clear();SecurityContextHolder.clearContext(); }
+    }
     @Test void submissionHttpUsesAuthenticatedUserAndAcceptsCustomTagText() throws Exception {
         var service=mock(CommunityPublicationService.class);
         try {

@@ -27,10 +27,14 @@ import com.threadfit.glucopilot.ai.business.chat.service.ChatMessageService;
  * {@code common.idempotency.IdempotencyStore}，但它会往 AI 路径引入 Redis 依赖）。
  * 在当前"单实例部署"的前提下，用零依赖的方案覆盖掉绝大多数场景是划算的。
  * <p>
- * <b>为什么要做"过期接管"</b>：key 的释放挂在流终止回调上，正常结束/报错/客户端取消都会释放。
- * 但如果进程被 kill、或某个流的终止回调没能跑（例如设备断电），key 就会永久占位，
- * 表现为"这一轮永远说正在生成中"。因此过期时间远大于最长一轮（SSE 超时 60s）之后即可接管，
- * 让故障自愈而不是需要人工重启。
+ * <b>释放时机</b>：正常结束在 <b>done 事件发出之前</b>释放（客户端收到 done 就能立刻重发），
+ * 报错/客户端取消由流的 {@code doFinally} 兜底释放。但 doFinally 是"先向下游传播 onComplete、
+ * 再执行回调"，只靠它会留下一个竞态窗口——曾经因此让 CI 上的
+ * {@code 上一轮结束后应允许重新发起} 偶发失败（本地快、CI 慢，只有 CI 输掉这个窗口）。
+ * <p>
+ * <b>为什么要做"过期接管"</b>：万一进程被 kill、或某个流的终止回调没能跑（例如设备断电），
+ * key 就会永久占位，表现为"这一轮永远说正在生成中"。
+ * 因此过期时间远大于最长一轮（SSE 超时 60s）之后即可接管，让故障自愈而不是需要人工重启。
  */
 @Slf4j
 @Component
@@ -60,13 +64,25 @@ public class ChatRoundGuard {
      *         {@code false} 表示已有同轮生成在进行中
      */
     public boolean tryAcquire(String key) {
+        return tryAcquireToken(key) != null;
+    }
+
+    /**
+     * 尝试获得某一轮的执行权，成功时返回本次持有的令牌（失败返回 {@code null}）。
+     * <p>
+     * <b>为什么要令牌：</b>释放会在两条路径上各调一次——done 事件发出<b>之前</b>那次是正常路径，
+     * {@code doFinally} 那次是兜底。第一次释放之后下一轮可能立刻拿到同一个 key；
+     * 此时兜底那次若无条件 {@code remove(key)}，删掉的就是<b>别人的</b>锁，单飞保护会静默失效。
+     * 令牌让释放变成"只删我自己那一次"。
+     */
+    public Long tryAcquireToken(String key) {
         long now = System.nanoTime();
         Long previous = inFlight.putIfAbsent(key, now);
         if (previous == null) {
-            return true;
+            return now;
         }
         if (now - previous < staleAfterNanos) {
-            return false;
+            return null;
         }
         // 过期接管：CAS 替换，避免与"刚好在这一刻释放"或"另一个接管者"互相覆盖
         if (inFlight.replace(key, previous, now)) {
@@ -75,12 +91,20 @@ public class ChatRoundGuard {
             log.warn("在途轮次已超过 {}s 未释放，判定持有者已死亡并接管：key={}（已持有 {}s）。"
                             + "若反复出现，检查流的终止回调是否总能执行（进程被 kill / 客户端异常断开）",
                     staleAfterNanos / 1_000_000_000L, key, (now - previous) / 1_000_000_000L);
-            return true;
+            return now;
         }
-        return false;
+        return null;
     }
 
-    /** 释放执行权；未持有也安全（幂等）。 */
+    /**
+     * 按令牌释放执行权：只有当 key 仍由 {@code token} 这次获取持有时才删除。
+     * 未持有或已被别的请求接管时是安全的空操作（幂等）。
+     */
+    public void release(String key, long token) {
+        inFlight.remove(key, token);
+    }
+
+    /** 不分令牌的强释放；仅用于测试与收尾兜底，业务路径请用 {@link #release(String, long)}。 */
     public void release(String key) {
         inFlight.remove(key);
     }

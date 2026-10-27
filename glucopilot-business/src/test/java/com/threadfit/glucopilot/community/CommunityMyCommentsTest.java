@@ -77,13 +77,16 @@ class CommunityMyCommentsTest {
         jdbc.update("INSERT INTO user_account(id) VALUES(2),(3)");
         jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(2,'我'),(3,'别人')");
         // 20 = 别人发布的社区文章（已终审发布）、21 = 官方资讯、22 = 发布过但随后删除的社区文章
+        // publish_at 必须显式早于当前时刻：publishedSql 要求 publish_at<=CURRENT_TIMESTAMP，
+        // 而 CURRENT_TIMESTAMP 写进 DATETIME 会被按秒取整，同一秒内回查可能"未来"几分之一秒，
+        // 于是 requireReadable 偶发报「文章不存在或不可查看」（clean verify 上真踩到过）
         jdbc.update("INSERT INTO cms_news(id,title,summary_text,content_body,channel_code,publish_at,publish_status,community_managed) "
-                + "VALUES(20,'社区文章','摘要','正文',4,CURRENT_TIMESTAMP,1,1)");
+                + "VALUES(20,'社区文章','摘要','正文',4,DATEADD('SECOND',-2,CURRENT_TIMESTAMP),1,1)");
         jdbc.update("INSERT INTO cms_news(id,title,summary_text,content_body,channel_code,publish_at,publish_status,community_managed,is_deleted) "
-                + "VALUES(21,'官方资讯','摘要','正文',1,CURRENT_TIMESTAMP,1,0,0)");
+                + "VALUES(21,'官方资讯','摘要','正文',1,DATEADD('SECOND',-2,CURRENT_TIMESTAMP),1,0,0)");
         // 删除一致性约束 chk_cn_del_consistent：is_deleted=1 必须带 deleted_at
         jdbc.update("INSERT INTO cms_news(id,title,summary_text,content_body,channel_code,publish_at,publish_status,community_managed,is_deleted,deleted_at) "
-                + "VALUES(22,'被删掉的文章','摘要','正文',4,CURRENT_TIMESTAMP,1,1,1,CURRENT_TIMESTAMP)");
+                + "VALUES(22,'被删掉的文章','摘要','正文',4,DATEADD('SECOND',-2,CURRENT_TIMESTAMP),1,1,1,CURRENT_TIMESTAMP)");
         jdbc.update("INSERT INTO community_article(news_id,author_user_id,state,revision,ai_verdict) VALUES(20,3,'PUBLISHED',1,'PASS')");
         jdbc.update("INSERT INTO community_article(news_id,author_user_id,state,revision,ai_verdict) VALUES(22,3,'PUBLISHED',1,'PASS')");
 

@@ -36,6 +36,8 @@ import static org.mockito.Mockito.mock;
  *   <li><b>ERROR 不隐藏但也不算通过</b>：模型故障时不能让社区停摆，也不能当成干净内容；</li>
  *   <li><b>恢复</b>：管理端恢复只把 {@code is_hidden} 归零，<b>保留</b>原 {@code ai_verdict}
  *       （"机器判过违规"是发生过的事实，删掉就解释不清），并写一条 ADMIN/RESTORE 日志。</li>
+ *   <li><b>主动隐藏</b>：管理端也能把机器放行的评论压下去（{@code ADMIN/HIDE} 日志），
+ *       且人工隐藏不会被事后到达的机器 PASS 放开——机器能加严，不能替人放宽。</li>
  * </ol>
  * 另外验证 V43 迁移的两步默认值意图：历史评论是 {@code SKIPPED}（不会被一次性拉去重审），
  * 新插入的评论是 {@code PENDING}（自动进审核队列）。
@@ -86,7 +88,9 @@ class CommunityCommentModerationTest {
         jdbc.update("INSERT INTO user_account(id) VALUES(2),(3)");
         jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(2,'作者'),(3,'评论者')");
         jdbc.update("INSERT INTO cms_news(id,title,summary_text,content_body,channel_code,publish_at,publish_status,community_managed) "
-                + "VALUES(20,'社区文章','摘要','正文',4,CURRENT_TIMESTAMP,1,1)");
+                // publish_at 提前 2 秒：CURRENT_TIMESTAMP 落库按秒取整，同秒回查可能"未来"几分之一秒，
+                // requireReadable 的 publish_at<=CURRENT_TIMESTAMP 会偶发不成立
+                + "VALUES(20,'社区文章','摘要','正文',4,DATEADD('SECOND',-2,CURRENT_TIMESTAMP),1,1)");
         // 评论读取要先过 ArticleAccessService.requireReadable：社区文章必须处于 PUBLISHED，
         // 且 author 是有效账号（user_account 2），否则一律 404「文章不存在或不可查看」。
         jdbc.update("INSERT INTO community_article(news_id,author_user_id,state,revision,ai_verdict) "
@@ -262,6 +266,78 @@ class CommunityCommentModerationTest {
         long id = insertComment("普通评论", "c-idempotent");
 
         assertFalse(queue.restoreComment(99L, id), "没有隐藏过就没什么可恢复，返回 false 但不报错");
+    }
+
+    // ---------------------------------------------------------------- 主动隐藏
+
+    @Test
+    void 管理员可以主动隐藏一条机器判定通过的评论() {
+        long id = insertComment("这家医院我是不推荐的，态度很差", "c-admin-hide");
+        assertTrue(queue.finish(queue.claimComment(), ModerationVerdict.pass("ok"), "m", "moderation@v1"));
+        assertEquals(1, community.comments(2, 20, new PageQuery()).getRecords().size(), "前提：机器放行、公开可见");
+
+        assertTrue(queue.setCommentHidden(99L, id, true));
+
+        assertEquals(0, community.comments(2, 20, new PageQuery()).getRecords().size(), "隐藏后公开列表立刻查不到");
+        var row = jdbc.queryForMap("SELECT is_hidden,ai_verdict,ai_status FROM community_comment WHERE id=?", id);
+        assertEquals(1, ((Number) row.get("is_hidden")).intValue());
+        assertEquals("PASS", row.get("ai_verdict"), "人工否决不改写机器结论：两边的事实都要留着");
+        assertEquals("DONE", row.get("ai_status"), "AI 已经审完的状态不能因为人工隐藏而倒退");
+        assertEquals("HIDE", jdbc.queryForObject("SELECT decision FROM community_moderation_log "
+                + "WHERE target_type='COMMENT' AND target_id=? AND actor_type='ADMIN'", String.class, id),
+                "人工隐藏必须留痕，否则事后解释不清是谁、按什么理由压的");
+    }
+
+    @Test
+    void 隐藏之后还能再次恢复显示() {
+        long id = insertComment("我每天走八千步，血糖平稳", "c-admin-roundtrip");
+
+        assertTrue(queue.setCommentHidden(99L, id, true));
+        assertEquals(0, community.comments(2, 20, new PageQuery()).getRecords().size());
+
+        assertTrue(queue.setCommentHidden(99L, id, false), "恢复显示走同一个入口，方向和 AI 判定无关");
+        assertEquals(1, community.comments(2, 20, new PageQuery()).getRecords().size(), "恢复后重新可见");
+        assertEquals(List.of("HIDE", "RESTORE"), jdbc.queryForList("SELECT decision FROM community_moderation_log "
+                + "WHERE target_type='COMMENT' AND target_id=? ORDER BY id", String.class, id));
+    }
+
+    @Test
+    void 重复隐藏或重复恢复都幂等且不重复写日志() {
+        long id = insertComment("普通评论", "c-admin-idem");
+        assertTrue(queue.setCommentHidden(99L, id, true));
+
+        assertFalse(queue.setCommentHidden(99L, id, true), "已经是隐藏状态，没有变化就返回 false");
+        assertTrue(queue.restoreComment(99L, id), "历史的恢复入口仍然可用");
+        assertFalse(queue.setCommentHidden(99L, id, false), "已经可见，再恢复也没有变化");
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM community_moderation_log "
+                + "WHERE target_type='COMMENT' AND target_id=?", Integer.class, id),
+                "只有真实的状态变化才写日志，运营重复点击不该刷出一堆记录");
+    }
+
+    @Test
+    void 隐藏不存在或已删除的评论明确报404() {
+        var missing = assertThrows(BizException.class, () -> queue.setCommentHidden(99L, 999_999L, true));
+        assertEquals("评论不存在或已删除", missing.getMessage());
+
+        long deleted = insertComment("已删除的评论", "c-admin-deleted");
+        jdbc.update("UPDATE community_comment SET is_deleted=1 WHERE id=?", deleted);
+        assertThrows(BizException.class, () -> queue.setCommentHidden(99L, deleted, true),
+                "逻辑删除的评论不该还能被隐藏——那只会制造一条谁都看不到的隐藏记录");
+        assertFalse(queue.restoreComment(99L, deleted), "历史恢复入口保持幂等语义：查不到就是没变化");
+    }
+
+    @Test
+    void 人工先隐藏的评论不会被事后到达的机器PASS放开() {
+        long id = insertComment("擦边但没到违规线的内容", "c-admin-race");
+        assertTrue(queue.setCommentHidden(99L, id, true), "评论还在队列里，运营先手动压下去");
+
+        assertTrue(queue.finish(queue.claimComment(), ModerationVerdict.pass("ok"), "m", "moderation@v1"));
+
+        assertEquals(1, jdbc.queryForObject("SELECT is_hidden FROM community_comment WHERE id=?", Integer.class, id),
+                "机器能加严不能放宽：PASS 不能把人工隐藏悄悄推翻");
+        assertEquals(0, community.comments(2, 20, new PageQuery()).getRecords().size());
+        assertEquals("PASS", jdbc.queryForObject("SELECT ai_verdict FROM community_comment WHERE id=?", String.class, id),
+                "机器结论照常记录，只是没有覆盖人工决定");
     }
 
     // ---------------------------------------------------------------- 管理端列表

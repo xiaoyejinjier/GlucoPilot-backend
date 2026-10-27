@@ -1,8 +1,10 @@
 package com.threadfit.glucopilot.user.account;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.threadfit.glucopilot.auth.dto.AuthDtos;
 import com.threadfit.glucopilot.auth.service.AuthService;
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationMode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationStatus;
@@ -11,10 +13,11 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.EmailUtils;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CancellationView;
+import com.threadfit.glucopilot.user.dto.CancellationDtos.CaptchaView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.QueryView;
-import com.threadfit.glucopilot.user.dto.CancellationDtos.RecoveryRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.RecoveryView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeView;
+import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SubmitRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SubmitView;
 import com.threadfit.glucopilot.user.entity.UserAccount;
@@ -34,8 +37,13 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 账号注销。
  *
- * <p>三条验证码场景 scene 由 AuthService 放行 {@code cancel}/{@code recover}；失败锁定沿用
- * AuthService 的进程内内存（ConcurrentHashMap）方案，不引入 Redis，后续如需多实例再评估。
+ * <p>验证通道按绑定关系自动选择：手机号 &gt; 邮箱 &gt; 微信（纯微信账号用 wx.login code 现场验证，
+ * 不再强制先绑定手机号/邮箱）。验证码场景 scene 由 AuthService 放行 {@code cancel}/{@code recover}；
+ * 失败锁定沿用进程内内存（ConcurrentHashMap）方案，不引入 Redis，多实例部署时再评估。
+ *
+ * <p>七天可恢复模式的取消采用"登录即取消注销"：能建立会话本身就完成了本人身份核验
+ * （wx.login code 换 openid / 短信/邮箱验证码登录），恢复不再二次验证；恢复后 24 小时内
+ * 不可再次申请注销，并按申请前状态还原（DISABLED 仍是 DISABLED）。
  */
 @Service
 @RequiredArgsConstructor
@@ -48,6 +56,7 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
     private final UserAccountMapper userAccountMapper;
     private final UserAccountCancellationMapper cancellationMapper;
     private final AuthService authService;
+    private final CaptchaService captchaService;
 
     /** 验证失败计数（userId -> 累计失败次数）。 */
     private final ConcurrentHashMap<Long, Integer> verifyFailCount = new ConcurrentHashMap<>();
@@ -61,33 +70,59 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         UserAccountCancellation latest = latest(userId);
         return QueryView.builder()
                 .accountStatus(account.getAccountStatus())
+                .hasPhone(StringUtils.hasText(account.getPhone()))
+                .hasEmail(StringUtils.hasText(account.getEmail()))
+                .hasWechat(hasWechatBound(account))
+                .phoneMasked(StringUtils.hasText(account.getPhone())
+                        ? PhoneUtils.mask(account.getPhone()) : null)
+                .emailMasked(StringUtils.hasText(account.getEmail())
+                        ? EmailUtils.mask(account.getEmail()) : null)
                 .cancellation(latest == null ? null : toView(latest))
                 .build();
     }
 
     @Override
-    public SendCodeView sendCode(Long userId) {
+    public CaptchaView captcha(Long userId) {
+        return captchaService.issue(userId, RequestContext.getClientIp());
+    }
+
+    @Override
+    public SendCodeView sendCode(Long userId, SendCodeRequest request) {
         UserAccount account = requireAccount(userId);
-        int channel = resolveChannelOrThrow(account);
+        int channel = request.getChannel();
+        String maskedTarget;
         if (channel == CancellationVerifyChannel.SMS.getCode()) {
-            authService.sendSmsCode(new com.threadfit.glucopilot.auth.dto.AuthDtos.SmsCodeRequest() {{
-                setPhone(account.getPhone());
-                setScene("cancel");
-            }});
-            return SendCodeView.builder()
-                    .channel(channel)
-                    .maskedTarget(PhoneUtils.mask(account.getPhone()))
-                    .expiresIn(300)
-                    .cooldownSeconds(60)
-                    .build();
+            if (!StringUtils.hasText(account.getPhone())) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "当前账号未绑定手机号");
+            }
+            maskedTarget = PhoneUtils.mask(account.getPhone());
+        } else if (channel == CancellationVerifyChannel.EMAIL.getCode()) {
+            if (!StringUtils.hasText(account.getEmail())) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "当前账号未绑定邮箱");
+            }
+            maskedTarget = EmailUtils.mask(account.getEmail());
+        } else {
+            throw new BizException(ErrorCode.BAD_REQUEST, "验证方式仅支持短信或邮箱");
         }
-        authService.sendEmailCode(new com.threadfit.glucopilot.auth.dto.AuthDtos.EmailCodeRequest() {{
-            setEmail(account.getEmail());
-            setScene("cancel");
-        }});
+
+        // 滑块只是 UX 门槛：服务端校验一次性票据（绑本人、180 秒）后才允许发码。
+        captchaService.consume(request.getCaptchaTicket(), userId);
+        captchaService.guardSendCode(userId, RequestContext.getClientIp());
+
+        if (channel == CancellationVerifyChannel.SMS.getCode()) {
+            AuthDtos.SmsCodeRequest sms = new AuthDtos.SmsCodeRequest();
+            sms.setPhone(account.getPhone());
+            sms.setScene("cancel");
+            authService.sendSmsCode(sms);
+        } else {
+            AuthDtos.EmailCodeRequest email = new AuthDtos.EmailCodeRequest();
+            email.setEmail(account.getEmail());
+            email.setScene("cancel");
+            authService.sendEmailCode(email);
+        }
         return SendCodeView.builder()
                 .channel(channel)
-                .maskedTarget(EmailUtils.mask(account.getEmail()))
+                .maskedTarget(maskedTarget)
                 .expiresIn(300)
                 .cooldownSeconds(60)
                 .build();
@@ -118,8 +153,10 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         }
         rejectIfRecentlyRecovered(userId);
 
-        int channel = resolveChannelOrThrow(account);
-        consumeVerifyCode(userId, channel, account, request.getVerifyCode());
+        // 验证方式由前端显式选择：1/2 必须是已绑定的手机号/邮箱，3 必须是本账号微信。
+        int verifyType = request.getVerifyType();
+        assertVerifyTarget(account, verifyType);
+        consumeVerifyCode(userId, verifyType, account, request);
 
         LocalDateTime now = LocalDateTime.now();
         boolean recoverable = mode == CancellationMode.ISOLATE_7D.getCode();
@@ -128,7 +165,8 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         record.setMode(mode);
         record.setStatus(CancellationStatus.PENDING.getCode());
         record.setReasonCode(request.getReasonCode());
-        record.setVerifyChannel(channel);
+        record.setVerifyChannel(verifyType);
+        record.setPreStatus(status);
         record.setRequestedAt(now);
         record.setIsolateUntil(recoverable ? now.plusDays(RECOVERABLE_DAYS) : null);
         record.setFailCount(0);
@@ -152,7 +190,7 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
 
     @Override
     @Transactional
-    public RecoveryView recover(Long userId, RecoveryRequest request) {
+    public RecoveryView recover(Long userId) {
         UserAccount account = requireAccount(userId);
         if (account.getAccountStatus() == null
                 || account.getAccountStatus() != AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
@@ -164,20 +202,21 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
                 || record.getIsolateUntil().isBefore(now)) {
             throw new BizException(ErrorCode.CONFLICT, "可恢复窗口已过，无法恢复");
         }
-        int channel = record.getVerifyChannel() == null
-                ? resolveChannelOrThrow(account)
-                : record.getVerifyChannel();
-        consumeVerifyCode(userId, channel, account, request.getVerifyCode());
 
-        // 必须先 CAS 抢占凭据，再改账号状态：worker 可能刚把它抢成 RUNNING(1)，
-        // 此时"恢复成功"与"数据正在被删"会同时成立，只有凭据 CAS 能把这个错位挡住。
+        // 登录即取消注销：能建立会话即完成本人身份核验（wx.login code / 短信/邮箱验证码登录），
+        // 恢复不再二次验证。仍必须先 CAS 抢占凭据，再改账号状态：worker 可能刚把它抢成
+        // RUNNING(1)，"恢复成功"与"数据正在被删"只能二选一。
         if (cancellationMapper.markRecovered(record.getId()) != 1) {
             throw new BizException(ErrorCode.CONFLICT, "注销正在处理中，无法恢复");
         }
-        account.setAccountStatus(AccountStatus.NORMAL.getCode());
+        // 按申请前状态还原：DISABLED 恢复后仍是 DISABLED，不允许借"注销再恢复"洗白。
+        int preStatus = record.getPreStatus() == null
+                ? AccountStatus.NORMAL.getCode()
+                : record.getPreStatus();
+        account.setAccountStatus(preStatus);
         userAccountMapper.updateById(account);
 
-        return RecoveryView.builder().accountStatus(AccountStatus.NORMAL.getCode()).build();
+        return RecoveryView.builder().accountStatus(preStatus).build();
     }
 
     private UserAccount requireAccount(Long userId) {
@@ -224,26 +263,53 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         }
     }
 
-    private int resolveChannelOrThrow(UserAccount account) {
-        if (StringUtils.hasText(account.getPhone())) {
-            return CancellationVerifyChannel.SMS.getCode();
+    /** 验证方式必须与实际绑定一致，避免把不可用的通道当成凭证。 */
+    private void assertVerifyTarget(UserAccount account, int verifyType) {
+        if (verifyType == CancellationVerifyChannel.SMS.getCode()
+                && !StringUtils.hasText(account.getPhone())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前账号未绑定手机号");
         }
-        if (StringUtils.hasText(account.getEmail())) {
-            return CancellationVerifyChannel.EMAIL.getCode();
+        if (verifyType == CancellationVerifyChannel.EMAIL.getCode()
+                && !StringUtils.hasText(account.getEmail())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前账号未绑定邮箱");
         }
-        throw new BizException(ErrorCode.BAD_REQUEST, "请先绑定手机号或邮箱后再注销");
+        if (verifyType == CancellationVerifyChannel.WECHAT.getCode()
+                && !hasWechatBound(account)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前账号未绑定微信");
+        }
     }
 
-    private void consumeVerifyCode(Long userId, int channel, UserAccount account, String code) {
+    /**
+     * 是否已绑定真实微信。手机号/邮箱注册时 openid 写入 {@code phone_} / {@code email_} 占位值，
+     * 这类占位值不能当作微信凭证（也无法与 wx.login 换取的 openid 匹配）。
+     */
+    private static boolean hasWechatBound(UserAccount account) {
+        String openid = account.getOpenid();
+        return StringUtils.hasText(openid)
+                && !openid.startsWith("phone_")
+                && !openid.startsWith("email_");
+    }
+
+    private void consumeVerifyCode(Long userId, int verifyType, UserAccount account, SubmitRequest request) {
         Long lockUntil = verifyLockUntil.get(userId);
         if (lockUntil != null && lockUntil > System.currentTimeMillis()) {
             throw new BizException(ErrorCode.TOO_MANY_REQUESTS, "验证失败次数过多，请 24 小时后再试");
         }
+        if (verifyType == CancellationVerifyChannel.WECHAT.getCode()) {
+            if (!StringUtils.hasText(request.getWechatCode())) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "请先完成微信身份验证");
+            }
+        } else if (!StringUtils.hasText(request.getVerifyCode())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请输入验证码");
+        }
         try {
-            if (channel == CancellationVerifyChannel.SMS.getCode()) {
-                authService.consumeSmsCode(account.getPhone(), code);
+            if (verifyType == CancellationVerifyChannel.WECHAT.getCode()) {
+                // wx.login code 一次性有效，现场换取 openid 并与账号比对（换取即消费）。
+                authService.assertWechatIdentity(request.getWechatCode(), account.getOpenid());
+            } else if (verifyType == CancellationVerifyChannel.SMS.getCode()) {
+                authService.consumeSmsCode(account.getPhone(), request.getVerifyCode(), "cancel");
             } else {
-                authService.consumeEmailCode(account.getEmail(), code);
+                authService.consumeEmailCode(account.getEmail(), request.getVerifyCode(), "cancel");
             }
             verifyFailCount.remove(userId);
             verifyLockUntil.remove(userId);

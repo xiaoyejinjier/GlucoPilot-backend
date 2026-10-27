@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
 import tools.jackson.databind.annotation.JsonSerialize;
@@ -14,6 +15,20 @@ import tools.jackson.databind.ser.std.ToStringSerializer;
 public final class CancellationDtos {
 
     private CancellationDtos() {
+    }
+
+    @Data
+    public static class SendCodeRequest {
+        /** 验证通道：1=短信 2=邮箱（前端按用户所选显式传入，不再由服务端猜测）。 */
+        @NotNull(message = "请选择验证方式")
+        @Min(1)
+        @Max(2)
+        private Integer channel;
+
+        /** 滑动验证一次性票据（GET /cancellation/captcha 获取，绑定 userId，180 秒有效）。 */
+        @NotBlank(message = "请先完成滑动验证")
+        @Size(max = 64, message = "滑动验证票据格式错误")
+        private String captchaTicket;
     }
 
     @Data
@@ -29,16 +44,28 @@ public final class CancellationDtos {
         @Max(4)
         private Integer reasonCode;
 
-        @NotBlank(message = "请输入验证码")
+        /** 验证方式：1=短信 2=邮箱 3=微信（必填，服务端按此校验对应凭证）。 */
+        @NotNull(message = "请选择验证方式")
+        @Min(1)
+        @Max(3)
+        private Integer verifyType;
+
+        /** 短信/邮箱通道的 6 位验证码。 */
         @Pattern(regexp = "^\\d{6}$", message = "验证码为 6 位数字")
         private String verifyCode;
+
+        /** 微信通道的 wx.login code（code 一次性有效，换取即消费）。 */
+        @Size(max = 128, message = "微信凭证格式错误")
+        private String wechatCode;
     }
 
     @Data
-    public static class RecoveryRequest {
-        @NotBlank(message = "请输入验证码")
-        @Pattern(regexp = "^\\d{6}$", message = "验证码为 6 位数字")
-        private String verifyCode;
+    @Builder
+    public static class CaptchaView {
+        /** 一次性滑动验证票据，发码时回传。 */
+        private String ticket;
+        /** 票据有效期（秒）。 */
+        private Integer expiresIn;
     }
 
     @Data
@@ -75,6 +102,13 @@ public final class CancellationDtos {
     @Builder
     public static class QueryView {
         private Integer accountStatus;
+        /** 是否绑定手机号 / 邮箱 / 微信，前端据此决定展示哪些验证方式。 */
+        private Boolean hasPhone;
+        private Boolean hasEmail;
+        private Boolean hasWechat;
+        /** 脱敏后的绑定目标，用于“验证码将发送至 …”提示（未绑定为 null）。 */
+        private String phoneMasked;
+        private String emailMasked;
         /** 无申请时为 null。 */
         private CancellationView cancellation;
     }

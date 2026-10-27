@@ -116,7 +116,7 @@ public class UserAccountService {
     /** 换绑手机号：先验验证码（避免账号枚举），再查占用。 */
     @Transactional
     public UserDtos.PhoneBindResult bindPhone(Long userId, UserDtos.PhoneBindRequest request) {
-        authService.consumeSmsCode(request.getPhone(), request.getVerifyCode());
+        authService.consumeSmsCode(request.getPhone(), request.getVerifyCode(), "bind");
 
         UserAccount account = requireAccount(userId);
         if (request.getPhone().equals(account.getPhone())) {
@@ -135,7 +135,7 @@ public class UserAccountService {
 
     public UserDtos.EmailBindResult bindEmail(Long userId, UserDtos.EmailBindRequest request) {
         String email = EmailUtils.normalize(request.getEmail());
-        authService.consumeEmailCode(email, request.getVerifyCode());
+        authService.consumeEmailCode(email, request.getVerifyCode(), "bind");
         UserAccount account = requireAccount(userId);
         if (email.equals(account.getEmail())) {
             return UserDtos.EmailBindResult.builder().emailMasked(EmailUtils.mask(account.getEmail())).build();

@@ -96,6 +96,7 @@ public class AuthService {
         AuthSmsCode row = new AuthSmsCode();
         row.setPhone(request.getPhone());
         row.setVerifyCode(code);
+        row.setScene(scene);
         row.setExpireAt(LocalDateTime.now().plusSeconds(SMS_EXPIRE_SECONDS));
         row.setIsUsed(0);
         row.setClientIp(RequestContext.getClientIp());
@@ -110,7 +111,7 @@ public class AuthService {
 
     @Transactional
     public AuthDtos.SessionResponse loginByPhone(AuthDtos.PhoneLoginRequest request) {
-        consumeSmsCode(request.getPhone(), request.getSmsCode());
+        consumeSmsCode(request.getPhone(), request.getSmsCode(), "login");
         UserAccount account = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
                 .eq(UserAccount::getPhone, request.getPhone())
                 .last("LIMIT 1"));
@@ -151,6 +152,7 @@ public class AuthService {
         AuthEmailCode row = new AuthEmailCode();
         row.setEmail(email);
         row.setVerifyCode(code);
+        row.setScene(scene);
         row.setExpireAt(LocalDateTime.now().plusSeconds(EMAIL_EXPIRE_SECONDS));
         row.setIsUsed(0);
         row.setClientIp(RequestContext.getClientIp());
@@ -164,7 +166,7 @@ public class AuthService {
     @Transactional
     public AuthDtos.SessionResponse loginByEmail(AuthDtos.EmailLoginRequest request) {
         String email = EmailUtils.normalize(request.getEmail());
-        consumeEmailCode(email, request.getEmailCode());
+        consumeEmailCode(email, request.getEmailCode(), "login");
         UserAccount account = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
                 .eq(UserAccount::getEmail, email)
                 .last("LIMIT 1"));
@@ -266,10 +268,11 @@ public class AuthService {
         }
     }
 
-    /** 登录与绑定手机号共用：校验并消费最近一条未使用验证码。 */
-    public void consumeSmsCode(String phone, String smsCode) {
+    /** 登录、绑定与注销各自消费对应 scene 的验证码，互不串用。 */
+    public void consumeSmsCode(String phone, String smsCode, String scene) {
         AuthSmsCode row = authSmsCodeMapper.selectOne(new LambdaQueryWrapper<AuthSmsCode>()
                 .eq(AuthSmsCode::getPhone, phone)
+                .eq(AuthSmsCode::getScene, scene)
                 .eq(AuthSmsCode::getIsUsed, 0)
                 .orderByDesc(AuthSmsCode::getId)
                 .last("LIMIT 1"));
@@ -284,11 +287,12 @@ public class AuthService {
         authSmsCodeMapper.updateById(row);
     }
 
-    /** 登录与绑定邮箱共用：校验并消费最近一条未使用验证码。 */
-    public void consumeEmailCode(String email, String emailCode) {
+    /** 登录、绑定与注销各自消费对应 scene 的验证码，互不串用。 */
+    public void consumeEmailCode(String email, String emailCode, String scene) {
         String normalized = EmailUtils.normalize(email);
         AuthEmailCode row = authEmailCodeMapper.selectOne(new LambdaQueryWrapper<AuthEmailCode>()
                 .eq(AuthEmailCode::getEmail, normalized)
+                .eq(AuthEmailCode::getScene, scene)
                 .eq(AuthEmailCode::getIsUsed, 0)
                 .orderByDesc(AuthEmailCode::getId)
                 .last("LIMIT 1"));
@@ -300,6 +304,21 @@ public class AuthService {
         }
         row.setIsUsed(1);
         authEmailCodeMapper.updateById(row);
+    }
+
+    /**
+     * 注销等敏感操作的微信身份复核：现场用 wx.login code 换取 openid，
+     * 必须与账号 openid 一致。code 一次性有效，换取即消费，天然防重放。
+     */
+    public void assertWechatIdentity(String code, String expectedOpenid) {
+        if (code == null || code.isBlank()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先完成微信身份验证");
+        }
+        WechatAuthClient.WechatIdentity identity = wechatAuthClient.exchangeCode(code);
+        if (identity == null || identity.openid() == null
+                || !identity.openid().equals(expectedOpenid)) {
+            throw new BizException(ErrorCode.BIZ_REJECTED, "微信身份验证失败，请重试");
+        }
     }
 
     private UserAccount createUserWithOpenid(String openid, String unionId) {

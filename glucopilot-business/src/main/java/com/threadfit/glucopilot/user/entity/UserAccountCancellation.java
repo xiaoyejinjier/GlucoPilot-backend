@@ -32,8 +32,11 @@ public class UserAccountCancellation extends BaseEntity {
     /** 注销原因：1..4（可空，CodeEnum.CancellationReason）。 */
     private Integer reasonCode;
 
-    /** 验证通道：1=短信 2=邮箱（CodeEnum.CancellationVerifyChannel）。 */
+    /** 验证通道：1=短信 2=邮箱 3=微信（CodeEnum.CancellationVerifyChannel）。 */
     private Integer verifyChannel;
+
+    /** 申请前账号状态：0=禁用 1=正常（登录取消注销时按此还原，见 V40）。 */
+    private Integer preStatus;
 
     /** 申请时间。 */
     private LocalDateTime requestedAt;

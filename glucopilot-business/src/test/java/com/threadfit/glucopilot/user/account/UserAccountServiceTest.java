@@ -177,7 +177,7 @@ class UserAccountServiceTest {
 
         assertThrows(BizException.class, () -> service.bindPhone(USER_ID, request));
         // 先校验验证码再判断占用，避免通过报错差异枚举已注册手机号
-        verify(authService).consumeSmsCode("13900000000", "123456");
+        verify(authService).consumeSmsCode("13900000000", "123456", "bind");
     }
 
     @Test
@@ -194,7 +194,7 @@ class UserAccountServiceTest {
         assertEquals("139****0001", result.getPhoneMasked());
         assertEquals("13900000001", account.getPhone());
         verify(userAccountMapper).updateById(account);
-        verify(authService).consumeSmsCode("13900000001", "123456");
+        verify(authService).consumeSmsCode("13900000001", "123456", "bind");
     }
 
     private static UserAccount account() {

@@ -1,5 +1,7 @@
 package com.threadfit.glucopilot.community;
 
+import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.exception.BizException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -179,20 +181,24 @@ public class CommunityModerationQueue {
      * <b>先发后审</b>：命中 REJECT 立即 {@code is_hidden=1}（从公开列表消失），
      * 由管理端的恢复接口兜底误杀；{@code ERROR} <b>不隐藏</b>——模型故障时把所有新评论藏起来
      * 等于社区停摆，但 {@code ai_verdict=ERROR} 也不等于通过，运营可按它筛出来复查。
+     * <p>
+     * {@code is_hidden} 的写法是"只升不降"（REJECT 置 1，其余保持原值）：管理员可能在评论还在排队时
+     * 就先手动隐藏了它，此时 AI 随后给出的 PASS/ERROR 不该把人工决定悄悄推翻——机器能加严，
+     * 不能替人放宽，放宽只能由人在管理端做。
      */
     private boolean finishComment(Job job, ModerationVerdict verdict, String model, String promptVer) {
         return Boolean.TRUE.equals(tx.execute(status -> {
             String reason = cut(verdict.reason(), 1000);
             int changed = jdbc.update("UPDATE community_comment SET ai_status='DONE',ai_verdict=?,ai_reason=?,"
                             + "ai_model=?,ai_category=?,ai_severity=?,ai_confidence=?,ai_prompt_ver=?,"
-                            + "ai_checked_at=CURRENT_TIMESTAMP,is_hidden=? "
+                            + "ai_checked_at=CURRENT_TIMESTAMP,is_hidden=CASE WHEN ? THEN 1 ELSE is_hidden END "
                             + "WHERE id=? AND ai_status='REVIEWING'",
                     verdict.verdict(), reason, cut(model, 128),
                     verdict.categoryCode(),
                     verdict.isReject() ? verdict.severity() : null,
                     verdict.isReject() ? verdict.confidence() : null,
                     cut(promptVer, 32),
-                    verdict.isReject() ? 1 : 0,
+                    verdict.isReject(),
                     job.id());
             if (changed != 1) {
                 return false;
@@ -204,22 +210,57 @@ public class CommunityModerationQueue {
     }
 
     /**
-     * 管理端恢复被机器隐藏的评论（误杀兜底）。
+     * 管理端主动隐藏 / 恢复一条评论（人工兜底）。
      * <p>
-     * 只把 {@code is_hidden} 归零，<b>不改写 {@code ai_verdict}</b>：
+     * 两个方向都只动 {@code is_hidden} 一列，<b>不改写 {@code ai_verdict}</b>：
      * "机器判它违规"是发生过的事实，删掉它就再也解释不清"为什么这条被隐藏过"。
-     * 恢复动作本身写 {@code community_moderation_log}（ADMIN + RESTORE），可追溯。
+     * 反过来，管理员把一条 AI 判通过的正常评论藏起来时，{@code ai_verdict} 仍是 PASS——
+     * 那正是"人工否决了机器结论"，两边都留着才解释得清。
+     * 每次真实的状态变化写一条 {@code community_moderation_log}（ADMIN + HIDE/RESTORE），可追溯。
+     *
+     * @param hidden true 隐藏，false 恢复显示
+     * @return false 表示这条评论已经处于目标状态（幂等，不报错）
+     * @throws BizException 评论不存在或已被逻辑删除
+     */
+    public boolean setCommentHidden(long opsId, long commentId, boolean hidden) {
+        return applyVisibility(opsId, commentId, hidden, true);
+    }
+
+    /**
+     * 管理端恢复被机器隐藏的评论（误杀兜底，历史入口，等价于 {@code setCommentHidden(…, false)}）。
+     * <p>
+     * 与 {@link #setCommentHidden} 的差别只在"评论不存在"时的语义：这里保持静默返回 false，
+     * 因为恢复接口从上线起就声明了幂等（运营重复点击、列表数据过期都不该报错）。
      *
      * @return false 表示这条评论不存在或当前并未隐藏（幂等，不报错）
      */
     public boolean restoreComment(long opsId, long commentId) {
+        return applyVisibility(opsId, commentId, false, false);
+    }
+
+    /**
+     * @param requireExists true 时评论不存在/已删除抛 404（管理端主动操作需要明确失败），
+     *                      false 时静默返回 false（历史恢复接口的幂等语义）
+     */
+    private boolean applyVisibility(long opsId, long commentId, boolean hidden, boolean requireExists) {
         return Boolean.TRUE.equals(tx.execute(status -> {
-            int changed = jdbc.update("UPDATE community_comment SET is_hidden=0 WHERE id=? AND is_hidden=1",
-                    commentId);
-            if (changed != 1) {
+            // 行锁 + 读当前值：判断"是否真的需要变"，避免重复点击写出重复日志。
+            List<Integer> current = jdbc.queryForList(
+                    "SELECT is_hidden FROM community_comment WHERE id=?" + (requireExists ? " AND is_deleted=0" : "")
+                            + " FOR UPDATE", Integer.class, commentId);
+            if (current.isEmpty()) {
+                if (requireExists) {
+                    throw new BizException(ErrorCode.NOT_FOUND, "评论不存在或已删除");
+                }
                 return false;
             }
-            publication.log(COMMENT, commentId, null, "ADMIN", opsId, "RESTORE", "管理员恢复被 AI 隐藏的评论");
+            if ((current.getFirst() == 1) == hidden) {
+                return false;
+            }
+            jdbc.update("UPDATE community_comment SET is_hidden=? WHERE id=?", hidden ? 1 : 0, commentId);
+            publication.log(COMMENT, commentId, null, "ADMIN", opsId,
+                    hidden ? "HIDE" : "RESTORE",
+                    hidden ? "管理员主动隐藏评论" : "管理员恢复被 AI 隐藏的评论");
             return true;
         }));
     }

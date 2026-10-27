@@ -54,6 +54,23 @@ public class AdminCommunityController {
     }
 
     /**
+     * 主动设置一条评论的可见性：隐藏 / 恢复显示。
+     * <p>
+     * 为什么需要"主动隐藏"：AI 只能判它见过的内容，而运营会遇到机器放过、实际该压下去的东西
+     * （广告变体、擦边、踩线话题）。只有"恢复"没有"隐藏"，运营手里就只有一半的权力。
+     * 与 AI 判违规共用同一列 {@code is_hidden}，但不动 {@code ai_verdict}：两种来源的事实都保留。
+     * <p>
+     * 幂等：已经处于目标状态时返回成功（重复点击不报错）；评论不存在或已删除返回 404。
+     */
+    @PutMapping("/comments/{id}/visibility")
+    @PreAuthorize("@ss.hasRole('admin') and @ss.hasPermi('content:news:edit')")
+    public ApiResponse<Void> setCommentVisibility(@PathVariable long id,
+            @Valid @RequestBody CommentVisibility request) {
+        queue.setCommentHidden(RequestContext.requireOpsId(), id, request.hidden());
+        return ApiResponse.ok();
+    }
+
+    /**
      * 恢复被 AI 判违规并隐藏的评论（误杀兜底）。
      * <p>
      * 为什么必须有人工恢复入口：评论是"先发后审"，机器判 REJECT 会立即隐藏；

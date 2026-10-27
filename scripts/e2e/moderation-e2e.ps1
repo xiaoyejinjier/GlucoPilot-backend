@@ -11,7 +11,9 @@
     2. 干净文章 → ai_verdict=PASS + state=PENDING_ADMIN（进人工终审）+ 无命中证据；
     3. 违规评论 → 先发后审：is_hidden=1，公开列表查不到，计数不含它；
     4. 干净评论 → 可见；
-    5. 管理端恢复接口 → 误杀评论重新可见，且保留原 ai_verdict 与 ADMIN/RESTORE 日志。
+    5. 管理端恢复接口 → 误杀评论重新可见，且保留原 ai_verdict 与 ADMIN/RESTORE 日志；
+    6. 管理端主动隐藏机器放行的评论 → is_hidden=1、公开列表消失、作者侧标记隐藏、
+       保留原 ai_verdict 与 ADMIN/HIDE 日志；再恢复显示 → 幂等、不重复写日志、不存在返回 404。
 
   用法：
     $env:E2E_BASE_URL  = 'http://127.0.0.1:8091'
@@ -237,8 +239,42 @@ if ($bc[1] -eq 'REJECT') {
     Write-Host "   （违规评论未被判 REJECT，跳过恢复断言：模型误杀率需要关注）" -ForegroundColor Yellow
 }
 
-# ---------------------------------------------------------------- 7. 清理
-Write-Host "7) 清理 E2E 数据" -ForegroundColor Gray
+# ---------------------------------------------------------------- 7. 管理员主动隐藏 / 恢复
+Write-Host "7) 管理员主动隐藏与恢复（机器放行的评论）" -ForegroundColor Gray
+if ($gc[1] -eq 'PASS') {
+    $hide = Invoke-Api -Method PUT -Url "$adminApi/community/comments/$goodCommentId/visibility" -Headers $adminHeaders -Tag 'mod-hide' -Body @{ hidden = $true }
+    Check '主动隐藏接口调用成功' ($hide.Code -eq 200) "HTTP $($hide.Code) $($hide.Raw)"
+    Check '主动隐藏后库里 is_hidden=1' ((Sql "SELECT is_hidden FROM sugar_health.community_comment WHERE id = $goodCommentId;") -eq '1') 'is_hidden 仍为 0'
+    Check '主动隐藏不改写机器判定' ((Sql "SELECT ai_verdict FROM sugar_health.community_comment WHERE id = $goodCommentId;") -eq 'PASS') 'ai_verdict 被改写了'
+    Check '主动隐藏留痕（ADMIN/HIDE）' ([int](Sql "SELECT COUNT(*) FROM sugar_health.community_moderation_log WHERE target_type='COMMENT' AND target_id=$goodCommentId AND actor_type='ADMIN' AND decision='HIDE';") -ge 1) '没有 ADMIN/HIDE 日志'
+    $publicAfterHide = Invoke-Api -Method GET -Url "$api/news/$goodId/comments?pageSize=20" -Headers $headers -Tag 'mod-list-after-hide'
+    $publicAfterHideIds = @($publicAfterHide.Body.data.records | ForEach-Object { [long]$_.id })
+    Check '主动隐藏后公开列表不再出现' (-not ($publicAfterHideIds -contains $goodCommentId)) '公开列表仍能看到被隐藏评论'
+    $mineAfterHide = Invoke-Api -Method GET -Url "$api/community/comments/mine?pageSize=50" -Headers $headers -Tag 'mod-my-comments-after-hide'
+    $mineAfterHideOne = @($mineAfterHide.Body.data.records | Where-Object { [long]$_.id -eq $goodCommentId })
+    Check '主动隐藏后作者可见并标记 hidden' ($mineAfterHideOne.Count -eq 1 -and $mineAfterHideOne[0].hidden -eq $true) '作者视角没有标记为已隐藏'
+
+    $show = Invoke-Api -Method PUT -Url "$adminApi/community/comments/$goodCommentId/visibility" -Headers $adminHeaders -Tag 'mod-show' -Body @{ hidden = $false }
+    Check '恢复显示接口调用成功' ($show.Code -eq 200) "HTTP $($show.Code) $($show.Raw)"
+    Check '恢复显示后库里 is_hidden=0' ((Sql "SELECT is_hidden FROM sugar_health.community_comment WHERE id = $goodCommentId;") -eq '0') 'is_hidden 仍为 1'
+    Check '恢复显示留痕（ADMIN/RESTORE）' ([int](Sql "SELECT COUNT(*) FROM sugar_health.community_moderation_log WHERE target_type='COMMENT' AND target_id=$goodCommentId AND actor_type='ADMIN' AND decision='RESTORE';") -ge 1) '没有 ADMIN/RESTORE 日志'
+    $publicAfterShow = Invoke-Api -Method GET -Url "$api/news/$goodId/comments?pageSize=20" -Headers $headers -Tag 'mod-list-after-show'
+    $publicAfterShowIds = @($publicAfterShow.Body.data.records | ForEach-Object { [long]$_.id })
+    Check '恢复显示后公开列表又能看到' ($publicAfterShowIds -contains $goodCommentId) '恢复后公开列表仍看不到'
+
+    $logBefore = [int](Sql "SELECT COUNT(*) FROM sugar_health.community_moderation_log WHERE target_type='COMMENT' AND target_id=$goodCommentId AND actor_type='ADMIN';")
+    $repeat = Invoke-Api -Method PUT -Url "$adminApi/community/comments/$goodCommentId/visibility" -Headers $adminHeaders -Tag 'mod-show-repeat' -Body @{ hidden = $false }
+    Check '重复恢复同样成功（幂等）' ($repeat.Code -eq 200) "HTTP $($repeat.Code) $($repeat.Raw)"
+    Check '重复恢复不重复写日志' ([int](Sql "SELECT COUNT(*) FROM sugar_health.community_moderation_log WHERE target_type='COMMENT' AND target_id=$goodCommentId AND actor_type='ADMIN';") -eq $logBefore) '状态未变却写了新日志'
+
+    $missing = Invoke-Api -Method PUT -Url "$adminApi/community/comments/999999999/visibility" -Headers $adminHeaders -Tag 'mod-hide-missing' -Body @{ hidden = $true }
+    Check '隐藏不存在的评论返回 404' ($missing.Code -eq 404) "HTTP $($missing.Code) $($missing.Raw)"
+} else {
+    Write-Host "   （干净评论未被判 PASS，跳过主动隐藏断言：模型误杀率需要关注）" -ForegroundColor Yellow
+}
+
+# ---------------------------------------------------------------- 8. 清理
+Write-Host "8) 清理 E2E 数据" -ForegroundColor Gray
 foreach ($id in @($badId, $goodId)) {
     Sql "UPDATE sugar_health.cms_news SET is_deleted=1, deleted_at=NOW(3) WHERE id = $id;" | Out-Null
 }

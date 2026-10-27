@@ -36,4 +36,21 @@ class AdminWorkReminderHttpTest {
             assertEquals(200,response.getStatus());assertEquals("no-store",response.getHeader("Cache-Control"));assertTrue(response.getContentAsString().contains("FEEDBACK"));assertFalse(response.getContentAsString().contains("REPORT"));verify(authorization).permissionCodesOf(7L);verify(service).summary(Set.of("feedback:manage"));
         }finally{SecurityContextHolder.clearContext();RequestContext.clear();}
     }
+
+    @Test void foodOnlyOperatorCanReadFoodQueueWithoutReceivingOtherCategories() throws Exception {
+        try (var context = new AnnotationConfigApplicationContext(Config.class)) {
+            var controller=context.getBean(AdminWorkReminderController.class);
+            var service=context.getBean(AdminWorkReminderService.class);
+            var authorization=context.getBean(RuoYiAuthorizationService.class);
+            SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("food-manager","unused","food:library:manage"));
+            RequestContext.setOpsId(8L);
+            when(authorization.permissionCodesOf(8L)).thenReturn(Set.of("food:library:manage"));
+            when(service.summary(Set.of("food:library:manage"))).thenReturn(new AdminWorkReminderService.Summary(2,List.of(new AdminWorkReminderService.Item("FOOD_REVIEW","待审核食品",2,null))));
+            var response=MockMvcBuilders.standaloneSetup(controller).build().perform(get("/admin/v1/work-reminders")).andReturn().getResponse();
+            assertEquals(200,response.getStatus()); assertEquals("no-store",response.getHeader("Cache-Control"));
+            assertTrue(response.getContentAsString().contains("FOOD_REVIEW"));
+            assertFalse(response.getContentAsString().contains("REPORT"));
+            verify(service).summary(Set.of("food:library:manage"));
+        } finally { SecurityContextHolder.clearContext(); RequestContext.clear(); }
+    }
 }

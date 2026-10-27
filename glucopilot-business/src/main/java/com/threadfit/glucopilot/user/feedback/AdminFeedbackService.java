@@ -41,11 +41,15 @@ public class AdminFeedbackService {
 
     public PageResult<AdminFeedbackDtos.FeedbackItem> page(
             Integer feedbackType, Integer replyStatus, String keyword, PageQuery query) {
+        if (replyStatus != null && replyStatus != FeedbackReplyState.PENDING && replyStatus != FeedbackReplyState.DONE) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "处理状态仅支持待审批或已完成");
+        }
         Page<Feedback> rows = feedbackMapper.selectPage(
                 new Page<>(query.getPageNum(), query.getPageSize()),
                 new LambdaQueryWrapper<Feedback>()
                         .eq(feedbackType != null, Feedback::getFeedbackType, feedbackType)
-                        .eq(replyStatus != null, Feedback::getReplyStatus, replyStatus)
+                        .apply(replyStatus != null, replyStatus != null && replyStatus == FeedbackReplyState.DONE
+                                ? FeedbackReplyState.DONE_SQL : FeedbackReplyState.PENDING_SQL)
                         .like(StringUtils.hasText(keyword), Feedback::getContentText,
                                 keyword == null ? null : keyword.trim())
                         .orderByAsc(Feedback::getId));
@@ -72,27 +76,22 @@ public class AdminFeedbackService {
 
     @Transactional
     public AdminFeedbackDtos.ReplyResult reply(Long opsId, Long feedbackId, AdminFeedbackDtos.ReplyRequest request) {
-        CodeEnum.of(CodeEnum.ReplyStatus.class, request.getReplyStatus());
+        if (request.getReplyStatus() != null) CodeEnum.of(CodeEnum.ReplyStatus.class, request.getReplyStatus());
         String reply = StringUtils.hasText(request.getOfficialReply())
                 ? request.getOfficialReply().trim()
                 : null;
-        if (request.getReplyStatus() == HANDLED && reply == null) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "标记已处理时必须填写官方回复");
+        if (reply == null || reply.length() > 1000) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请填写1至1000字的官方回复");
         }
 
         Feedback row = feedbackMapper.selectById(feedbackId);
         if (row == null) {
             throw new BizException(ErrorCode.NOT_FOUND, "反馈不存在");
         }
-        row.setReplyStatus(request.getReplyStatus());
+        row.setReplyStatus(HANDLED);
         row.setOfficialReply(reply);
-        if (reply == null) {
-            row.setRepliedBy(null);
-            row.setRepliedAt(null);
-        } else {
-            row.setRepliedBy(opsId);
-            row.setRepliedAt(LocalDateTime.now());
-        }
+        row.setRepliedBy(opsId);
+        row.setRepliedAt(LocalDateTime.now());
         feedbackMapper.updateById(row);
         return AdminFeedbackDtos.ReplyResult.builder().updated(true).build();
     }
@@ -112,7 +111,7 @@ public class AdminFeedbackService {
                 .contact(account == null ? null : PhoneUtils.mask(account.getPhone()))
                 .feedbackType(row.getFeedbackType())
                 .contentText(row.getContentText())
-                .replyStatus(row.getReplyStatus())
+                .replyStatus(FeedbackReplyState.of(row))
                 .officialReply(row.getOfficialReply())
                 .createdAt(row.getGmtCreate())
                 .repliedAt(row.getRepliedAt())

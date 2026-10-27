@@ -23,6 +23,8 @@ public class CommunityController {
     public ApiResponse<PageResult<Profile>> following(@RequestParam(required=false) String keyword,@Valid PageQuery q) { return ApiResponse.ok(service.follows(user(),keyword,q)); }
     @GetMapping("/community/collections")
     public ApiResponse<PageResult<com.threadfit.glucopilot.content.dto.ContentDtos.NewsListItem>> collections(@RequestParam(required=false) String keyword,@Valid PageQuery q) { return ApiResponse.ok(service.collections(user(),keyword,q)); }
+    @GetMapping("/community/likes")
+    public ApiResponse<PageResult<com.threadfit.glucopilot.content.dto.ContentDtos.NewsListItem>> likes(@RequestParam(required=false) String keyword,@Valid PageQuery q) { return ApiResponse.ok(service.likes(user(),keyword,q)); }
     @GetMapping("/news/{id}/comments")
     public ApiResponse<PageResult<Comment>> comments(@PathVariable long id,@Valid PageQuery q) { return ApiResponse.ok(service.comments(user(),id,q)); }
     @GetMapping("/news/{id}/comments/{commentId}/context")

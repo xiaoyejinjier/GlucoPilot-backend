@@ -62,7 +62,7 @@ public final class FoodDtos {
         /** 食品 GI 值；数据库允许为空。 */
         private BigDecimal giValue;
 
-        /** 食品缩略图 URL；当前不包含文件上传逻辑。 */
+        /** 优先管理员已登记配图；否则审核上架的食品返回食品级实拍地址。 */
         private String imageUrl;
     }
 }

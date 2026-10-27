@@ -106,9 +106,15 @@ public class CommunityService {
         return term;
     }
     public PageResult<ContentDtos.NewsListItem> collections(long viewer,String keyword,PageQuery q) {
+        return actionArticles(viewer,keyword,q,false);
+    }
+    public PageResult<ContentDtos.NewsListItem> likes(long viewer,String keyword,PageQuery q) {
+        return actionArticles(viewer,keyword,q,true);
+    }
+    private PageResult<ContentDtos.NewsListItem> actionArticles(long viewer,String keyword,PageQuery q,boolean liked) {
         requireUser(viewer);page(q);
         String term=listKeyword(keyword,80);
-        String from=" FROM news_user_action a JOIN cms_news n ON n.id=a.news_id WHERE a.user_id=? AND a.is_deleted=0 AND a.is_collected=1 AND "+ArticleAccessService.publishedSql("n")+" AND "+ArticleAccessService.readableSql("n",viewer)+" AND LOCATE(?,n.title)>0";
+        String from=" FROM news_user_action a JOIN cms_news n ON n.id=a.news_id WHERE a.user_id=? AND a.is_deleted=0 AND "+(liked?"a.is_liked=1":"a.is_collected=1")+" AND "+ArticleAccessService.publishedSql("n")+" AND "+ArticleAccessService.readableSql("n",viewer)+" AND LOCATE(?,n.title)>0";
         long total=jdbc.queryForObject("SELECT COUNT(*)"+from,Long.class,viewer,term);
         var rows=jdbc.query("SELECT n.*"+from+" ORDER BY a.gmt_modified DESC,n.id DESC LIMIT ? OFFSET ?",(rs,i)->ContentDtos.NewsListItem.builder()
                 .id(rs.getString("id")).title(rs.getString("title")).summaryText(rs.getString("summary_text"))

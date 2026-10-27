@@ -93,6 +93,7 @@ public class SecurityConfig {
                         "/api/v1/foods",
                         "/api/v1/foods/*",
                         "/api/v1/foods/images/*",
+                        "/api/v1/foods/*/image",
                         "/api/v1/cms/images/*",
                         "/api/v1/cms/videos/*",
                         "/api/v1/dict/**",

@@ -137,13 +137,15 @@ public class AdminFoodService {
      * 先拉取固定数量的数据后遗漏记录。
      */
     public PageResult<AdminFoodDtos.FoodItem> pageFoods(
-            Long categoryId, String keyword, Boolean enabled, PageQuery query) {
+            Long categoryId, String keyword, Boolean enabled, Boolean pendingReview, PageQuery query) {
         LambdaQueryWrapper<FoodNutrition> wrapper = new LambdaQueryWrapper<FoodNutrition>()
                 .eq(categoryId != null, FoodNutrition::getCategoryId, categoryId)
                 .like(StringUtils.hasText(keyword), FoodNutrition::getFoodName,
                         StringUtils.hasText(keyword) ? keyword.trim() : null)
                 .eq(enabled != null, FoodNutrition::getShelfStatus,
                         enabled == null ? null : (enabled ? 1 : 0))
+                .eq(Boolean.TRUE.equals(pendingReview), FoodNutrition::getNutritionSource, "AI_ESTIMATE")
+                .eq(Boolean.TRUE.equals(pendingReview), FoodNutrition::getShelfStatus, 0)
                 .orderByDesc(FoodNutrition::getId);
 
         Page<FoodNutrition> page = foodNutritionMapper.selectPage(
@@ -180,8 +182,8 @@ public class AdminFoodService {
         row.setCaloriesPer100g(req.getCal() == null ? BigDecimal.ZERO : req.getCal());
         row.setGiValue(req.getGi());
 
-        // 当前只保存图片 URL；图片文件上传由独立文件服务负责。
-        row.setImageUrl(req.getImage());
+        // 省略图片表示不更换；管理端显示用兜底图片不能替代原来源照片。
+        if (req.getImage() != null) row.setImageUrl(req.getImage());
 
         // enabled 明确为 false 时下架，其余情况默认上架。
         row.setShelfStatus(Boolean.FALSE.equals(req.getEnabled()) ? 0 : 1);
@@ -238,7 +240,7 @@ public class AdminFoodService {
                 .updatedAt(fmt(f.getGmtModified()))
                 .nutritionSource(f.getNutritionSource() == null ? "MANUAL" : f.getNutritionSource())
                 .sourceModel(f.getSourceModel())
-                .reviewImage(FoodReviewImageService.isPending(f) && f.getSourceMediaId() != null
+                .reviewImage(FoodReviewImageService.hasSourcePhoto(f)
                         ? "/admin/v1/foods/" + f.getId() + "/review-image" : "")
                 .build();
     }

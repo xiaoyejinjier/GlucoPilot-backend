@@ -38,6 +38,11 @@ public class FoodImageService {
     private final ObjectStorageService storage;
     private final MediaFileMapper mediaFileMapper;
 
+    /** 运营显式选用的已登记配图，与旧内置卡通兜底区分。 */
+    public static boolean isUploadedFoodImage(String imageUrl) {
+        return imageUrl != null && imageUrl.trim().matches("/api/v1/foods/images/[1-9]\\d*");
+    }
+
     public List<FileVos.MediaFileRegisterResult> list() {
         return mediaFileMapper.selectList(foodImages().orderByDesc("id"))
                 .stream().map(this::toResult).toList();

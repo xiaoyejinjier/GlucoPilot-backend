@@ -153,7 +153,7 @@ public class FoodService {
                 .carbsPer100g(f.getCarbsPer100g())
                 .caloriesPer100g(f.getCaloriesPer100g())
                 .giValue(f.getGiValue())
-                .imageUrl(f.getImageUrl())
+                .imageUrl(FoodCatalogImageService.imageUrl(f))
                 .build();
     }
 }

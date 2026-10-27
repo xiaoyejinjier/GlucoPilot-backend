@@ -19,7 +19,9 @@ public class AdminWorkReminderService {
         if(allowed(permissions,"content:news:list")) add(items,"REPORT","新举报",
                 "SELECT COUNT(*) total,MAX(created_at) latest_at FROM community_report WHERE state='OPEN'");
         if(allowed(permissions,"feedback:manage")) add(items,"FEEDBACK","新反馈",
-                "SELECT COUNT(*) total,MAX(gmt_create) latest_at FROM feedback WHERE reply_status=0 AND is_deleted=0");
+                "SELECT COUNT(*) total,MAX(gmt_create) latest_at FROM feedback WHERE "+com.threadfit.glucopilot.user.feedback.FeedbackReplyState.PENDING_SQL+" AND is_deleted=0");
+        if(allowed(permissions,"food:library:manage")) add(items,"FOOD_REVIEW","待审核食品",
+                "SELECT COUNT(*) total,MAX(gmt_create) latest_at FROM food_nutrition WHERE nutrition_source='AI_ESTIMATE' AND shelf_status=0 AND is_deleted=0");
         items.sort(Comparator.comparing(Item::latestAt,Comparator.nullsLast(Comparator.reverseOrder())));
         return new Summary(items.stream().mapToLong(Item::count).sum(),List.copyOf(items));
     }

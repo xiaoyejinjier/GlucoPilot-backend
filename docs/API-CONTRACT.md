@@ -1,5 +1,9 @@
 # API 契约
 
+## 本人点赞列表（2026-10-27）
+
+GET /api/v1/community/likes：需当前用户登录，PageQuery 分页，可选 keyword（去空白后最多80字，按标题字面子串匹配）。返回与 /community/collections 相同的 NewsListItem 分页结构；仅查询本人 news_user_action 中 is_liked=1、未删除的记录，并执行文章已发布、作者有效、阅读权限和本人隐藏偏好过滤。取消点赞后移出列表，不返回其他人的点赞；沿用动作记录更新时间倒序及文章ID倒序。复用既有点赞数据，无新增表或迁移。小程序社区快捷入口顺序为关注、我的点赞、我的收藏、信息、找糖友；旧关注爱心图标移给点赞，关注换新图标。点赞列表支持搜索、分页和打开文章，英文展示沿用文章翻译。
+
 ## 社区标签管理（2026-10-26）
 
 复用community_tag与community_article_tag；V41只新增固定分类other/其他，不改旧迁移。原有custom_编码标识用户自建标签，其他编码为官方分类，Tag DTO增加type=OFFICIAL|USER（保留code/name）。GET /api/v1/community/tags返回全部启用的官方分类（后台新增即出现，无需已有文章），用户标签仍仅返回当前用户可读的已发布文章所用项；GET tags/mine继续提供本人文章标签。社区官方分类行包含“其他”，选择other筛选直接标记other或任意启用custom_标签的文章，继续执行原文章可见性和隐藏偏好。自建标签不平铺在官方分类行，在“其他”分区展示。
@@ -297,9 +301,13 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ## 管理端食物图片
 
-待审核新食品（`nutritionSource=AI_ESTIMATE`且未上架）优先使用用户本次上传的餐食实拍图作为审核预览。识别服务只关联已验证归属的MEAL媒体，新增`food_nutrition.source_media_id`（迁移V30）；新草稿及缺少实拍关联的旧草稿可补充首次来源，重复识别不覆盖已关联照片，也不改动已审核或人工食品。管理端食品DTO新增只读`reviewImage`：有来源且仍待审核时为`/admin/v1/foods/{id}/review-image`，否则为空。该字段只用于审核，不写入公开`image`或食品库配图。
+2026-10-27食品换图优先级：管理员已上传并选用的稳定配图`/api/v1/foods/images/{mediaId}`保存到food_nutrition.image_url后，管理端列表、编辑重开和用户端foods列表/详情均优先使用该配图。未选择这类登记配图时仍优先识别来源实拍，旧内置卡通兜底不覆盖实拍；reviewImage/source_media_id保留供核对来源，不因换图清空或覆盖原文件。复用现有配图读取接口及字段，无新迁移；图片晚响应不能覆盖刚选择的新配图，启停和保存营养不改变当前配图选择。
 
-`GET /admin/v1/foods/{id}/review-image`要求运营登录及`food:library:manage`权限，验证食品仍待审核、来源媒体未删除/可用且为餐食图片后，返回原图二进制，使用`Cache-Control: no-store`；缺失或失效返回统一404响应。管理端携带Bearer读取为Blob预览，离页/换食品回收临时URL；照片缺失或加载失败时回落已有配图，再回落内置图片。用户健康照片不经公开食品配图接口发布。旧草稿没有来源关联时继续显示原配图，下次同名高置信度识别时可补充来源。
+2026-10-26 两端食品实拍同步：用户端 foods 列表/详情的 imageUrl 优先返回 `/api/v1/foods/{foodId}/image`，仅限未删除、AI_REVIEWED、已上架且关联 source_media_id 的食品。该公开二进制入口每次检查食品及分类仍启用，再读取与管理端相同的有效来源图，禁止通过任意媒体 ID 读取健康照片；未审核、下架、删除或禁用分类均返回404，成功 no-store/nosniff，桶仍私有。没有来源图时继续使用管理员保存的 image_url。小程序按当前 config.baseUrl 动态解析图片地址，进入/下拉同时刷新当前查询；空结果不补本地示例食品，失败明确提示，迟到请求/旧图片错误不得覆盖新图。
+
+AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览。识别服务只关联已验证归属的 MEAL 媒体，通过 `food_nutrition.source_media_id`（迁移 V30）保存首次来源；重复识别不覆盖已关联照片。管理端食品 DTO 的只读 `reviewImage` 对未删除、有来源且 `nutritionSource=AI_ESTIMATE/AI_REVIEWED` 的食品持续返回 `/admin/v1/foods/{id}/review-image`，不受启用/停用状态影响，旧的已审核食品同样适用。该字段不写入公开 `image`，不修改原照片或存储位置。
+
+`GET /admin/v1/foods/{id}/review-image` 要求运营登录及 `food:library:manage` 权限，验证食品未删除、有 AI 识别来源，且来源媒体未删除/可用、为餐食图片后返回原图二进制，使用 `Cache-Control: no-store`；缺失或失效返回统一 404 响应。管理端携带 Bearer 读取为 Blob 预览，离页/换食品回收临时 URL；照片缺失或加载失败时回落已有配图，再回落内置图片。用户健康照片不经公开食品配图接口发布。编辑表单保留原始 `image`，显示用卡通兜底不自动保存成配图；启用/停用不改变来源关联。旧草稿无来源关联时继续显示原配图，下次同名高置信度识别时可补充来源。
 
 新增与编辑食物可选择内置图片或已上传的食物图片，也可上传新的 JPG/PNG 图片（单张 1 字节至 5MB）。上传采用现有对象存储的“凭证 → PUT 文件字节 → 登记”流程，不将 base64 或浏览器临时地址写入食品表。
 
@@ -383,7 +391,9 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ### 管理端全局待办提醒（2026-10-23）
 
-`GET /admin/v1/work-reminders` 返回 `{ total, items: [{ type, title, count, latestAt }] }`，不缓存，统一 ApiResponse。必须是已登录运营账号，且至少拥有 `content:news:list` 或 `feedback:manage`；只查询和返回本人有权查看的类别。REPORT 为 state=OPEN 的真实举报、FEEDBACK 为 reply_status=0 且未删除的真实反馈，已处理举报及处理中/已处理/已关闭反馈不计入。items只返回count>0类别，total是其数量之和，不返回原文、联系方式或模拟数据。直接查询既有业务表，无新通知副本或迁移。
+2026-10-26新增食品审核：`GET /admin/v1/work-reminders`支持FOOD_REVIEW类型，标题“待审核食品”，按food_nutrition中is_deleted=0、nutrition_source=AI_ESTIMATE且shelf_status=0实时计数，latestAt为MAX(gmt_create)。接口准入增加food:library:manage，类别仍按各自服务端权限隔离。`GET /admin/v1/foods`增加可选pendingReview=true，仅返回相同待审核条件，分页/总数在SQL端筛选；false或不传不限制审核状态，与原categoryId/keyword/enabled条件取交集。消息点击跳转/nutrition/foods?review=pending&reminder=刷新标识，清空旧分类/关键词/页码，仅看待审核食品，同页再点也刷新。审核启用、保存或删除成功后立即刷新顶部汇总；原5秒前台轮询和无消息隐藏红点行为保留，无新增通知表或演示数据。
+
+`GET /admin/v1/work-reminders` 返回 `{ total, items: [{ type, title, count, latestAt }] }`，不缓存，统一 ApiResponse。必须是已登录运营账号，且至少拥有 `content:news:list`、`feedback:manage` 或 `food:library:manage`；只查询和返回本人有权查看的类别。REPORT 为 state=OPEN 的真实举报、FEEDBACK 为官方回复为空且未删除的真实反馈（含历史未回复记录），FOOD_REVIEW为未删除且未上架的AI_ESTIMATE食品；已处理类别不计入。items只返回count>0类别，total是其数量之和，不返回原文、联系方式或模拟数据。直接查询既有业务表，无新通知副本或迁移。
 
 管理端顶部主题左侧放置信封，total>0显示红点；点击弹层展示“新举报/新反馈”、真实数量和最新提交时间，点击对应项跳转其待处理列表并重置旧筛选及页码。同一页面再次点击也重新加载。红点表示未处理待办，打开弹层不改变业务状态；处理成功立即刷新，前台每5秒串行轮询，隐藏/离开/退出时暂停，切换账号丢弃旧结果。失败保留上次成功数据并提示重试，不伪装为无消息。
 
@@ -396,7 +406,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 | 管理端 | `GET /admin/v1/feedbacks` | `feedback:manage` | 分页查询全部用户反馈 |
 | 管理端 | `PUT /admin/v1/feedbacks/{id}/reply` | `feedback:reply` | 更新处理状态与官方回复 |
 
-处理状态统一为：`0` 已收到、`1` 处理中、`2` 已处理、`3` 已关闭。管理端把状态改为“已处理”时必须填写官方回复；回复写入 `official_reply` 后，用户端再次进入“我的反馈”即可通过现有查询接口看到结果。该 PUT 接口按反馈 ID 覆盖当前处理结果，重复提交相同内容不会创建新记录。
+处理状态统一为两个：`0` 待审批、`2` 已完成。以是否存在非空官方回复为准，历史1/3状态也按此规则读取；列表replyStatus筛选仅接受0/2，分页数量与筛选一致，全局FEEDBACK待办仅统计未回复且未删除的记录。PUT回复必须填写1～1000字的非空officialReply，成功后服务端自动保存reply_status=2、回复人与时间；不提供手选处理中、关闭或清空回复的操作。旧调用方可继续传replyStatus(0～3)，仅作兼容校验，不覆盖自动完成规则；管理端提交固定携带replyStatus=2与officialReply，以兼容仍要求replyStatus非空的旧后端，新后端也支持省略此字段。重复提交同样回复保留同一记录；用户端仍通过本人反馈查询读取回复。无新增表或数据迁移，历史官方回复和审计记录保留。
 
 ## 设备数据同步
 
@@ -609,6 +619,16 @@ snapshot格式：schemaVersion=1；sampledAt为UTC ISO时间；host={cpuPercent(
 
 - `GET /api/v1/glucose-records/summary` 的 `week.points[]` 增加 `predictedAvg`（可空，mmol/L，一位小数）与 `predictionCount`（0–3）。实测 `avg/count` 和周 `avg/max/min` 语义不变。
 - 预测只取当前用户、日期区间内未删除的早餐/中餐/晚餐 `meal_record.predict_suggest`（按推荐吃法），有效范围 `0 < value < 40`；按当天已有有效正餐取平均，不以零补齐，不回退 `predict_now`，无有效值时为 null/0。
-- 记录页保留九时段录入入口；曲线横轴固定六个实测节点。三个正餐推荐预测叠加在对应餐后位置，用绿色虚线和白底空心点显示；实测曲线最后绘制，使用更粗实线和实心点。
-- 记录页右上角“已记”只数有效实测节点，分母固定 6。预测不写入 glucose_record，不混入实测均值、最高/最低值或血糖告警。正餐保存状态与预测图例使用绿色。
+- 记录页保留九时段录入入口；曲线横轴固定六个实测节点。绿色参考虚线依次连接早前实测→早后推荐预测→中前实测→中后推荐预测→晚前实测→晚后推荐预测，包含早后到中前、中后到晚前的连接。餐后预测用白底空心点显示，餐前继续使用实测实心点。缺失值跳过，不填零、不把餐后实测当作预测；没有正餐预测时不绘制参考虚线。实测曲线最后绘制，使用更粗实线和实心点；周预测日均线语义不变。
+- 记录页右上角“已记”按九时段计数，六个有效实测和三个已保存正餐每时段计一次，分母 9。预测不写入 glucose_record，不混入实测均值、最高/最低值或血糖告警。正餐保存状态与预测图例使用绿色。
 - 周曲线分别绘制实测日均值和推荐预测日均值；缺失预测保留空值。无需新建表或迁移已有数据。
+# 2026-10-26 食品重复新增后的删除
+
+食品唯一性限定为未删除食品的 `(category_code, food_name)`；历史已删除行不占用名称。V42 使用可空生成列 `active_name_marker`（未删除为 1，已删除为 NULL）替换旧的 `(category_code, food_name, is_deleted)` 唯一索引。反复新增/识别、删除同名食品不再触发唯一键冲突；保留所有历史行、营养快照和照片来源关联，删除仍一次性写 is_deleted/deleted_at/deleted_by。管理端删除 API 及权限不变。
+# 2026-10-26 九时段进度、正餐照片与个人资料输入
+
+- 记录页“已记”恢复九时段：六个有效实测 + 三个已保存正餐，每时段最多计一次，分母 9。曲线仍保留六个实测横轴及独立推荐预测，实测统计不混入预测。
+- 新增 `GET /api/v1/meal-records/images/{mediaId}`，必须 C 端登录，仅当前用户自己未删除饮食记录所关联的可用 MEAL 图片可读取；校验用户/媒体/饮食记录归属、状态、MIME、大小及存储 provider/bucket。返回图片二进制，no-store/nosniff；不开放桶、不返回签名密钥。对象缺失为 404，存储连接异常沿用业务错误。
+- 饮食详情 mediaId 不变，mediaUrl 改为上述稳定相对路径。小程序使用当前 API 地址携带 Bearer 下载为临时图片，点击预览本地图片；切后台/卸载/换账号时使旧请求失效并回收临时文件，失败提供重试。
+- 手机号码只能经现有验证码绑定接口修改，资料页点击号码行跳转账号安全并展开绑定面板；返回后只刷新号码，不覆盖其他未保存资料。
+- 确诊时间沿用 diagnosedYm/YYYY-MM，使用年月日期选择器，不允许晚于当前月；用药沿用 medication/最长256字符，常见名称多选加“其他”输入，不自动推荐、添加药物或剂量。旧自由文本原样保留到用户主动修改，切换糖尿病类型不清除已有用药。无需数据库迁移。

@@ -16,7 +16,7 @@ public class AdminWorkReminderController {
     private final RuoYiAuthorizationService authorization;
 
     @GetMapping("/admin/v1/work-reminders")
-    @PreAuthorize("@ss.hasAnyPermi('content:news:list,feedback:manage')")
+    @PreAuthorize("@ss.hasAnyPermi('content:news:list,feedback:manage,food:library:manage')")
     public ResponseEntity<ApiResponse<AdminWorkReminderService.Summary>> summary() {
         Long opsId=RequestContext.getOpsId();
         if(opsId==null)throw new BizException(ErrorCode.UNAUTHORIZED);

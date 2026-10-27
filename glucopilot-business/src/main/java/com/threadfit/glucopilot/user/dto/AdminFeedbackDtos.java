@@ -2,7 +2,7 @@ package com.threadfit.glucopilot.user.dto;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
@@ -33,12 +33,12 @@ public final class AdminFeedbackDtos {
 
     @Data
     public static class ReplyRequest {
-        /** 0已收到1处理中2已处理3已关闭 */
-        @NotNull
+        /** 仅兼容旧客户端；是否完成由官方回复决定，成功回复固定写2。 */
         @Min(0)
         @Max(3)
         private Integer replyStatus;
 
+        @NotBlank
         @Size(max = 1000)
         private String officialReply;
     }

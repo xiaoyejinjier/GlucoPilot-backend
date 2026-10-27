@@ -39,7 +39,7 @@ public final class MealVos {
         private String nodeCode;
         /** 照片 ID（字符串化），无则 null */
         private String mediaId;
-        /** 照片可访问 URL（经当前用户鉴权），无则 null */
+        /** 稳定照片相对路径；下载时须携带当前用户 Bearer，无则 null。 */
         private String mediaUrl;
         private String foodsText;
         private BigDecimal carbsG;

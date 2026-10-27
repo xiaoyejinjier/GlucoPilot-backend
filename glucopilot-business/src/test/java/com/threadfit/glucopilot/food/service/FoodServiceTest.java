@@ -116,6 +116,24 @@ class FoodServiceTest {
         assertEquals("主食类", page.getRecords().get(0).getCategoryName());
     }
 
+    @Test
+    void listAndDetailPreferPublishedSourcePhotoOverOldCartoon() {
+        var food = food(7L, "小笼包", 1, 1);
+        food.setNutritionSource("AI_REVIEWED"); food.setSourceMediaId(88L);
+        food.setImageUrl("/images/foods/rice.svg");
+        when(foodNutritionMapper.selectById(7L)).thenReturn(food);
+        when(foodCategoryMapper.selectList(null)).thenReturn(List.of(category(1L, "主食类")));
+        when(foodNutritionMapper.selectPage(any(), any())).thenAnswer(inv -> {
+            com.baomidou.mybatisplus.extension.plugins.pagination.Page<FoodNutrition> page = inv.getArgument(0);
+            page.setRecords(List.of(food)); page.setTotal(1); return page;
+        });
+        assertEquals("/api/v1/foods/7/image", service.getFoodDetail(7L).getImageUrl());
+        assertEquals("/api/v1/foods/7/image", service.pageFoods(null, null, null, new PageQuery()).getRecords().getFirst().getImageUrl());
+        food.setImageUrl("/api/v1/foods/images/72");
+        assertEquals("/api/v1/foods/images/72", service.getFoodDetail(7L).getImageUrl());
+        assertEquals("/api/v1/foods/images/72", service.pageFoods(null, null, null, new PageQuery()).getRecords().getFirst().getImageUrl());
+    }
+
     /** 创建测试用食品实体，减少多个测试中的重复准备代码。 */
     private static FoodNutrition food(Long id, String name, long categoryId, int shelfStatus) {
         FoodNutrition food = new FoodNutrition();

@@ -130,6 +130,43 @@ class CommunityServiceTest {
         jdbc.update("UPDATE cms_news SET publish_status=2 WHERE id=11");assertEquals(0,service.collections(1,"控糖",page()).getTotal());
         error(ErrorCode.BAD_REQUEST,()->service.collections(1,"x".repeat(81),page()));
     }
+    @Test void likesAreOwnActiveActionsWithLiteralSearchPaginationAndUnlike() {
+        jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_liked,is_collected) VALUES(1,10,1,0),(1,11,1,1),(2,10,0,1)");
+        var q=page();q.setPageSize(1);
+        var first=service.likes(1," 文章 ",q);assertEquals(2,first.getTotal());assertEquals(2,first.getPages());
+        q.setPageNum(2);assertNotEquals(first.getRecords().getFirst().getId(),service.likes(1,"文章",q).getRecords().getFirst().getId());
+        assertEquals(0,service.likes(2,null,page()).getTotal());assertEquals(1,service.collections(1,page()).getTotal());
+        assertEquals(0,service.likes(1,"%_",page()).getTotal());assertEquals(2,service.likes(1," ",page()).getTotal());
+        error(ErrorCode.BAD_REQUEST,()->service.likes(1,"x".repeat(81),page()));
+        jdbc.update("UPDATE news_user_action SET is_liked=0 WHERE user_id=1 AND news_id=11");
+        assertEquals(1,service.likes(1,null,page()).getTotal());assertEquals(1,service.collections(1,page()).getTotal());
+        jdbc.update("UPDATE news_user_action SET is_deleted=1 WHERE user_id=1 AND news_id=10");
+        assertEquals(0,service.likes(1,null,page()).getTotal());
+    }
+    @Test void likesRespectPrivateHiddenDeletedAndUnpublishedArticles() {
+        jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_liked) VALUES(1,10,1),(1,11,1)");
+        jdbc.update("INSERT INTO community_article_access(news_id,visibility) VALUES(10,'PRIVATE')");
+        assertEquals(1,service.likes(1,null,page()).getTotal());
+        jdbc.update("UPDATE community_article_access SET visibility='PUBLIC' WHERE news_id=10");
+        jdbc.update("INSERT INTO community_article_hidden(news_id,user_id) VALUES(10,1)");
+        assertEquals(1,service.likes(1,null,page()).getTotal());
+        jdbc.update("UPDATE cms_news SET publish_status=2 WHERE id=11");assertEquals(0,service.likes(1,null,page()).getTotal());
+        jdbc.update("UPDATE cms_news SET publish_status=1,is_deleted=1 WHERE id=11");assertEquals(0,service.likes(1,null,page()).getTotal());
+        jdbc.update("UPDATE user_account SET account_status=0 WHERE id=1");
+        assertThrows(BizException.class,()->service.likes(1,null,page()));
+    }
+    @Test void likesHttpRequiresLoginAndPreservesEnvelopeAndValidation() throws Exception {
+        var mvc=MockMvcBuilders.standaloneSetup(new CommunityController(service)).setControllerAdvice(new GlobalExceptionHandler()).build();
+        assertEquals(401,mvc.perform(get("/api/v1/community/likes")).andReturn().getResponse().getStatus());
+        RequestContext.setUserId(1L);RequestContext.setRequestId("my-likes-test");
+        jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_liked) VALUES(1,10,1)");
+        var response=mvc.perform(get("/api/v1/community/likes").param("keyword","甲")).andReturn().getResponse();
+        assertEquals(200,response.getStatus());var json=new ObjectMapper().readTree(response.getContentAsByteArray());
+        assertEquals(0,json.path("code").asInt(-1));assertEquals("my-likes-test",json.path("requestId").asString(""));
+        assertEquals(1,json.path("data").path("total").asInt(-1));assertEquals("10",json.path("data").path("records").get(0).path("id").asString(""));
+        assertEquals(400,mvc.perform(get("/api/v1/community/likes").param("keyword","x".repeat(81))).andReturn().getResponse().getStatus());
+        assertEquals(400,mvc.perform(get("/api/v1/community/likes").param("pageSize","51")).andReturn().getResponse().getStatus());
+    }
     @Test void searchOnlyUsesPublicNicknamesAndEscapesWildcardSemantics() throws Exception {
         assertEquals(3,service.search(1,"测试",page()).getTotal());
         assertEquals(0,service.search(1,"private-phone",page()).getTotal());

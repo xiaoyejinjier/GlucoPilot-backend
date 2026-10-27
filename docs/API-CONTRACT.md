@@ -14,7 +14,7 @@
 - POST /cancellation/recovery：无请求体，登录即取消注销（会话已由 wx.login 或验证码登录核验，不再二次验证）；仅 accountStatus=4 且未到 isolateUntil 可恢复，成功后按 pre_status 还原（禁用账号仍为 DISABLED）；窗口过期或状态 2/3 返回 409。
 - 验证码 scene=cancel（与登录 login、绑定 bind 隔离消费），60 秒冷却，连续 5 次失败锁定 24 小时（429）；发码日限额用户 10 次/IP 50 次；恢复后 24 小时内不可再次提交注销（不影响正常登录使用）。滑块只作 UX 门槛（拖到最右解锁），服务端不校验偏移、不下发答案，防刷依赖票据频控与失败锁定。
 
-**2026-10-27 变更**：身份验证卡片改为“手机/邮箱验证 | 微信身份验证”双模式，纯微信账号隐藏手机/邮箱 Tab；手机/邮箱模式发码前必须完成滑块解锁并携带 captchaTicket；提交必须带 verifyType；V41 给 auth_sms_code / auth_email_code 增加 scene 列与索引，登录、绑定、注销验证码按 scene 隔离消费。
+**2026-10-27 变更**：身份验证卡片改为“手机/邮箱验证 | 微信身份验证”双模式，纯微信账号隐藏手机/邮箱 Tab；手机/邮箱模式发码前必须完成滑块解锁并携带 captchaTicket；提交必须带 verifyType；V47 给 auth_sms_code / auth_email_code 增加 scene 列与索引，登录、绑定、注销验证码按 scene 隔离消费。
 
 **2026-10-27 修复**：hasWechat 只认真实微信 openid，手机/邮箱注册写入的 `phone_` / `email_` 占位值不算绑定（GET /cancellation 同理）；前端在 hasPhone/hasEmail/hasWechat 非布尔（前后端版本不一致）时展示“服务版本不兼容”，不再兜底成“未绑定手机号、邮箱或微信”。
 
@@ -24,7 +24,47 @@
 
 **管理端**：P0 支持 accountStatus=0..4 筛选、详情返回注销摘要、状态 2/3/4 拒绝启用禁用，不提供代发起/代撤销；协助恢复（同通道核验+二级审批+留痕）排 P1；已注销用户健康档案返回空态并提示“健康数据已删除”。
 
-**迁移与前端清理**：V39 新建 user_account_cancellation、openid 放宽为 NULL、chk_ua_status 扩展至 0..4；V40 verify_channel 扩为 1=短信/2=邮箱/3=微信并新增 pre_status 列；V41 为 auth_sms_code / auth_email_code 增加 scene（login/bind/cancel/recover，默认 login）与（目标,scene,is_used）索引，存量按 login 处理。前端注销或“暂不使用”后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
+**迁移与前端清理**：V45 新建 user_account_cancellation、openid 放宽为 NULL、chk_ua_status 扩展至 0..4；V46 verify_channel 扩为 1=短信/2=邮箱/3=微信并新增 pre_status 列；V47 为 auth_sms_code / auth_email_code 增加 scene（login/bind/cancel/recover，默认 login）与（目标,scene,is_used）索引，存量按 login 处理。前端注销或“暂不使用”后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
+
+## 2026-10-27 三端集成与迁移顺序
+
+保留已发布的 V42__device_sync_log.sql 与 V43__community_moderation_ai.sql；此前未上传的食品有效名称唯一性迁移改为 V44__food_active_name_uniqueness.sql，SQL 内容及校验和不变。普通 V41/V42/V43 环境正常执行后续迁移即可。仅已应用本地旧食品 V42 的开发库使用 tools/ReconcileFoodMigrations.java：先 audit 精确核对脚本、描述与校验和，再 apply 全库备份、副本演练、事务调整版本登记，补执行正式设备/审核迁移；最后关闭乱序模式验证全部44个迁移。禁止对正常远端历史使用此工具或直接 repair 校验和。本次本机兼容已执行完成，原业务列数据逐表SHA-256一致。
+
+## 本人点赞列表（2026-10-27）
+
+GET /api/v1/community/likes：需当前用户登录，PageQuery 分页，可选 keyword（去空白后最多80字，按标题字面子串匹配）。返回与 /community/collections 相同的 NewsListItem 分页结构；仅查询本人 news_user_action 中 is_liked=1、未删除的记录，并执行文章已发布、作者有效、阅读权限和本人隐藏偏好过滤。取消点赞后移出列表，不返回其他人的点赞；沿用动作记录更新时间倒序及文章ID倒序。复用既有点赞数据，无新增表或迁移。小程序社区快捷入口顺序为关注、我的点赞、我的收藏、信息、找糖友；旧关注爱心图标移给点赞，关注换新图标。点赞列表支持搜索、分页和打开文章，英文展示沿用文章翻译。
+
+## 社区标签管理（2026-10-26）
+
+复用community_tag与community_article_tag；V41只新增固定分类other/其他，不改旧迁移。原有custom_编码标识用户自建标签，其他编码为官方分类，Tag DTO增加type=OFFICIAL|USER（保留code/name）。GET /api/v1/community/tags返回全部启用的官方分类（后台新增即出现，无需已有文章），用户标签仍仅返回当前用户可读的已发布文章所用项；GET tags/mine继续提供本人文章标签。社区官方分类行包含“其他”，选择other筛选直接标记other或任意启用custom_标签的文章，继续执行原文章可见性和隐藏偏好。自建标签不平铺在官方分类行，在“其他”分区展示。
+
+管理端新增GET/POST /admin/v1/community/tags、PUT/DELETE /admin/v1/community/tags/{code}。GET需content:news:list，keyword(≤32字)、type(OFFICIAL/USER)、enabled(0/1)、PageQuery分页返回{id:string,code,name,type,sortNo,enabled,articleCount}。写需admin角色及content:news:edit、当前ops身份，body={name:1～16字中文/字母/数字/空格/_/-,sortNo:0～9999,enabled:0|1}；新编码服务端生成，名称NFKC规范化及不区分大小写查重，不允许客户端指定USER来源。DELETE为幂等停用，保留文章关联；同名已停用标签不可被用户重建，管理员可恢复。other固定保留且不可改名/停用/删除，排序可修改。
+
+写操作使用事务和现有标签表行锁串行验证同名，POST以规范化名称保证重复创建不产生重复项；PUT/DELETE重复目标状态无副作用。用户标签保留原名称，仅支持排序/停用/恢复，避免修改稳定名称编码。文章发布/编辑和草稿保存校验标签仍启用；旧编辑器或旧草稿带已删除标签时明确拒绝并提示重新选择，不静默发布。GET tags/mine增加可选includeDisabled=true，仅返回本人文章用过的停用项并附enabled，供客户端清理本人常用标签缓存，默认仍只返回可选项。客户端进入/下拉/发文页返回重新读取；请求失败不把本地固定分类伪装成可选项，保留重试和用户正文；账号/页面变化丢弃迟到响应。无Mock标签管理，API统一ApiResponse并保留requestId。
+
+## 我的文章视频静态封面（2026-10-23）
+
+新增 `GET /api/v1/community/article-videos/{mediaId}/cover`，C端登录后读取真实视频首帧JPEG，不返回视频流或公开存储地址。沿用原视频的本人草稿/文章归属、发布状态与可见范围、禁用/删除和存储登记校验；缓存命中也重新鉴权。成功为二进制 `image/jpeg`，`Cache-Control: no-store`、`X-Content-Type-Options: nosniff`，保留X-Request-Id；失败继续统一ApiResponse，禁止用占位图冒充成功。
+
+服务端用FFmpeg从现有视频按需提取最长边480像素的首帧，缓存仅在内存中限量保存，可由原视频重建，不改原文件或媒体登记、不新增数据库表。解码只读本地临时文件，限定并发/超时/输出大小，临时文件结束清理。运行环境须提供FFmpeg（Docker内置，本地通过私密环境变量FFMPEG_PATH指定可执行文件，默认ffmpeg）。小程序“我的文章/草稿箱”优先展示视频静态封面及播放标识；无视频则保留图片封面，卡片沿用查看/编辑跳转，不在列表播放或下载原视频。
+
+2026-10-26：社区列表视频复用同一首帧接口，进入列表先请求JPEG并显示播放标识，点击后才下载原视频并在原位播放。下载期间保留封面及加载提示，播放器使用同一临时图作为poster；无新增接口、公开对象URL或数据库字段。封面文件仍由封面组件管理，隐藏/卸载/切换媒体及账号时清理；离开列表暂停并清理原视频，返回时恢复首帧。
+
+## 关注与收藏搜索、编辑部测试账号（2026-10-23）
+
+GET /api/v1/community/following 增加可选keyword（去空白后最多32字，允许单字），仅按本人已关注对象的展示昵称搜索；GET /api/v1/community/collections 增加可选keyword（最多80字），仅按本人可读收藏文章标题搜索。空串恢复全部；字面子串匹配，不解释SQL通配符，分页total/pages与筛选一致，不搜索手机号/openid。身份、文章权限和个人隐藏规则不变。
+
+编辑部绑定普通C用户后，旧b发布者资料路由返回对应u用户身份，旧b关注可读取为该用户已关注；关注操作写入规范u键并撤销旧别名，避免重复关注/无法取消。经用户选择，本机开发库分配测试手机号注册编辑部，关联原编辑部与原已审核文章，合并既有关注而不制造新关注提醒；不新增生产演示账号或固定验证码，手机号登录继续使用正常一次性验证码。
+
+## 英文阅读与英文显示名（2026-10-22）
+
+POST /api/v1/localizations/en，鉴权，body={items:[{kind:"ARTICLE_PREVIEW"|"ARTICLE_BODY"|"PROFILE_NAME",id:string}],retry?:boolean}；每批最多20项，ID保持字符串，文章用资讯newsId，资料用u/b公开key。仅服务端按ID读取原文，不接受客户端自带原文/提示词。每项返回{kind,id,status:"PENDING"|"READY"|"FAILED"|"UNAVAILABLE",source:{title?,summary?,body?,nickname?},translated:{...},sourceHash:string}。文章预览只含标题/摘要，正文单独请求；返回原文用于客户端精确核对后显示，失败显示原文和可重试提示。单项无权/不存在统一UNAVAILABLE且不返回source/hash，不能通过译文缓存读取隐藏、私密、撤审、删除或无权文章。
+
+按当前用户的阅读权限每次核查后才读缓存。翻译后台排队，PENDING可每2秒重查同接口，重复请求合并；显式retry才重试FAILED且有短暂冷却。V39持久缓存按kind/id/原文SHA-256/en版本隔离，修改文章或昵称自动失效；只写缓存，不改原稿、昵称、发布状态或互动数据。英文昵称采用稳定英文翻译/拉丁字母显示名，中文原名在资料卡保留；相同ID与原文复用结果。AI仅调用不带聊天记忆和工具的独立翻译客户端，保留数值/单位及原文语义，富文本标签与地址不交模型改写。
+
+模型内部输入为扁平字符串字典，内容类型单独放在系统说明中；返回必须为同键的扁平译文字典，避免模型将kind/strings外壳一并返回导致误判失败。内部修正不改变用户端请求/响应或缓存表结构；缓存格式按版本隔离，旧失败记录保留，新版本自动重新排队，不要求用户手工清库。
+
+实际文章兼容修正：仅显式中文章节编号（如“一、二、”）允许转为对应阿拉伯编号或英文词，原有阿拉伯数值/剂量仍必须完整、按序保留。使用模型JSON输出模式，只读取请求的译文字段，忽略额外说明字段；缺字段、JSON格式或内容校验失败最多重新生成一次，仍不合格则失败，不拼凑原文与译文。多文章合批失败时按单篇降级处理，不让一篇异常阻断其他文章；缓存格式en-v3自动重建旧版本失败结果，权限与公开HTTP契约不变。
 
 ## 用户端设备管理集成（2026-10-21）
 
@@ -33,6 +73,8 @@
 前端待适配登记仍只保存在当前登录会话；确认绑定后才进入持久化设备列表。设备状态区分“已绑定 / 已停用”和同步时间，不以最近同步推断真实在线状态。当前小程序没有厂商授权或真实设备拉取链路，因此设备页仅刷新服务端状态，不调用defaultMockReadings或写入模拟血糖；既有设备原始报文同步接口不变。显示适配器来源名称，不向用户呈现provider字段等实现说明。
 
 ## 社区资料、浏览量与可见范围（2026-10-21）
+
+编辑部文章兼容：community_managed=1且已终审PUBLISHED的文章，发布身份可以是正常用户，或author_user_id为空、cms_news.blogger_id指向已启用且未绑定用户的编辑部。编辑部身份不需要伪造C端账号；普通用户作者缺失/禁用/删除时不能借编辑部身份绕过校验。待审核、未发布、未来发布时间、私密/指定好友及本人隐藏的过滤继续生效。此修正仅调整读取条件，不修改原文、作者、审核记录或数据库结构。
 
 本人GET /users/me增加phone原号码（仅本人鉴权响应），profile增加bio；PATCH /users/me/profile支持bio（最多160字，空串清空）。公开资料只展示昵称、头像、签名，不公开手机号；communityKey继续作为内部路由身份，用户界面不再展示社区号，用户搜索按昵称进行。
 
@@ -86,9 +128,11 @@ GET /api/v1/community/profiles/{key}/articles 按PageQuery返回该用户/发布
 
 V34 community_notification持久化真实互动：LIKE/COLLECT/COMMENT/FOLLOW，参与者取登录身份，自己给自己互动不提醒；点赞/收藏/关注幂等设置不重复产生提醒，取消清除对应提醒，重新操作可产生新提醒。评论同时通知文章作者和被回复者，去重且排除本人。旧数据不伪造为新提醒。读取时过滤停用账号、删除/下架文章及不可见评论线程。
 
+评论通知定位（2026-10-23）：COMMENT通知点击携带既有newsId/commentId进入文章评论定位，不只打开文章顶部。新增 `GET /api/v1/news/{id}/comments/{commentId}/context`（C端登录），返回 `{ commentId, root: Comment }`。验证文章可读、目标评论及根线程可见，跨文章/删除/禁用作者/私密无权均统一404；root含默认前三条回复，目标为后续回复时额外包含该目标，单次最多四条，不扫描全部评论。原回复afterId游标保持前三条的连续位置，之后分页不跳过中间回复。小程序合并目标根线程与常规分页，展开目标回复，待文章/评论节点就绪滚动到对应DOM并浅色高亮；离页/账号变更丢弃旧响应，删除/不可见给明确提示，网络失败可重试。无需数据库迁移，其他互动通知入口保持既有行为。
+
 GET /api/v1/community/information/summary返回{messages,likes,collections,comments,follows,total,latestMessageId,latestSenderId,latestNotificationId}，仅当前用户未读。GET /community/notifications?kind=LIKE|COLLECT|COMMENT|FOLLOW&pageNum=&pageSize=返回本人提醒页，含id/kind/actor公开资料/newsId/newsTitle/commentId/content/createdAt/read；PUT /community/notifications/read {kind,throughId}只标记本人该类别且ID<=已加载范围。信息入口包含私信、点赞、收藏、评论、新关注我的；记录页提醒与回复仅显示非零的提醒项，无内容时隐藏入口。前台5秒轮询，后台停止，不申请微信订阅推送。
 
-真实导出复用data_export_task，V34新增client_request_id及data_export_file保存XLSX二进制。POST /api/v1/data-export-tasks {startDate,endDate,clientRequestId}创建本人任务，范围最多366天且不包含未来日期，幂等ID相同参数返回原任务；GET /data-export-tasks返回本人历史。GET /admin/v1/exports按状态/用户关键词分页；POST /exports/{id}/generate生成真实未删除血糖/饮食记录（每类最多20000条，超出明确失败，不截断）；完成文件为固定快照，重复生成已完成任务不改文件。POST /api/v1/data-export-tasks/{id}/generate仅本人；GET 两端对应/{id}/file下载，C端限定本人、后台需export:task:manage，文件成功二进制application/vnd.openxmlformats-officedocument.spreadsheetml.sheet、no-store，错误ApiResponse；仅已完成任务可下载，不返回无鉴权公开地址。无记录时生成只有表头的真实空工作簿，不制造示例。失败可重试、保留错误状态，后台不回退Mock。
+真实导出复用data_export_task及data_export_file（2026-10-23更新为PDF）。POST /api/v1/data-export-tasks {startDate,endDate,clientRequestId}创建本人任务，范围最多366天且不包含未来日期，幂等ID相同参数返回原任务；GET /data-export-tasks返回本人历史。GET /admin/v1/exports按状态/用户关键词分页；POST /exports/{id}/generate生成真实未删除血糖/饮食记录（每类最多20000条，超出明确失败，不截断）；完成文件为固定快照，重复生成已完成任务不改文件。POST /api/v1/data-export-tasks/{id}/generate仅本人；GET两端对应/{id}/file下载，C端限定本人、后台需export:task:manage，成功为application/pdf、附件名.pdf、no-store及nosniff，错误为ApiResponse。新任务PDF二进制写入data_export_file，并在管理端同一任务列表显示用户、日期、状态、条数及完成时间；不需要新建重复的后台任务。历史XLSX快照按原存储内容转换成PDF下载，不重新查询当前记录、不覆盖原快照。中文字体内嵌、表格跨页重复表头，空数据明确显示无记录，未展示/未生成的统计不虚构。任务日期读取兼容LocalDateTime/Timestamp和LocalDate/Date；失败可重试、保留错误状态，不提供公开文件URL。
 
 GET /admin/v1/users及GET /admin/v1/users/{id}需user:manage，增加真实phone（可空），保留phoneMasked；详情返回用户公开/账号字段、状态、注册/活跃时间、真实记录数量和达标率，不返回密码/openid/session凭据。手机号未绑定时如实显示未绑定，不伪造微信手机号；健康档案仍走独立health:archive:view权限。
 
@@ -287,9 +331,13 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ## 管理端食物图片
 
-待审核新食品（`nutritionSource=AI_ESTIMATE`且未上架）优先使用用户本次上传的餐食实拍图作为审核预览。识别服务只关联已验证归属的MEAL媒体，新增`food_nutrition.source_media_id`（迁移V30）；新草稿及缺少实拍关联的旧草稿可补充首次来源，重复识别不覆盖已关联照片，也不改动已审核或人工食品。管理端食品DTO新增只读`reviewImage`：有来源且仍待审核时为`/admin/v1/foods/{id}/review-image`，否则为空。该字段只用于审核，不写入公开`image`或食品库配图。
+2026-10-27食品换图优先级：管理员已上传并选用的稳定配图`/api/v1/foods/images/{mediaId}`保存到food_nutrition.image_url后，管理端列表、编辑重开和用户端foods列表/详情均优先使用该配图。未选择这类登记配图时仍优先识别来源实拍，旧内置卡通兜底不覆盖实拍；reviewImage/source_media_id保留供核对来源，不因换图清空或覆盖原文件。复用现有配图读取接口及字段，无新迁移；图片晚响应不能覆盖刚选择的新配图，启停和保存营养不改变当前配图选择。
 
-`GET /admin/v1/foods/{id}/review-image`要求运营登录及`food:library:manage`权限，验证食品仍待审核、来源媒体未删除/可用且为餐食图片后，返回原图二进制，使用`Cache-Control: no-store`；缺失或失效返回统一404响应。管理端携带Bearer读取为Blob预览，离页/换食品回收临时URL；照片缺失或加载失败时回落已有配图，再回落内置图片。用户健康照片不经公开食品配图接口发布。旧草稿没有来源关联时继续显示原配图，下次同名高置信度识别时可补充来源。
+2026-10-26 两端食品实拍同步：用户端 foods 列表/详情的 imageUrl 优先返回 `/api/v1/foods/{foodId}/image`，仅限未删除、AI_REVIEWED、已上架且关联 source_media_id 的食品。该公开二进制入口每次检查食品及分类仍启用，再读取与管理端相同的有效来源图，禁止通过任意媒体 ID 读取健康照片；未审核、下架、删除或禁用分类均返回404，成功 no-store/nosniff，桶仍私有。没有来源图时继续使用管理员保存的 image_url。小程序按当前 config.baseUrl 动态解析图片地址，进入/下拉同时刷新当前查询；空结果不补本地示例食品，失败明确提示，迟到请求/旧图片错误不得覆盖新图。
+
+AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览。识别服务只关联已验证归属的 MEAL 媒体，通过 `food_nutrition.source_media_id`（迁移 V30）保存首次来源；重复识别不覆盖已关联照片。管理端食品 DTO 的只读 `reviewImage` 对未删除、有来源且 `nutritionSource=AI_ESTIMATE/AI_REVIEWED` 的食品持续返回 `/admin/v1/foods/{id}/review-image`，不受启用/停用状态影响，旧的已审核食品同样适用。该字段不写入公开 `image`，不修改原照片或存储位置。
+
+`GET /admin/v1/foods/{id}/review-image` 要求运营登录及 `food:library:manage` 权限，验证食品未删除、有 AI 识别来源，且来源媒体未删除/可用、为餐食图片后返回原图二进制，使用 `Cache-Control: no-store`；缺失或失效返回统一 404 响应。管理端携带 Bearer 读取为 Blob 预览，离页/换食品回收临时 URL；照片缺失或加载失败时回落已有配图，再回落内置图片。用户健康照片不经公开食品配图接口发布。编辑表单保留原始 `image`，显示用卡通兜底不自动保存成配图；启用/停用不改变来源关联。旧草稿无来源关联时继续显示原配图，下次同名高置信度识别时可补充来源。
 
 新增与编辑食物可选择内置图片或已上传的食物图片，也可上传新的 JPG/PNG 图片（单张 1 字节至 5MB）。上传采用现有对象存储的“凭证 → PUT 文件字节 → 登记”流程，不将 base64 或浏览器临时地址写入食品表。
 
@@ -304,6 +352,8 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 管理端食品大类也可指定图片：`GET /admin/v1/food-categories` 返回 `{ id, name, sort, image }`；分类新增与编辑请求支持 `{ name, sort, image }`，`image` 为可选字段、最多 512 字符。图片地址持久化到 `food_category.image_url`（新增迁移 `V14__add_food_category_image.sql`）；旧分类没有图片时，由管理端根据分类名称展示内置图片。旧调用方省略 `image` 时保留原分类图片；传空字符串时清空自选图片并使用默认图。选择已有图片和上传新的 JPG/PNG 图片复用上述食物图片接口，分类列表与分类选择下拉框展示保存后的图片。
 
 分类保存成功响应必须使用数据库回读结果；管理端保存后再次读取分类列表，确认目标分类的 `image` 与提交值一致才提示成功。后端仍返回旧结构、漏存图片或列表读取失败时，保留编辑弹窗与已上传图片并显示具体错误，禁止提示保存成功后悄悄退回默认图。
+
+分类图片两端共用（2026-10-23）：`GET /api/v1/food-categories` 对已启用分类返回 `{ id, categoryName, sortNo, imageUrl }`，`imageUrl` 直接读取同一 `food_category.image_url`，与管理端 `image` 字段内容一致；未设置时返回空字符串。小程序优先使用该地址，上传图通过统一配置解析 `/api/v1/foods/images/{id}`，读取同一个已登记存储对象，不另行上传或复制。内置 `/images/foods/*.svg` 地址映射到小程序同款素材，空值/加载失败才显示按分类匹配的默认图；默认图与管理端一致。每次进入营养库或下拉刷新重新读取分类，晚返回的旧请求和旧图片错误回调不得覆盖新图；后台换图后用户再次进入或刷新即可同步，无需重新发布小程序。复用既有 V14 字段，无新增迁移。
 
 九时段用户每日明细默认 10 条全部展开，分页栏置于这 10 条下方；每页选择更多条数时才限制表格高度并启用内部滚动。
 
@@ -363,6 +413,20 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ## 用户反馈闭环
 
+### 用户移除导出任务与社区视频预览（2026-10-23）
+
+`DELETE /api/v1/data-export-tasks/{id}` 要求C端登录，仅本人可幂等移除自己的任务；V40增加data_export_task.user_deleted_at，不更改全局is_deleted、不删除data_export_file或健康记录。用户列表/下载/生成均排除已移除任务；管理端查询/下载继续可用。重复移除成功，其他人的任务或不存在任务统一404；移除后相同clientRequestId不可复活原任务，需新请求标识，24小时限额仍计入被移除任务。管理端保留昵称，移除“社区号”展示，业务身份键继续用于鉴权及关联。
+
+社区文章列表使用既有鉴权视频读取接口原地预览，点击才下载并播放，不冒泡进入文章；正文区域仍可进入详情播放。复用article-video组件的lazy模式，默认详情行为兼容；切换视频时暂停前一个，离页暂停播放，媒体/账号变化清理旧文件与迟到响应。
+
+### 管理端全局待办提醒（2026-10-23）
+
+2026-10-26新增食品审核：`GET /admin/v1/work-reminders`支持FOOD_REVIEW类型，标题“待审核食品”，按food_nutrition中is_deleted=0、nutrition_source=AI_ESTIMATE且shelf_status=0实时计数，latestAt为MAX(gmt_create)。接口准入增加food:library:manage，类别仍按各自服务端权限隔离。`GET /admin/v1/foods`增加可选pendingReview=true，仅返回相同待审核条件，分页/总数在SQL端筛选；false或不传不限制审核状态，与原categoryId/keyword/enabled条件取交集。消息点击跳转/nutrition/foods?review=pending&reminder=刷新标识，清空旧分类/关键词/页码，仅看待审核食品，同页再点也刷新。审核启用、保存或删除成功后立即刷新顶部汇总；原5秒前台轮询和无消息隐藏红点行为保留，无新增通知表或演示数据。
+
+`GET /admin/v1/work-reminders` 返回 `{ total, items: [{ type, title, count, latestAt }] }`，不缓存，统一 ApiResponse。必须是已登录运营账号，且至少拥有 `content:news:list`、`feedback:manage` 或 `food:library:manage`；只查询和返回本人有权查看的类别。REPORT 为 state=OPEN 的真实举报、FEEDBACK 为官方回复为空且未删除的真实反馈（含历史未回复记录），FOOD_REVIEW为未删除且未上架的AI_ESTIMATE食品；已处理类别不计入。items只返回count>0类别，total是其数量之和，不返回原文、联系方式或模拟数据。直接查询既有业务表，无新通知副本或迁移。
+
+管理端顶部主题左侧放置信封，total>0显示红点；点击弹层展示“新举报/新反馈”、真实数量和最新提交时间，点击对应项跳转其待处理列表并重置旧筛选及页码。同一页面再次点击也重新加载。红点表示未处理待办，打开弹层不改变业务状态；处理成功立即刷新，前台每5秒串行轮询，隐藏/离开/退出时暂停，切换账号丢弃旧结果。失败保留上次成功数据并提示重试，不伪装为无消息。
+
 用户端与管理端共享 `feedback` 数据源，接口职责如下：
 
 | 调用方 | 方法与路径 | 权限 | 说明 |
@@ -372,7 +436,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 | 管理端 | `GET /admin/v1/feedbacks` | `feedback:manage` | 分页查询全部用户反馈 |
 | 管理端 | `PUT /admin/v1/feedbacks/{id}/reply` | `feedback:reply` | 更新处理状态与官方回复 |
 
-处理状态统一为：`0` 已收到、`1` 处理中、`2` 已处理、`3` 已关闭。管理端把状态改为“已处理”时必须填写官方回复；回复写入 `official_reply` 后，用户端再次进入“我的反馈”即可通过现有查询接口看到结果。该 PUT 接口按反馈 ID 覆盖当前处理结果，重复提交相同内容不会创建新记录。
+处理状态统一为两个：`0` 待审批、`2` 已完成。以是否存在非空官方回复为准，历史1/3状态也按此规则读取；列表replyStatus筛选仅接受0/2，分页数量与筛选一致，全局FEEDBACK待办仅统计未回复且未删除的记录。PUT回复必须填写1～1000字的非空officialReply，成功后服务端自动保存reply_status=2、回复人与时间；不提供手选处理中、关闭或清空回复的操作。旧调用方可继续传replyStatus(0～3)，仅作兼容校验，不覆盖自动完成规则；管理端提交固定携带replyStatus=2与officialReply，以兼容仍要求replyStatus非空的旧后端，新后端也支持省略此字段。重复提交同样回复保留同一记录；用户端仍通过本人反馈查询读取回复。无新增表或数据迁移，历史官方回复和审计记录保留。
 
 ## 设备数据同步
 
@@ -546,7 +610,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ## 设备数据同步
 
-用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。传入 deviceSn 时须已绑定当前用户且启用，成功后刷新 last_sync_at。
+用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。传入 deviceSn 时须已绑定当前用户且启用，成功后刷新 last_sync_at，并写入 device_sync_log 一条流水（sample_count / created_count）。
 
 ## 用户端设备管理
 
@@ -557,8 +621,9 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 | GET /api/v1/devices | C 端登录 | 当前用户已绑定设备列表（含禁用项，前端按 status 展示） |
 | POST /api/v1/devices/bind | C 端登录 | 自助绑定：SN 空闲则新建并归属当前用户；已有空闲档案可认领；已被他人占用则冲突。建议写操作带 X-Idempotency-Key |
 | POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
+| GET /api/v1/devices/{id}/sync-logs?limit=10 | C 端登录 | 本人设备近 N 次同步流水（默认 10，最大 50）；按时间倒序；他人设备 id 业务拒绝 |
 
-绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。
+绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
 
 ## 管理端设备档案
 
@@ -581,3 +646,25 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 snapshot格式：schemaVersion=1；sampledAt为UTC ISO时间；host={cpuPercent(首样本可null),cpuCores,memoryTotalBytes,memoryAvailableBytes,memoryUsedBytes,memoryPercent,swapTotalBytes,swapUsedBytes,diskTotalBytes,diskUsedBytes,diskFreeBytes,diskPercent,uptimeSeconds}；containersAvailable:boolean；containers=[{name,service,state,cpuPercent,memoryUsedBytes,memoryLimitBytes(无限制时null)}]；history=[{sampledAt,cpuPercent,memoryPercent}]，最多60个按采样时间递增的样本；containers最多30行。所有容量单位bytes、利用率百分比0~100（容器CPU可超过100%）。内存used=total-available，包含可回收缓存的口径与完全空闲内存区分；磁盘为根文件系统used/total，不聚合容器overlay。
 
 管理端每10秒串行刷新，切后台暂停、恢复可见时刷新、离开页面清理定时器并丢弃迟到响应。图表使用服务器快照历史，刷新页面不伪造历史。非生产环境未安装采集器时明确显示“尚未采集”，不使用Mock数据。当前值、趋势、容器资源与JVM统计分别标明范围。部署须安装采集器并将公共快照目录只读挂载至 `/app/monitor`；后端默认读取该目录下metrics.json，可通过SERVER_METRICS_PATH配置，不添加数据库迁移。
+# 2026-10-26 正餐推荐预测与实测血糖分离
+
+- `GET /api/v1/glucose-records/summary` 的 `week.points[]` 增加 `predictedAvg`（可空，mmol/L，一位小数）与 `predictionCount`（0–3）。实测 `avg/count` 和周 `avg/max/min` 语义不变。
+- 预测只取当前用户、日期区间内未删除的早餐/中餐/晚餐 `meal_record.predict_suggest`（按推荐吃法），有效范围 `0 < value < 40`；按当天已有有效正餐取平均，不以零补齐，不回退 `predict_now`，无有效值时为 null/0。
+- 记录页保留九时段录入入口；曲线横轴固定六个实测节点。绿色参考虚线依次连接早前实测→早后推荐预测→中前实测→中后推荐预测→晚前实测→晚后推荐预测，包含早后到中前、中后到晚前的连接。餐后预测用白底空心点显示，餐前继续使用实测实心点。缺失值跳过，不填零、不把餐后实测当作预测；没有正餐预测时不绘制参考虚线。实测曲线最后绘制，使用更粗实线和实心点；周预测日均线语义不变。
+- 记录页右上角“已记”按九时段计数，六个有效实测和三个已保存正餐每时段计一次，分母 9。预测不写入 glucose_record，不混入实测均值、最高/最低值或血糖告警。正餐保存状态与预测图例使用绿色。
+- 周曲线分别绘制实测日均值和推荐预测日均值；缺失预测保留空值。无需新建表或迁移已有数据。
+# 2026-10-26 食品重复新增后的删除
+
+食品唯一性限定为未删除食品的 `(category_code, food_name)`；历史已删除行不占用名称。V44 使用可空生成列 `active_name_marker`（未删除为 1，已删除为 NULL）替换旧的 `(category_code, food_name, is_deleted)` 唯一索引。反复新增/识别、删除同名食品不再触发唯一键冲突；保留所有历史行、营养快照和照片来源关联，删除仍一次性写 is_deleted/deleted_at/deleted_by。管理端删除 API 及权限不变。
+# 2026-10-26 九时段进度、正餐照片与个人资料输入
+
+- 记录页“已记”恢复九时段：六个有效实测 + 三个已保存正餐，每时段最多计一次，分母 9。曲线仍保留六个实测横轴及独立推荐预测，实测统计不混入预测。
+- 新增 `GET /api/v1/meal-records/images/{mediaId}`，必须 C 端登录，仅当前用户自己未删除饮食记录所关联的可用 MEAL 图片可读取；校验用户/媒体/饮食记录归属、状态、MIME、大小及存储 provider/bucket。返回图片二进制，no-store/nosniff；不开放桶、不返回签名密钥。对象缺失为 404，存储连接异常沿用业务错误。
+- 饮食详情 mediaId 不变，mediaUrl 改为上述稳定相对路径。小程序使用当前 API 地址携带 Bearer 下载为临时图片，点击预览本地图片；切后台/卸载/换账号时使旧请求失效并回收临时文件，失败提供重试。
+- 手机号码只能经现有验证码绑定接口修改，资料页点击号码行跳转账号安全并展开绑定面板；返回后只刷新号码，不覆盖其他未保存资料。
+- 确诊时间沿用 diagnosedYm/YYYY-MM，使用年月日期选择器，不允许晚于当前月；用药沿用 medication/最长256字符，常见名称多选加“其他”输入，不自动推荐、添加药物或剂量。旧自由文本原样保留到用户主动修改，切换糖尿病类型不清除已有用药。无需数据库迁移。
+
+- 社区评论审核补充：GET /admin/v1/community/comments 分页列出评论的 AI 审核结果，含已被隐藏的评论（status=SKIPPED/PENDING/REVIEWING/DONE、verdict=PENDING/PASS/REJECT/ERROR、hidden=0/1、keyword 匹配正文或作者昵称且最多80字、pageSize 上限50），要求 content:news:list。列表不过公开可见性过滤，文章事后下架也不影响历史评论出现在审核视角；返回原文、所属文章、作者社区号与昵称，以及 aiCategory/aiSeverity/aiConfidence（仅 REJECT 有值）、aiReason、aiModel、aiPromptVer、hidden。
+- 误杀兜底：POST /admin/v1/community/comments/{id}/restore 仅把 is_hidden 归零，不改写 ai_verdict（保留机器判定与 ADMIN/RESTORE 日志），幂等；要求管理员角色与 content:news:edit。评论为先发后审，AI 判 REJECT 立即隐藏；ai_verdict=ERROR 的评论不隐藏（模型故障不应让社区停摆）但也不算通过，运营需按「AI 判定：异常」复查。
+- 管理端页面：文章审核沿用 GET/POST /admin/v1/community/articles 与 review/retry-ai；评论审核对应「社区评论管理」页，数据来自上述列表接口。
+- C 端补「我的评论」：GET /api/v1/community/comments/mine 分页返回本人发出的评论与回复（pageNum/pageSize，上限50），新的在前。刻意不过公开可见性过滤：被 AI 隐藏（is_hidden=1）的评论本人仍可见并由前端标注「已被系统隐藏」，避免用户以为没发出去；文章被删除或下架时记录仍返回、由 articleAvailable=false 表达，不整条吞掉。返回 id/newsId/articleTitle/articleAvailable/content/createdAt/rootCommentId/replyToCommentId/hidden/replyCount/likeCount。本人主动删除（is_deleted=1）的评论不返回。点击条目按 news-detail?id=&comments=1&commentId= 定位高亮。

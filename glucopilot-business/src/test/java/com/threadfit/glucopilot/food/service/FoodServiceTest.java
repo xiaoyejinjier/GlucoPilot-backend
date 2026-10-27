@@ -51,6 +51,7 @@ class FoodServiceTest {
         category.setId(1L);
         category.setCategoryName("主食类");
         category.setSortNo(1);
+        category.setImageUrl("/api/v1/foods/images/14");
         when(foodCategoryMapper.selectList(any())).thenReturn(List.of(category));
 
         // Act：调用真正的 Service 方法。
@@ -60,6 +61,11 @@ class FoodServiceTest {
         assertEquals(1, items.size());
         assertEquals("1", items.get(0).getId());
         assertEquals("主食类", items.get(0).getCategoryName());
+        assertEquals("/api/v1/foods/images/14", items.get(0).getImageUrl());
+        category.setImageUrl("/api/v1/foods/images/15");
+        assertEquals("/api/v1/foods/images/15", service.listFoodCategories().get(0).getImageUrl());
+        category.setImageUrl(null);
+        assertEquals("", service.listFoodCategories().get(0).getImageUrl());
     }
 
     /** 验证食品详情会根据 categoryId 补充对应的分类名称。 */
@@ -108,6 +114,24 @@ class FoodServiceTest {
         assertEquals(1, page.getTotal());
         assertEquals("米饭", page.getRecords().get(0).getFoodName());
         assertEquals("主食类", page.getRecords().get(0).getCategoryName());
+    }
+
+    @Test
+    void listAndDetailPreferPublishedSourcePhotoOverOldCartoon() {
+        var food = food(7L, "小笼包", 1, 1);
+        food.setNutritionSource("AI_REVIEWED"); food.setSourceMediaId(88L);
+        food.setImageUrl("/images/foods/rice.svg");
+        when(foodNutritionMapper.selectById(7L)).thenReturn(food);
+        when(foodCategoryMapper.selectList(null)).thenReturn(List.of(category(1L, "主食类")));
+        when(foodNutritionMapper.selectPage(any(), any())).thenAnswer(inv -> {
+            com.baomidou.mybatisplus.extension.plugins.pagination.Page<FoodNutrition> page = inv.getArgument(0);
+            page.setRecords(List.of(food)); page.setTotal(1); return page;
+        });
+        assertEquals("/api/v1/foods/7/image", service.getFoodDetail(7L).getImageUrl());
+        assertEquals("/api/v1/foods/7/image", service.pageFoods(null, null, null, new PageQuery()).getRecords().getFirst().getImageUrl());
+        food.setImageUrl("/api/v1/foods/images/72");
+        assertEquals("/api/v1/foods/images/72", service.getFoodDetail(7L).getImageUrl());
+        assertEquals("/api/v1/foods/images/72", service.pageFoods(null, null, null, new PageQuery()).getRecords().getFirst().getImageUrl());
     }
 
     /** 创建测试用食品实体，减少多个测试中的重复准备代码。 */

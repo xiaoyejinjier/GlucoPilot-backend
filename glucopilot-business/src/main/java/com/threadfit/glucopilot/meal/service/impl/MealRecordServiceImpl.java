@@ -354,7 +354,7 @@ public class MealRecordServiceImpl implements MealRecordService {
         String mediaUrl = null;
         if (r.getMediaId() != null) {
             MediaFile media = mediaFileService.findOwnedMedia(r.getMediaId(), userId, MediaBizType.MEAL);
-            mediaUrl = media == null ? null : media.getFileUrl();
+            mediaUrl = media == null ? null : com.threadfit.glucopilot.meal.service.MealPhotoService.path(media.getId());
         }
         List<MealVos.MealItemDetail> itemDetails = items.stream().map(this::toItemDetail).toList();
         return MealVos.MealDetail.builder()

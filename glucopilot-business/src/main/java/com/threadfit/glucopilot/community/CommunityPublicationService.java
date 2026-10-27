@@ -37,7 +37,7 @@ public class CommunityPublicationService {
         if(q.getPageNum()<1 || q.getPageSize()<1 || q.getPageSize()>50) throw new BizException(ErrorCode.BAD_REQUEST,"每页1～50条");
     }
     public List<Tag> tags() { return tags(null); }
-    public List<Tag> tags(Long viewer) { return jdbc.query("SELECT t.code,t.name FROM community_tag t WHERE t.enabled=1 AND (t.code IN ('diet','type1','type2','medication','exercise','daily') OR EXISTS(SELECT 1 FROM community_article_tag atg JOIN cms_news n ON n.id=atg.news_id LEFT JOIN community_article a ON a.news_id=n.id WHERE atg.tag_id=t.id AND n.is_deleted=0 AND n.publish_status=1 AND n.publish_at<=CURRENT_TIMESTAMP AND (n.community_managed=0 OR a.state='PUBLISHED') AND "+ArticleAccessService.readableSql("n",viewer)+")) ORDER BY t.sort_no,t.id",(rs,n)->new Tag(rs.getString(1),rs.getString(2))); }
+    public List<Tag> tags(Long viewer) { return jdbc.query("SELECT t.code,t.name FROM community_tag t WHERE t.enabled=1 AND (LEFT(t.code,7)<>'custom_' OR EXISTS(SELECT 1 FROM community_article_tag atg JOIN cms_news n ON n.id=atg.news_id LEFT JOIN community_article a ON a.news_id=n.id WHERE atg.tag_id=t.id AND n.is_deleted=0 AND n.publish_status=1 AND n.publish_at<=CURRENT_TIMESTAMP AND (n.community_managed=0 OR a.state='PUBLISHED') AND "+ArticleAccessService.readableSql("n",viewer)+")) ORDER BY t.sort_no,t.id",(rs,n)->new Tag(rs.getString(1),rs.getString(2))); }
     public List<Tag> tags(long id) { return jdbc.query("SELECT t.code,t.name FROM community_article_tag a JOIN community_tag t ON t.id=a.tag_id WHERE a.news_id=? AND t.enabled=1 ORDER BY t.sort_no,t.id",(rs,n)->new Tag(rs.getString(1),rs.getString(2)),id); }
     private List<String> codes(Submit request) {
         if(request.title()==null || request.title().trim().isEmpty() || request.title().trim().length()>80 || request.body()==null || (request.body().trim().length()<20 && (request.imageMediaIds()==null || request.imageMediaIds().isEmpty()) && (request.videoMediaIds()==null || request.videoMediaIds().isEmpty())) || request.body().length()>8000
@@ -45,12 +45,20 @@ public class CommunityPublicationService {
         List<String> predefined=request.tagCodes()==null?List.of():request.tagCodes();
         List<String> custom=request.customTags()==null?List.of():request.customTags();
         if(predefined.size()>3 || custom.size()>3 || predefined.size()+custom.size()<1) throw new BizException(ErrorCode.BAD_REQUEST,"请选择或填写1～3个标签");
-        Set<String> allowed=new HashSet<>(jdbc.queryForList("SELECT code FROM community_tag WHERE enabled=1",String.class));
+        Set<String> allowed=new HashSet<>(jdbc.queryForList("SELECT code FROM community_tag WHERE enabled=1 ORDER BY id FOR UPDATE",String.class));
         if(predefined.stream().anyMatch(code->code==null || !allowed.contains(code))) throw new BizException(ErrorCode.BAD_REQUEST,"标签不存在或已停用");
         Set<String> resolved=new TreeSet<>(predefined);
         for(String raw:custom) resolved.add(customTag(raw));
         if(resolved.size()>3) throw new BizException(ErrorCode.BAD_REQUEST,"最多选择3个标签");
         return List.copyOf(resolved);
+    }
+    void validateDraftTags(List<String> codes,List<String> custom) {
+        Set<String> allowed=new HashSet<>(jdbc.queryForList("SELECT code FROM community_tag WHERE enabled=1 ORDER BY id FOR UPDATE",String.class));
+        if(codes.stream().anyMatch(code->!allowed.contains(code)))throw new BizException(ErrorCode.BAD_REQUEST,"标签已删除或停用，请重新选择标签");
+        for(String raw:custom) {
+            String name=java.text.Normalizer.normalize(Objects.toString(raw,""),java.text.Normalizer.Form.NFKC).trim();
+            if(jdbc.queryForObject("SELECT COUNT(*) FROM community_tag WHERE LOWER(name)=LOWER(?) AND enabled=0",Long.class,name)>0)throw new BizException(ErrorCode.BAD_REQUEST,"标签已删除或停用，请重新选择标签");
+        }
     }
     private String customTag(String raw) {
         String name=java.text.Normalizer.normalize(Objects.toString(raw,""),java.text.Normalizer.Form.NFKC).replaceFirst("^\\s*#+","").trim().replaceAll("\\s+"," ");
@@ -145,14 +153,15 @@ public class CommunityPublicationService {
     public PageResult<Article> feed(long viewer,String tag,boolean following,String keyword,PageQuery q) {
         user(viewer,false);page(q);List<Object> args=new ArrayList<>();
         String filter=ArticleAccessService.publishedSql("n");
-        if(tag!=null && !tag.isBlank()) {filter+=" AND EXISTS(SELECT 1 FROM community_article_tag atg JOIN community_tag t ON t.id=atg.tag_id WHERE atg.news_id=n.id AND t.code=? AND t.enabled=1)";args.add(tag);}
+        if(tag!=null && !tag.isBlank()) {filter+=" AND EXISTS(SELECT 1 FROM community_article_tag atg JOIN community_tag t ON t.id=atg.tag_id WHERE atg.news_id=n.id AND "+(tag.equals("other")?"(t.code='other' OR LEFT(t.code,7)='custom_')":"t.code=?")+" AND t.enabled=1)";if(!tag.equals("other"))args.add(tag);}
         if(following) {filter+=" AND EXISTS(SELECT 1 FROM community_follow f WHERE f.follower_id=? AND f.following=1 AND (f.target_key=CONCAT('u',a.author_user_id) OR f.target_key=CONCAT('b',n.blogger_id) OR f.target_key=CONCAT('u',(SELECT b.user_id FROM community_blogger b WHERE b.id=n.blogger_id))))";args.add(viewer);}
         if(keyword!=null && !keyword.isBlank()) {if(keyword.length()>80) throw new BizException(ErrorCode.BAD_REQUEST,"搜索词最多80字");filter+=" AND LOCATE(?,n.title)>0";args.add(keyword.trim());}
         return list(viewer,false,filter,args,q);
     }
-    public List<Tag> myTags(long viewer) {
+    public List<Tag> myTags(long viewer) { return myTags(viewer,false); }
+    public List<Tag> myTags(long viewer,boolean includeDisabled) {
         user(viewer,false);
-        return jdbc.query("SELECT DISTINCT t.code,t.name FROM community_article_tag atg JOIN community_tag t ON t.id=atg.tag_id JOIN community_article a ON a.news_id=atg.news_id JOIN cms_news n ON n.id=a.news_id WHERE a.author_user_id=? AND n.is_deleted=0 AND t.enabled=1 ORDER BY t.name LIMIT 100",(rs,i)->new Tag(rs.getString(1),rs.getString(2)),viewer);
+        return jdbc.query("SELECT DISTINCT t.code,t.name,t.enabled FROM community_article_tag atg JOIN community_tag t ON t.id=atg.tag_id JOIN community_article a ON a.news_id=atg.news_id JOIN cms_news n ON n.id=a.news_id WHERE a.author_user_id=? AND n.is_deleted=0 AND (t.enabled=1 OR ?=1) ORDER BY t.name LIMIT 100",(rs,i)->new Tag(rs.getString(1),rs.getString(2),rs.getInt(3)),viewer,includeDisabled?1:0);
     }
     public PageResult<Article> byAuthor(long viewer,String key,PageQuery q) {
         user(viewer,false);page(q);var profile=community.profile(viewer,key);
@@ -286,6 +295,63 @@ public class CommunityPublicationService {
         return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
     }
     private String oneText(String sql,long id) {var rows=jdbc.queryForList(sql,String.class,id);return rows.isEmpty()?"内容已不存在":Objects.toString(rows.getFirst(),"");}
+
+    /**
+     * 管理端评论审核列表。
+     * <p>
+     * 存在的理由：评论是"先发后审"，机器判违规会立刻 {@code is_hidden=1} 从公开列表消失；
+     * 没有这张列表，运营唯一能做的只有拿着 id 调恢复接口——既找不到"今天被藏了哪些"，
+     * 也无法复查 {@code ERROR}（模型故障时按约定不隐藏，但也不等于通过）。
+     * <p>
+     * 与公开列表的差别：不过 {@code VISIBLE_COMMENT}（要能看到被隐藏的），也不要求文章当前可读
+     * （文章后续被下架不该让历史评论从审核视角消失）。
+     *
+     * @param status  ai_status：SKIPPED（AI 未开启时的存量）/PENDING/REVIEWING/DONE，空=全部
+     * @param verdict ai_verdict：PENDING/PASS/REJECT/ERROR，空=全部
+     * @param hidden  是否被隐藏：1=被隐藏、0=可见，null=全部
+     * @param keyword 评论正文或作者昵称模糊匹配
+     */
+    public PageResult<AdminComment> adminComments(String status,String verdict,Integer hidden,String keyword,PageQuery q) {
+        page(q);
+        String filter="c.is_deleted=0 AND n.is_deleted=0";
+        List<Object> args=new ArrayList<>();
+        if(status!=null && !status.isBlank()) {
+            if(!Set.of("SKIPPED","PENDING","REVIEWING","DONE").contains(status)) throw new BizException(ErrorCode.BAD_REQUEST,"审核状态不合法");
+            filter+=" AND c.ai_status=?";args.add(status);
+        }
+        if(verdict!=null && !verdict.isBlank()) {
+            if(!Set.of("PENDING","PASS","REJECT","ERROR").contains(verdict)) throw new BizException(ErrorCode.BAD_REQUEST,"审核结论不合法");
+            filter+=" AND c.ai_verdict=?";args.add(verdict);
+        }
+        if(hidden!=null) {
+            if(hidden!=0 && hidden!=1) throw new BizException(ErrorCode.BAD_REQUEST,"隐藏标记不合法");
+            filter+=" AND c.is_hidden=?";args.add(hidden);
+        }
+        if(keyword!=null && !keyword.isBlank()) {
+            String term=keyword.trim();if(term.length()>80) throw new BizException(ErrorCode.BAD_REQUEST,"搜索词最多80字");
+            filter+=" AND (LOCATE(?,c.content)>0 OR EXISTS(SELECT 1 FROM user_profile p WHERE p.user_id=c.user_id AND p.is_deleted=0 AND LOCATE(?,p.nickname)>0))";
+            args.add(term);args.add(term);
+        }
+        long total=jdbc.queryForObject("SELECT COUNT(*) FROM community_comment c JOIN cms_news n ON n.id=c.news_id WHERE "+filter,Long.class,args.toArray());
+        args.add(q.getPageSize());args.add(q.offset());
+        var rows=jdbc.query("SELECT c.id,c.news_id,c.content,c.user_id,c.ai_status,c.ai_verdict,c.ai_category,"
+                        +"c.ai_severity,c.ai_confidence,c.ai_reason,c.ai_model,c.ai_prompt_ver,c.is_hidden,c.created_at,n.title,"
+                        +"(SELECT p.nickname FROM user_profile p WHERE p.user_id=c.user_id AND p.is_deleted=0 LIMIT 1) nickname "
+                        +"FROM community_comment c JOIN cms_news n ON n.id=c.news_id WHERE "+filter
+                        +" ORDER BY c.id DESC LIMIT ? OFFSET ?",
+                (rs,i)->new AdminComment(Long.toString(rs.getLong("id")),rs.getLong("news_id"),rs.getString("title"),
+                        rs.getString("content"),"u"+rs.getLong("user_id"),Objects.toString(rs.getString("nickname"),"社区用户"),
+                        rs.getString("ai_status"),rs.getString("ai_verdict"),rs.getString("ai_category"),
+                        integer(rs,"ai_severity"),integer(rs,"ai_confidence"),rs.getString("ai_reason"),
+                        rs.getString("ai_model"),rs.getString("ai_prompt_ver"),rs.getInt("is_hidden")==1,
+                        time(rs,"created_at")),
+                args.toArray());
+        return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
+    }
+    /** 可空整数读取：{@code ai_severity}/{@code ai_confidence} 在"未审/通过"时是 NULL。 */
+    private static Integer integer(ResultSet rs,String field) throws SQLException {
+        Object value=rs.getObject(field);return value==null?null:((Number)value).intValue();
+    }
     @Transactional
     public void resolveReport(long admin,long id,Resolution request) {
         var rows=jdbc.queryForList("SELECT * FROM community_report WHERE id=? FOR UPDATE",id);if(rows.isEmpty()) throw missing();var row=rows.getFirst();

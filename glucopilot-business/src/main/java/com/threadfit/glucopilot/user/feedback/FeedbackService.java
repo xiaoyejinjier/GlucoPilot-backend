@@ -64,7 +64,7 @@ public class FeedbackService {
                 .id(String.valueOf(f.getId()))
                 .feedbackType(f.getFeedbackType())
                 .contentText(f.getContentText())
-                .replyStatus(f.getReplyStatus())
+                .replyStatus(FeedbackReplyState.of(f))
                 .officialReply(f.getOfficialReply())
                 .repliedAt(f.getRepliedAt())
                 .createdAt(f.getGmtCreate())

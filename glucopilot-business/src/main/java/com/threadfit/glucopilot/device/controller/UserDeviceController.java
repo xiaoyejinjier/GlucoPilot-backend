@@ -11,12 +11,13 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
 /**
- * 用户端设备管理：列表、自助绑定、解绑。
+ * 用户端设备管理：列表、自助绑定、解绑、同步流水。
  * 血糖同步仍走 {@code POST /api/v1/device/glucose-sync}。
  */
 @RestController
@@ -40,5 +41,13 @@ public class UserDeviceController {
     public ApiResponse<Void> unbind(@PathVariable Long id) {
         userDeviceService.unbind(RequestContext.requireUserId(), id);
         return ApiResponse.ok();
+    }
+
+    /** 本人设备近 N 次同步流水（默认 10，最大 50）。 */
+    @GetMapping("/{id:\\d+}/sync-logs")
+    public ApiResponse<List<DeviceDtos.SyncLogItem>> syncLogs(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "10") int limit) {
+        return ApiResponse.ok(userDeviceService.listSyncLogs(RequestContext.requireUserId(), id, limit));
     }
 }

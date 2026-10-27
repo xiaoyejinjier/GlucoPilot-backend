@@ -22,26 +22,30 @@ class FoodReviewImageServiceTest {
     @Mock ObjectStorageService storage;
     @InjectMocks FoodReviewImageService service;
 
-    @Test void readsOnlyThePhotosAssociatedWithPendingFood() {
-        when(foods.selectById(7L)).thenReturn(draft());
+    @Test void readsAssociatedPhotosBeforeAndAfterApprovalRegardlessOfShelfStatus() {
+        FoodNutrition food = draft();
+        when(foods.selectById(7L)).thenReturn(food);
         when(media.selectById(88L)).thenReturn(photo());
         when(storage.provider()).thenReturn(StorageProvider.MINIO);
         when(storage.getObject("meal-photo")).thenReturn(new byte[]{1, 2, 3});
         var image = service.read(7L);
         assertArrayEquals(new byte[]{1, 2, 3}, image.bytes());
         assertEquals("image/jpeg", image.mimeType());
+        food.setShelfStatus(1); food.setNutritionSource("AI_REVIEWED");
+        assertArrayEquals(image.bytes(), service.read(7L).bytes());
+        food.setShelfStatus(0);
+        assertArrayEquals(image.bytes(), service.read(7L).bytes());
     }
 
-    @Test void reviewedManualDeletedOrUnassociatedFoodCannotExposePhoto() {
+    @Test void manualDeletedMissingOrUnassociatedFoodCannotExposePhoto() {
         FoodNutrition food = draft();
         when(foods.selectById(7L)).thenReturn(food);
-        food.setShelfStatus(1); assertThrows(BizException.class, () -> service.read(7L));
-        food.setShelfStatus(0); food.setNutritionSource("AI_REVIEWED");
-        assertThrows(BizException.class, () -> service.read(7L));
         food.setNutritionSource("MANUAL"); assertThrows(BizException.class, () -> service.read(7L));
         food.setNutritionSource("AI_ESTIMATE"); food.setIsDeleted(1);
         assertThrows(BizException.class, () -> service.read(7L));
         food.setIsDeleted(0); food.setSourceMediaId(null);
+        assertThrows(BizException.class, () -> service.read(7L));
+        when(foods.selectById(7L)).thenReturn(null);
         assertThrows(BizException.class, () -> service.read(7L));
         verifyNoInteractions(media, storage);
     }

@@ -84,8 +84,9 @@ public class AdminFoodController {
             @RequestParam(required = false) Long categoryId,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Boolean enabled,
+            @RequestParam(required = false) Boolean pendingReview,
             @Valid PageQuery query) {
-        return ApiResponse.ok(adminFoodService.pageFoods(categoryId, keyword, enabled, query));
+        return ApiResponse.ok(adminFoodService.pageFoods(categoryId, keyword, enabled, pendingReview, query));
     }
 
     /** 新建食品；@Valid 会校验食品名称和分类 ID。 */

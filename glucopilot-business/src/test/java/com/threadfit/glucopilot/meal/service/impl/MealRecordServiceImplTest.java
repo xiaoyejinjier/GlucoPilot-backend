@@ -154,6 +154,9 @@ class MealRecordServiceImplTest {
     @Test
     void listDayReturnsMeals() {
         MealRecord row = record(1L, "breakfast");
+        row.setMediaId(88L);
+        MediaFile photo = new MediaFile(); photo.setId(88L); photo.setFileUrl("http://storage.invalid/private/expired.jpg");
+        when(mediaFileService.findOwnedMedia(88L, USER_ID, MediaBizType.MEAL)).thenReturn(photo);
         when(mealRecordMapper.selectList(any())).thenReturn(List.of(row));
         when(mealFoodItemMapper.selectList(any())).thenReturn(List.of(item(1L, "鸡蛋")));
 
@@ -164,6 +167,8 @@ class MealRecordServiceImplTest {
         MealVos.MealDetail meal = result.getMeals().getFirst();
         assertEquals("1", meal.getId());
         assertEquals("breakfast", meal.getNodeCode());
+        assertEquals("88",meal.getMediaId());
+        assertEquals("/api/v1/meal-records/images/88",meal.getMediaUrl());
         assertEquals(1, meal.getItems().size());
         assertEquals("鸡蛋", meal.getItems().getFirst().getFoodName());
     }

@@ -1,14 +1,16 @@
 package com.threadfit.glucopilot.device.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.device.adapter.DevicePayloadAdapter;
 import com.threadfit.glucopilot.device.adapter.support.DeviceProviders;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
+import com.threadfit.glucopilot.device.entity.DeviceSyncLog;
 import com.threadfit.glucopilot.device.entity.UserDevice;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import com.threadfit.glucopilot.device.model.UnifiedGlucoseSample;
 import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
@@ -30,11 +32,13 @@ public class DeviceSyncFacade {
     private final Map<String, DevicePayloadAdapter> adapters;
     private final GlucoseIngestPort glucoseIngestPort;
     private final UserDeviceMapper userDeviceMapper;
+    private final DeviceSyncLogMapper deviceSyncLogMapper;
 
     public DeviceSyncFacade(
             List<DevicePayloadAdapter> adapterList,
             GlucoseIngestPort glucoseIngestPort,
-            UserDeviceMapper userDeviceMapper) {
+            UserDeviceMapper userDeviceMapper,
+            DeviceSyncLogMapper deviceSyncLogMapper) {
         this.adapters = adapterList.stream()
                 .collect(Collectors.toMap(
                         a -> a.provider().toUpperCase(Locale.ROOT),
@@ -42,6 +46,7 @@ public class DeviceSyncFacade {
                         (a, b) -> a));
         this.glucoseIngestPort = glucoseIngestPort;
         this.userDeviceMapper = userDeviceMapper;
+        this.deviceSyncLogMapper = deviceSyncLogMapper;
     }
 
     @Transactional
@@ -79,6 +84,15 @@ public class DeviceSyncFacade {
         if (bound != null) {
             bound.setLastSyncAt(LocalDateTime.now());
             userDeviceMapper.updateById(bound);
+            int createdCount = (int) items.stream().filter(i -> Boolean.TRUE.equals(i.getCreated())).count();
+            DeviceSyncLog log = new DeviceSyncLog();
+            log.setUserId(userId);
+            log.setDeviceId(bound.getId());
+            log.setProvider(provider);
+            log.setSampleCount(items.size());
+            log.setCreatedCount(createdCount);
+            log.setRemark("sync " + items.size() + " samples, created " + createdCount);
+            deviceSyncLogMapper.insert(log);
         }
         return DeviceDtos.SyncResponse.builder()
                 .provider(provider)

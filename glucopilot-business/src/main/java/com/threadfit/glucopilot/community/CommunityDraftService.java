@@ -45,6 +45,7 @@ public class CommunityDraftService {
         String title=Objects.toString(p.title(),"").trim(),body=Objects.toString(p.body(),"");
         var codes=p.tagCodes()==null?List.<String>of():p.tagCodes();var custom=p.customTags()==null?List.<String>of():p.customTags();
         if(title.length()>80||body.length()>8000||codes.size()+custom.size()>3||codes.stream().anyMatch(x->x==null||!x.matches("[A-Za-z0-9_-]{1,32}"))||custom.stream().anyMatch(x->x==null||!x.matches("[\\p{L}\\p{N} _-]{1,16}")))throw new BizException(ErrorCode.BAD_REQUEST,"草稿标题、正文或标签过长/不合法");
+        publication.validateDraftTags(codes,custom);
         var images=publication.images(user,new PublicationDtos.Submit(title,body,codes,custom,p.clientRequestId(),p.sourceRevision(),p.imageMediaIds()));
         var videos=publication.videos(user,new PublicationDtos.Submit(title,body,codes,custom,p.clientRequestId(),p.sourceRevision(),p.imageMediaIds(),p.videoMediaIds()));
         if(p.sourceArticleId()!=null){var source=publication.get(user,p.sourceArticleId(),false);if(!source.mine()||p.sourceRevision()==null||p.sourceRevision()<1)throw missing();}

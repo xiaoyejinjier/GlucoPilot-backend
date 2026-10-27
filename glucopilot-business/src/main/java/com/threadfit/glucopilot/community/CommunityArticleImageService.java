@@ -5,8 +5,8 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.file.constant.MediaFileConstant;
 import com.threadfit.glucopilot.file.mapper.MediaFileMapper;
+import com.threadfit.glucopilot.file.entity.MediaFile;
 import com.threadfit.glucopilot.file.storage.ObjectStorageService;
-import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import java.util.Objects;
@@ -23,6 +23,10 @@ public class CommunityArticleImageService {
         return read(viewer,articleId,mediaId,false);
     }
     public Image read(Long viewer,Long articleId,long mediaId,boolean video) {
+        return readAuthorized(requireMedia(viewer,articleId,mediaId,video),video);
+    }
+    // Shared with static video covers: authorize before consulting any byte cache.
+    MediaFile requireMedia(Long viewer,Long articleId,long mediaId,boolean video) {
         long max=video?20971520:5242880;int type=video?8:7;
         if(viewer!=null && jdbc.queryForObject("SELECT COUNT(*) FROM user_account WHERE id=? AND is_deleted=0 AND account_status=1",Long.class,viewer)!=1) throw missing();
         var photo=media.selectById(mediaId);
@@ -37,6 +41,10 @@ public class CommunityArticleImageService {
         if(articleId!=null) {
             if(jdbc.queryForObject("SELECT COUNT(*) FROM community_article_image i JOIN cms_news n ON n.id=i.news_id WHERE i.news_id=? AND i.media_id=? AND n.is_deleted=0",Long.class,articleId,mediaId)!=1) throw missing();
         } else if(!Objects.equals(viewer,photo.getUserId()) && jdbc.queryForObject("SELECT COUNT(*) FROM community_article_image i JOIN cms_news n ON n.id=i.news_id JOIN community_article a ON a.news_id=n.id WHERE i.media_id=? AND n.is_deleted=0 AND n.publish_status=1 AND n.publish_at<=CURRENT_TIMESTAMP AND a.state='PUBLISHED' AND "+ArticleAccessService.publishedSql("n")+" AND "+ArticleAccessService.readableSql("n",viewer),Long.class,mediaId)==0) throw missing();
+        return photo;
+    }
+    Image readAuthorized(MediaFile photo,boolean video) {
+        long max=video?20971520:5242880;
         byte[] bytes=storage.getObject(photo.getStorageKey());
         if(bytes==null || bytes.length==0 || bytes.length>max || bytes.length!=photo.getSizeBytes()) throw missing();
         return new Image(bytes,photo.getMimeType());

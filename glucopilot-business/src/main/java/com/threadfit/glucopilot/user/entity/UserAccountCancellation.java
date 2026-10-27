@@ -8,7 +8,7 @@ import lombok.EqualsAndHashCode;
 import java.time.LocalDateTime;
 
 /**
- * 账号注销凭据（映射表 user_account_cancellation，见 V39）。
+ * 账号注销凭据（映射表 user_account_cancellation，见 V45）。
  *
  * <p>记录一次注销申请的申请/执行/恢复事实，是 PIPL 合规举证的载体；健康数据等敏感内容
  * 不入表，仅保留通道、模式、时间戳与失败摘要（last_error 不含任何健康内容）。
@@ -35,7 +35,7 @@ public class UserAccountCancellation extends BaseEntity {
     /** 验证通道：1=短信 2=邮箱 3=微信（CodeEnum.CancellationVerifyChannel）。 */
     private Integer verifyChannel;
 
-    /** 申请前账号状态：0=禁用 1=正常（登录取消注销时按此还原，见 V40）。 */
+    /** 申请前账号状态：0=禁用 1=正常（登录取消注销时按此还原，见 V46）。 */
     private Integer preStatus;
 
     /** 申请时间。 */

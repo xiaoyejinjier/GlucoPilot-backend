@@ -39,7 +39,7 @@ class AdminFoodServiceTest {
     private AdminFoodService service;
 
     @Test
-    void reviewPreviewIsSeparateFromPublicImageAndHiddenAfterApproval() {
+    void sourcePhotoRemainsAvailableAfterApprovalAndDisabling() {
         FoodNutrition food = new FoodNutrition(); food.setId(7L); food.setSourceMediaId(88L);
         food.setNutritionSource("AI_ESTIMATE"); food.setShelfStatus(0); food.setImageUrl("/images/foods/rice.svg");
         when(foodCategoryMapper.selectList(null)).thenReturn(List.of());
@@ -48,8 +48,35 @@ class AdminFoodServiceTest {
         assertEquals("/admin/v1/foods/7/review-image", pending.getReviewImage());
         assertEquals("/images/foods/rice.svg", pending.getImage());
         food.setShelfStatus(1); food.setNutritionSource("AI_REVIEWED");
-        assertEquals("", service.listFoods().get(0).getReviewImage());
+        assertEquals("/admin/v1/foods/7/review-image", service.listFoods().get(0).getReviewImage());
         assertEquals("/images/foods/rice.svg", service.listFoods().get(0).getImage());
+        food.setShelfStatus(0);
+        assertEquals("/admin/v1/foods/7/review-image", service.listFoods().get(0).getReviewImage());
+    }
+
+    @Test
+    void enablingSavingAndDisablingRetainsPhotoAssociationAndOriginalImage() {
+        var category = new FoodCategory(); category.setId(1L); category.setCategoryName("水果类");
+        var food = new FoodNutrition(); food.setId(7L); food.setFoodName("葡萄");
+        food.setCategoryId(1L); food.setSourceMediaId(88L); food.setShelfStatus(0);
+        food.setNutritionSource("AI_ESTIMATE"); food.setImageUrl("/api/v1/foods/images/72");
+        when(foodCategoryMapper.selectById(1L)).thenReturn(category);
+        when(foodNutritionMapper.selectById(7L)).thenReturn(food);
+        var request = new AdminFoodDtos.FoodSaveRequest();
+        request.setId(7L); request.setName("葡萄"); request.setCategoryId(1L); request.setEnabled(true);
+        var enabled = service.saveFood(request);
+        assertEquals("AI_REVIEWED", enabled.getNutritionSource());
+        assertEquals("/admin/v1/foods/7/review-image", enabled.getReviewImage());
+        assertEquals(88L, food.getSourceMediaId());
+        assertEquals("/api/v1/foods/images/72", enabled.getImage());
+        request.setEnabled(false);
+        var disabled = service.saveFood(request);
+        assertEquals("/admin/v1/foods/7/review-image", disabled.getReviewImage());
+        assertEquals(88L, food.getSourceMediaId());
+        assertEquals("/api/v1/foods/images/72", disabled.getImage());
+        request.setImage("/api/v1/foods/images/99");
+        assertEquals("/api/v1/foods/images/99", service.saveFood(request).getImage());
+        assertEquals(88L, food.getSourceMediaId());
     }
 
     @Test
@@ -167,7 +194,7 @@ class AdminFoodServiceTest {
         query.setPageNum(2);
         query.setPageSize(10);
         PageResult<AdminFoodDtos.FoodItem> result =
-                service.pageFoods(1L, " 糙米 ", true, query);
+                service.pageFoods(1L, " 糙米 ", true, null, query);
 
         assertEquals(2, result.getPageNum());
         assertEquals(10, result.getPageSize());

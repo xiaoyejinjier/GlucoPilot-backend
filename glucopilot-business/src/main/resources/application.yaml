@@ -310,6 +310,19 @@ ai:
       version: v1
       temperature: 0.1
 
+    # 社区内容审核（社区 AI 审核一期）：文章初审与评论审核，输出判定 + 类别 + 严重度。
+    # 温度取 0：判定要稳定；模型可在后台单独绑一个更便宜更快的（分类任务不需要推理大模型）。
+    # 提示词正文**禁止出现花括号/方括号**（ST 模板会当成变量表达式，V22/V23/V27 三次教训），
+    # 输出格式因此用「字段清单」描述。
+    moderation:
+      prompt: prompts/moderation/system.md
+      version: v1
+      temperature: 0
+      # 审核结论只有几行字，封顶可杜绝"模型长篇发挥"拖延时延与成本
+      max-tokens: 300
+      # 关掉思维链：分类任务不需要推理链，开了只会让首 token 更慢（摘要场景已踩过读超时）
+      thinking: false
+
 
 glucopilot:
   mail:

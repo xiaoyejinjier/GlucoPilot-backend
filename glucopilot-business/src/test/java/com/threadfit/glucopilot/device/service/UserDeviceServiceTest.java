@@ -8,6 +8,7 @@ import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.exception.*;
 import com.threadfit.glucopilot.device.controller.UserDeviceController;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import org.apache.ibatis.mapping.Environment;
 import org.mybatis.spring.SqlSessionTemplate;
@@ -33,8 +34,11 @@ class UserDeviceServiceTest {
         try(var statement=schemaConnection.createStatement()){statement.execute(schema.substring(start,schema.indexOf(';',start)).replace("CONSTRAINT pk_id PRIMARY KEY","PRIMARY KEY"));}
         var config=new MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);
         GlobalConfigUtils.setGlobalConfig(config,new GlobalConfig().setDbConfig(new GlobalConfig.DbConfig()).setMetaObjectHandler(new AuditMetaObjectHandler()));
-        config.setEnvironment(new Environment("test",new SpringManagedTransactionFactory(),ds));config.addMapper(UserDeviceMapper.class);
-        service=new UserDeviceService(new SqlSessionTemplate(new MybatisSqlSessionFactoryBuilder().build(config)).getMapper(UserDeviceMapper.class));
+        config.setEnvironment(new Environment("test",new SpringManagedTransactionFactory(),ds));
+        config.addMapper(UserDeviceMapper.class);
+        config.addMapper(DeviceSyncLogMapper.class);
+        var sqlSession=new SqlSessionTemplate(new MybatisSqlSessionFactoryBuilder().build(config));
+        service=new UserDeviceService(sqlSession.getMapper(UserDeviceMapper.class),sqlSession.getMapper(DeviceSyncLogMapper.class));
     }
     @AfterEach void cleanup() throws Exception {RequestContext.clear();try{jdbc.execute("DROP ALL OBJECTS");}finally{schemaConnection.close();}}
     DeviceDtos.BindRequest request(String sn){var r=new DeviceDtos.BindRequest();r.setDeviceSn(sn);r.setProvider("HUAWEI");r.setDeviceName("我的设备");return r;}

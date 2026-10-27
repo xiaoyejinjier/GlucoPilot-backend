@@ -43,6 +43,12 @@
 
     <dependencies>
 
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.8</version>
+        </dependency>
+
         <!-- Isolated alert SQL/transaction regression tests; never a shared data source. -->
         <dependency>
             <groupId>com.h2database</groupId>

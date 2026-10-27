@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Objects;
 
-/** 仅向有食品管理权限的运营展示草稿的原餐食照片，不发布为食品配图。 */
+/** 向有食品管理权限的运营持续展示识别来源照片，审核/上下架不改变图片。 */
 @Service
 @RequiredArgsConstructor
 public class FoodReviewImageService {
@@ -23,7 +23,7 @@ public class FoodReviewImageService {
 
     public Image read(Long foodId) {
         FoodNutrition food = foods.selectById(foodId);
-        if (!isPending(food) || food.getSourceMediaId() == null) throw missing();
+        if (!hasSourcePhoto(food)) throw missing();
         var photo = media.selectById(food.getSourceMediaId());
         if (photo == null || Integer.valueOf(1).equals(photo.getIsDeleted())
                 || photo.getUserId() == null || photo.getOpsId() != null
@@ -39,13 +39,14 @@ public class FoodReviewImageService {
         return new Image(bytes, photo.getMimeType());
     }
 
-    public static boolean isPending(FoodNutrition food) {
+    public static boolean hasSourcePhoto(FoodNutrition food) {
         return food != null && !Integer.valueOf(1).equals(food.getIsDeleted())
-                && "AI_ESTIMATE".equals(food.getNutritionSource()) && Integer.valueOf(0).equals(food.getShelfStatus());
+                && food.getSourceMediaId() != null
+                && ("AI_ESTIMATE".equals(food.getNutritionSource()) || "AI_REVIEWED".equals(food.getNutritionSource()));
     }
 
     private static BizException missing() {
-        return new BizException(ErrorCode.NOT_FOUND, "待审核食品实拍图不存在或已失效");
+        return new BizException(ErrorCode.NOT_FOUND, "食品实拍图不存在或已失效");
     }
 
     public record Image(byte[] bytes, String mimeType) {}

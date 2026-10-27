@@ -6,7 +6,10 @@ import java.util.List;
 
 public final class PublicationDtos {
     private PublicationDtos() {}
-    public record Tag(String code, String name) {}
+    public record Tag(String code, String name, String type, int enabled) {
+        public Tag(String code,String name) { this(code,name,code!=null && code.startsWith("custom_")?"USER":"OFFICIAL",1); }
+        public Tag(String code,String name,int enabled) { this(code,name,code!=null && code.startsWith("custom_")?"USER":"OFFICIAL",enabled); }
+    }
     public record Submit(@NotBlank @Size(max=80) String title,
                          @NotNull @Size(max=8000) String body,
                          @Size(max=3) List<String> tagCodes,
@@ -38,4 +41,18 @@ public final class PublicationDtos {
                                 @Pattern(regexp="[A-Za-z0-9_-]{8,64}") @NotBlank String clientRequestId) {}
     public record Resolution(@NotBlank String action, @NotBlank @Size(max=1000) String note) {}
     public record AiDecision(boolean passed, String reason, String model) {}
+
+    /**
+     * 管理端评论审核列表项。
+     * <p>
+     * 带原文：管理员必须读到内容才能判断"是不是误杀"；不带用户敏感字段，
+     * 作者沿用社区口径的 {@code u<id>} 键 + 昵称。
+     * 判定字段全部来自 V43 的 {@code ai_*} 列，其中 {@code aiCategory}/{@code aiSeverity}/{@code aiConfidence}
+     * 只在 REJECT 时有值（PASS 写 null，用来区分"没审过"与"审过且干净"）。
+     */
+    public record AdminComment(String id, long newsId, String articleTitle, String content,
+                               String authorKey, String authorNickname,
+                               String aiStatus, String aiVerdict, String aiCategory, Integer aiSeverity,
+                               Integer aiConfidence, String aiReason, String aiModel, String aiPromptVer,
+                               boolean hidden, LocalDateTime createdAt) {}
 }

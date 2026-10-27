@@ -61,6 +61,7 @@ public class FoodService {
                         // Long 转 String，避免 JavaScript 大整数精度问题。
                         .id(String.valueOf(c.getId()))
                         .categoryName(c.getCategoryName())
+                        .imageUrl(c.getImageUrl() == null ? "" : c.getImageUrl())
                         .sortNo(c.getSortNo())
                         .build())
                 .toList();
@@ -152,7 +153,7 @@ public class FoodService {
                 .carbsPer100g(f.getCarbsPer100g())
                 .caloriesPer100g(f.getCaloriesPer100g())
                 .giValue(f.getGiValue())
-                .imageUrl(f.getImageUrl())
+                .imageUrl(FoodCatalogImageService.imageUrl(f))
                 .build();
     }
 }

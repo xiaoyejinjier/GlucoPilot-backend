@@ -241,8 +241,8 @@ class AdminAiSceneServiceTest {
 
         AdminAiSceneDtos.SceneList list = service.list();
 
-        // ② 期起场景有 5 个（新增 SUMMARY）；③ 期再加 MEMORY（长期记忆抽取），共 6 个
-        assertEquals(6, list.getRecords().size());
+        // ② 期 SUMMARY、③ 期 MEMORY、社区 AI 审核新增 MODERATION，共 7 个
+        assertEquals(7, list.getRecords().size());
         assertEquals(1, list.getModels().size());
         assertEquals("DeepSeek Flash", list.getModels().get(0).getName());
         assertEquals("DeepSeek（自研 SDK）", list.getModels().get(0).getProviderName());

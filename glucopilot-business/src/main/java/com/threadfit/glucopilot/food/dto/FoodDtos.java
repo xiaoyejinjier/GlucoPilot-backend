@@ -27,6 +27,9 @@ public final class FoodDtos {
         /** 分类名称，例如“主食类”。 */
         private String categoryName;
 
+        /** 与管理端共用 food_category.image_url；未设置时为空字符串。 */
+        private String imageUrl;
+
         /** 分类展示顺序，数值越小越靠前。 */
         private Integer sortNo;
     }
@@ -59,7 +62,7 @@ public final class FoodDtos {
         /** 食品 GI 值；数据库允许为空。 */
         private BigDecimal giValue;
 
-        /** 食品缩略图 URL；当前不包含文件上传逻辑。 */
+        /** 优先管理员已登记配图；否则审核上架的食品返回食品级实拍地址。 */
         private String imageUrl;
     }
 }

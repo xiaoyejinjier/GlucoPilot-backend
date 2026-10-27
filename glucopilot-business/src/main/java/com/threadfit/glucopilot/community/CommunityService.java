@@ -21,7 +21,7 @@ public class CommunityService {
     private static final String USER_FROM = " FROM user_account u LEFT JOIN user_profile p ON p.user_id=u.id AND p.is_deleted=0 ";
     private static final String ACTIVE = "u.is_deleted=0 AND u.account_status=1";
     private static final String USER_FIELDS = "u.id,COALESCE(NULLIF(p.nickname,''),'社区用户') nickname,COALESCE(p.avatar_url,'') avatar_url";
-    private static final String VISIBLE_COMMENT = " c.is_deleted=0 AND EXISTS(SELECT 1 FROM user_account u WHERE u.id=c.user_id AND " + ACTIVE + ") AND (c.root_comment_id IS NULL OR EXISTS(SELECT 1 FROM community_comment r WHERE r.id=c.root_comment_id AND r.news_id=c.news_id AND r.root_comment_id IS NULL AND r.is_deleted=0 AND EXISTS(SELECT 1 FROM user_account u WHERE u.id=r.user_id AND "+ACTIVE+"))) ";
+    private static final String VISIBLE_COMMENT = " c.is_deleted=0 AND c.is_hidden=0 AND EXISTS(SELECT 1 FROM user_account u WHERE u.id=c.user_id AND " + ACTIVE + ") AND (c.root_comment_id IS NULL OR EXISTS(SELECT 1 FROM community_comment r WHERE r.id=c.root_comment_id AND r.news_id=c.news_id AND r.root_comment_id IS NULL AND r.is_deleted=0 AND EXISTS(SELECT 1 FROM user_account u WHERE u.id=r.user_id AND "+ACTIVE+"))) ";
 
     private BizException missing() { return new BizException(ErrorCode.NOT_FOUND,"内容或用户不存在"); }
     private void requireUser(long userId) {
@@ -148,6 +148,39 @@ public class CommunityService {
         long total=jdbc.queryForObject("SELECT COUNT(*) FROM community_comment c WHERE "+filter,Long.class,news);
         return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
     }
+    /**
+     * 「我的评论」：我自己发出的评论与回复，新的在前。
+     * <p>
+     * 与 {@link #comments} 的两点不同，都是刻意的：
+     * <ol>
+     *   <li><b>不过 {@code VISIBLE_COMMENT}</b>：被 AI 隐藏的评论作者自己必须看得见（否则等于
+     *       "发了却没有"，只会引发重发和咨询），前端据 {@code hidden} 标注「已被系统隐藏」；</li>
+     *   <li><b>不要求文章仍可读</b>：文章下架/删除后评论仍是用户的历史，用
+     *       {@code articleAvailable} 告诉前端能不能点进去，而不是把记录整条吞掉。</li>
+     * </ol>
+     * 仍然排除自己删掉的评论（{@code is_deleted=1}）——那是用户主动删除，不该出现在"我发过的"里。
+     */
+    public PageResult<MyComment> myComments(long viewer,PageQuery q) {
+        requireUser(viewer);page(q);
+        String from=" FROM community_comment c LEFT JOIN cms_news n ON n.id=c.news_id "
+                + "WHERE c.user_id=? AND c.is_deleted=0 ";
+        long total=jdbc.queryForObject("SELECT COUNT(*)"+from,Long.class,viewer);
+        var rows=jdbc.query("SELECT c.id,c.news_id,c.content,c.created_at,c.root_comment_id,c.reply_to_comment_id,"
+                        +"c.is_hidden,n.title,n.is_deleted news_deleted,n.publish_status,"
+                        +"(SELECT COUNT(*) FROM community_comment r WHERE r.root_comment_id=c.id AND r.is_deleted=0 AND r.is_hidden=0) reply_count,"
+                        +"(SELECT COUNT(*) FROM community_comment_like l WHERE l.comment_id=c.id AND l.liked=1) like_count"
+                        +from+" ORDER BY c.id DESC LIMIT ? OFFSET ?",
+                (rs,i)->new MyComment(Long.toString(rs.getLong("id")),rs.getLong("news_id"),
+                        Objects.toString(rs.getString("title"),"文章已删除"),
+                        rs.getObject("news_deleted")!=null && rs.getInt("news_deleted")==0
+                                && rs.getObject("publish_status")!=null && rs.getInt("publish_status")==1,
+                        rs.getString("content"),time(rs,"created_at"),
+                        rs.getObject("root_comment_id")==null?null:rs.getObject("root_comment_id").toString(),
+                        rs.getObject("reply_to_comment_id")==null?null:rs.getObject("reply_to_comment_id").toString(),
+                        rs.getInt("is_hidden")==1,rs.getLong("reply_count"),rs.getLong("like_count")),
+                viewer,q.getPageSize(),q.offset());
+        return PageResult.of(q.getPageNum(),q.getPageSize(),total,rows);
+    }
     public CommentContext commentContext(long viewer,long news,long targetId) {
         requireUser(viewer);requireReadable(viewer,news);
         var targets=jdbc.query("SELECT c.* FROM community_comment c WHERE c.id=? AND c.news_id=? AND "+VISIBLE_COMMENT,(rs,i)->comment(viewer,rs,false),targetId,news);
@@ -201,7 +234,11 @@ public class CommunityService {
         if(rows.isEmpty()) throw new BizException(ErrorCode.INTERNAL_ERROR,"评论保存失败，请重试");
         var row=rows.getFirst();
         if(((Number)row.get("news_id")).longValue()!=news || !content.equals(row.get("content")) || ((Number)row.get("is_deleted")).intValue()!=0 || !Objects.equals(target,number(row.get("reply_to_comment_id")))) throw new BizException(ErrorCode.CONFLICT,"请求已使用，请刷新后重试");
-        var saved=jdbc.query("SELECT c.* FROM community_comment c WHERE c.id=? AND c.news_id=? AND "+VISIBLE_COMMENT,(rs,i)->comment(viewer,rs),row.get("id"),news);
+        // 回查刚插入的这条时**不能**套用 VISIBLE_COMMENT：评论是"先发后审"，
+        // AI 可能在插入与回查之间的几毫秒内把它判违规并置 is_hidden=1，
+        // 那时套可见性过滤会查不到行，作者收到的是"内容或用户不存在"这种完全误导的 404。
+        // 作者本人刚发的评论必须能拿到（前端据此立即渲染），列表侧仍然过滤隐藏。
+        var saved=jdbc.query("SELECT c.* FROM community_comment c WHERE c.id=? AND c.news_id=? AND c.is_deleted=0",(rs,i)->comment(viewer,rs),row.get("id"),news);
         if(saved.isEmpty()) throw missing();
         var recipients=new HashSet<Long>();Long author=articleUser(news);if(author!=null)recipients.add(author);
         if(target!=null)recipients.addAll(jdbc.queryForList("SELECT user_id FROM community_comment WHERE id=? AND news_id=? AND is_deleted=0",Long.class,target,news));

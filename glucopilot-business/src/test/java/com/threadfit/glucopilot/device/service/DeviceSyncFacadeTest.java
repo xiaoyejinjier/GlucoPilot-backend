@@ -1,12 +1,14 @@
 package com.threadfit.glucopilot.device.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.device.adapter.MockDeviceAdapter;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
+import com.threadfit.glucopilot.device.entity.DeviceSyncLog;
 import com.threadfit.glucopilot.device.entity.UserDevice;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,13 +35,16 @@ class DeviceSyncFacadeTest {
     private GlucoseIngestPort glucoseIngestPort;
     @Mock
     private UserDeviceMapper userDeviceMapper;
+    @Mock
+    private DeviceSyncLogMapper deviceSyncLogMapper;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private DeviceSyncFacade facade;
 
     @BeforeEach
     void setUp() {
-        facade = new DeviceSyncFacade(List.of(new MockDeviceAdapter()), glucoseIngestPort, userDeviceMapper);
+        facade = new DeviceSyncFacade(
+                List.of(new MockDeviceAdapter()), glucoseIngestPort, userDeviceMapper, deviceSyncLogMapper);
     }
 
     @Test
@@ -60,6 +65,7 @@ class DeviceSyncFacadeTest {
         verify(glucoseIngestPort).upsertByNode(captor.capture());
         assertEquals("device:MOCK", captor.getValue().remark());
         verify(userDeviceMapper, never()).updateById(any(UserDevice.class));
+        verify(deviceSyncLogMapper, never()).insert(any(DeviceSyncLog.class));
     }
 
     @Test
@@ -83,6 +89,13 @@ class DeviceSyncFacadeTest {
         ArgumentCaptor<UserDevice> captor = ArgumentCaptor.forClass(UserDevice.class);
         verify(userDeviceMapper).updateById(captor.capture());
         assertNotNull(captor.getValue().getLastSyncAt());
+        ArgumentCaptor<DeviceSyncLog> logCaptor = ArgumentCaptor.forClass(DeviceSyncLog.class);
+        verify(deviceSyncLogMapper).insert(logCaptor.capture());
+        assertEquals(7L, logCaptor.getValue().getDeviceId());
+        assertEquals(3L, logCaptor.getValue().getUserId());
+        assertEquals("MOCK", logCaptor.getValue().getProvider());
+        assertEquals(1, logCaptor.getValue().getSampleCount());
+        assertEquals(1, logCaptor.getValue().getCreatedCount());
     }
 
     @Test

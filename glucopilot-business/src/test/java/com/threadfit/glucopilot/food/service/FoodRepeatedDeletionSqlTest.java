@@ -35,7 +35,7 @@ class FoodRepeatedDeletionSqlTest {
             ddl.execute("ALTER TABLE food_nutrition ADD source_model VARCHAR(128)");
             ddl.execute(resource("V30__food_recognition_source_photo.sql"));
             // H2 does not support MySQL's VIRTUAL and compound ALTER index syntax.
-            String migration = resource("V42__food_active_name_uniqueness.sql");
+            String migration = resource("V44__food_active_name_uniqueness.sql");
             String expression = migration.substring(migration.indexOf("ADD COLUMN"), migration.indexOf(" VIRTUAL"));
             ddl.execute("ALTER TABLE food_nutrition " + expression);
             ddl.execute("ALTER TABLE food_nutrition DROP CONSTRAINT uk_cat_name");

@@ -34,6 +34,7 @@ class CommunityServiceTest {
         var replyMigration=new ResourceDatabasePopulator(new ClassPathResource("db/migration/V32__community_comment_replies.sql"));
         replyMigration.setSqlScriptEncoding("UTF-8");replyMigration.populate(migrationConnection);
         CommunityTestSchema.applyDraftMigration(migrationConnection);
+        CommunityTestSchema.applyModerationMigration(migrationConnection);
         jdbc.execute("ALTER TABLE cms_news ADD community_managed INT DEFAULT 0");
         for(long id=1;id<=4;id++) {
             jdbc.update("INSERT INTO user_account(id,phone,openid) VALUES(?,?,?)",id,"private-phone-"+id,"private-openid-"+id);

@@ -1,5 +1,9 @@
 # API 契约
 
+## 2026-10-27 三端集成与迁移顺序
+
+保留已发布的 V42__device_sync_log.sql 与 V43__community_moderation_ai.sql；此前未上传的食品有效名称唯一性迁移改为 V44__food_active_name_uniqueness.sql，SQL 内容及校验和不变。普通 V41/V42/V43 环境正常执行后续迁移即可。仅已应用本地旧食品 V42 的开发库使用 tools/ReconcileFoodMigrations.java：先 audit 精确核对脚本、描述与校验和，再 apply 全库备份、副本演练、事务调整版本登记，补执行正式设备/审核迁移；最后关闭乱序模式验证全部44个迁移。禁止对正常远端历史使用此工具或直接 repair 校验和。本次本机兼容已执行完成，原业务列数据逐表SHA-256一致。
+
 ## 本人点赞列表（2026-10-27）
 
 GET /api/v1/community/likes：需当前用户登录，PageQuery 分页，可选 keyword（去空白后最多80字，按标题字面子串匹配）。返回与 /community/collections 相同的 NewsListItem 分页结构；仅查询本人 news_user_action 中 is_liked=1、未删除的记录，并执行文章已发布、作者有效、阅读权限和本人隐藏偏好过滤。取消点赞后移出列表，不返回其他人的点赞；沿用动作记录更新时间倒序及文章ID倒序。复用既有点赞数据，无新增表或迁移。小程序社区快捷入口顺序为关注、我的点赞、我的收藏、信息、找糖友；旧关注爱心图标移给点赞，关注换新图标。点赞列表支持搜索、分页和打开文章，英文展示沿用文章翻译。
@@ -580,7 +584,7 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 
 ## 设备数据同步
 
-用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。传入 deviceSn 时须已绑定当前用户且启用，成功后刷新 last_sync_at。
+用户端通过 POST /api/v1/device/glucose-sync 提交厂商原始报文。请求体为 { provider, deviceSn?, payload }：provider 路由到对应适配器（MOCK / HUAWEI / HEALTH_CONNECT / APPLE_HEALTH / NIGHTSCOUT），适配器将 payload 转为统一血糖样本后按用户、业务日期和血糖节点幂等写入。MOCK 的 payload 为 { readings:[{ recordDate, nodeCode, value, unit, externalRecordId }] }。传入 deviceSn 时须已绑定当前用户且启用，成功后刷新 last_sync_at，并写入 device_sync_log 一条流水（sample_count / created_count）。
 
 ## 用户端设备管理
 
@@ -591,8 +595,9 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | GET /api/v1/devices | C 端登录 | 当前用户已绑定设备列表（含禁用项，前端按 status 展示） |
 | POST /api/v1/devices/bind | C 端登录 | 自助绑定：SN 空闲则新建并归属当前用户；已有空闲档案可认领；已被他人占用则冲突。建议写操作带 X-Idempotency-Key |
 | POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
+| GET /api/v1/devices/{id}/sync-logs?limit=10 | C 端登录 | 本人设备近 N 次同步流水（默认 10，最大 50）；按时间倒序；他人设备 id 业务拒绝 |
 
-绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。
+绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
 
 ## 管理端设备档案
 
@@ -624,7 +629,7 @@ snapshot格式：schemaVersion=1；sampledAt为UTC ISO时间；host={cpuPercent(
 - 周曲线分别绘制实测日均值和推荐预测日均值；缺失预测保留空值。无需新建表或迁移已有数据。
 # 2026-10-26 食品重复新增后的删除
 
-食品唯一性限定为未删除食品的 `(category_code, food_name)`；历史已删除行不占用名称。V42 使用可空生成列 `active_name_marker`（未删除为 1，已删除为 NULL）替换旧的 `(category_code, food_name, is_deleted)` 唯一索引。反复新增/识别、删除同名食品不再触发唯一键冲突；保留所有历史行、营养快照和照片来源关联，删除仍一次性写 is_deleted/deleted_at/deleted_by。管理端删除 API 及权限不变。
+食品唯一性限定为未删除食品的 `(category_code, food_name)`；历史已删除行不占用名称。V44 使用可空生成列 `active_name_marker`（未删除为 1，已删除为 NULL）替换旧的 `(category_code, food_name, is_deleted)` 唯一索引。反复新增/识别、删除同名食品不再触发唯一键冲突；保留所有历史行、营养快照和照片来源关联，删除仍一次性写 is_deleted/deleted_at/deleted_by。管理端删除 API 及权限不变。
 # 2026-10-26 九时段进度、正餐照片与个人资料输入
 
 - 记录页“已记”恢复九时段：六个有效实测 + 三个已保存正餐，每时段最多计一次，分母 9。曲线仍保留六个实测横轴及独立推荐预测，实测统计不混入预测。
@@ -632,3 +637,8 @@ snapshot格式：schemaVersion=1；sampledAt为UTC ISO时间；host={cpuPercent(
 - 饮食详情 mediaId 不变，mediaUrl 改为上述稳定相对路径。小程序使用当前 API 地址携带 Bearer 下载为临时图片，点击预览本地图片；切后台/卸载/换账号时使旧请求失效并回收临时文件，失败提供重试。
 - 手机号码只能经现有验证码绑定接口修改，资料页点击号码行跳转账号安全并展开绑定面板；返回后只刷新号码，不覆盖其他未保存资料。
 - 确诊时间沿用 diagnosedYm/YYYY-MM，使用年月日期选择器，不允许晚于当前月；用药沿用 medication/最长256字符，常见名称多选加“其他”输入，不自动推荐、添加药物或剂量。旧自由文本原样保留到用户主动修改，切换糖尿病类型不清除已有用药。无需数据库迁移。
+
+- 社区评论审核补充：GET /admin/v1/community/comments 分页列出评论的 AI 审核结果，含已被隐藏的评论（status=SKIPPED/PENDING/REVIEWING/DONE、verdict=PENDING/PASS/REJECT/ERROR、hidden=0/1、keyword 匹配正文或作者昵称且最多80字、pageSize 上限50），要求 content:news:list。列表不过公开可见性过滤，文章事后下架也不影响历史评论出现在审核视角；返回原文、所属文章、作者社区号与昵称，以及 aiCategory/aiSeverity/aiConfidence（仅 REJECT 有值）、aiReason、aiModel、aiPromptVer、hidden。
+- 误杀兜底：POST /admin/v1/community/comments/{id}/restore 仅把 is_hidden 归零，不改写 ai_verdict（保留机器判定与 ADMIN/RESTORE 日志），幂等；要求管理员角色与 content:news:edit。评论为先发后审，AI 判 REJECT 立即隐藏；ai_verdict=ERROR 的评论不隐藏（模型故障不应让社区停摆）但也不算通过，运营需按「AI 判定：异常」复查。
+- 管理端页面：文章审核沿用 GET/POST /admin/v1/community/articles 与 review/retry-ai；评论审核对应「社区评论管理」页，数据来自上述列表接口。
+- C 端补「我的评论」：GET /api/v1/community/comments/mine 分页返回本人发出的评论与回复（pageNum/pageSize，上限50），新的在前。刻意不过公开可见性过滤：被 AI 隐藏（is_hidden=1）的评论本人仍可见并由前端标注「已被系统隐藏」，避免用户以为没发出去；文章被删除或下架时记录仍返回、由 articleAvailable=false 表达，不整条吞掉。返回 id/newsId/articleTitle/articleAvailable/content/createdAt/rootCommentId/replyToCommentId/hidden/replyCount/likeCount。本人主动删除（is_deleted=1）的评论不返回。点击条目按 news-detail?id=&comments=1&commentId= 定位高亮。

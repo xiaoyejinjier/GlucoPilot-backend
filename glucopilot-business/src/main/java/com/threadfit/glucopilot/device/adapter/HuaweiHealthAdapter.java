@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.device.adapter;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.device.adapter.support.DeviceProviders;
@@ -96,7 +96,7 @@ public class HuaweiHealthAdapter implements DevicePayloadAdapter {
         }
         LocalDateTime at = parseTime(row, "startTime");
         List<UnifiedGlucoseSample> list = new ArrayList<>();
-        Iterator<Map.Entry<String, JsonNode>> fields = value.fields();
+        Iterator<Map.Entry<String, JsonNode>> fields = value.properties().iterator();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> e = fields.next();
             String node = MealSlotMapper.fromHuaweiValueKey(e.getKey());

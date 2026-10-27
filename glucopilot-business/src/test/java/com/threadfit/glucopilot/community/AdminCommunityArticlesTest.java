@@ -38,6 +38,7 @@ class AdminCommunityArticlesTest {
             migration.setSqlScriptEncoding("UTF-8");migration.populate(migrationConnection);
         }
         CommunityTestSchema.applyDraftMigration(migrationConnection);
+        CommunityTestSchema.applyModerationMigration(migrationConnection);
         jdbc.update("INSERT INTO user_account(id) VALUES(2)");
         jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(2,'用户小明')");
         article(10,"官方已发布",0,1);article(11,"官方草稿",0,0);article(12,"官方下架",0,2);
@@ -46,8 +47,9 @@ class AdminCommunityArticlesTest {
         jdbc.update("INSERT INTO community_article(news_id,author_user_id,state,ai_verdict) VALUES(20,2,'PENDING_ADMIN','PASS'),(21,2,'PUBLISHED','PASS'),(22,2,'PUBLISHED','PASS')");
         service=new CommunityPublicationService(jdbc,mock(CmsNewsMapper.class),new CommunityService(jdbc));
     }
+    // H2 rounds DATETIME to seconds; seed already-published fixtures before the current instant.
     private void article(long id,String title,int managed,int status) {
-        jdbc.update("INSERT INTO cms_news(id,title,summary_text,content_body,channel_code,publish_at,publish_status,community_managed) VALUES(?,?,?,'完整正文',4,CURRENT_TIMESTAMP,?,?)",id,title,"文章摘要",status,managed);
+        jdbc.update("INSERT INTO cms_news(id,title,summary_text,content_body,channel_code,publish_at,publish_status,community_managed) VALUES(?,?,?,'完整正文',4,DATEADD('SECOND',-2,CURRENT_TIMESTAMP),?,?)",id,title,"文章摘要",status,managed);
     }
     @AfterEach void cleanup() throws Exception { try { jdbc.execute("DROP ALL OBJECTS"); } finally { migrationConnection.close(); } }
     private PageResult<Article> list(String state,String source,String keyword) { return service.adminArticles(state,source,keyword,new PageQuery()); }
@@ -502,10 +504,10 @@ class AdminCommunityArticlesTest {
         jdbc.update("UPDATE community_article SET state='AI_PENDING' WHERE news_id=20");
         var old=queue.claim();assertNotNull(old);assertNull(queue.claim());
         jdbc.update("UPDATE community_article SET revision=2,state='AI_PENDING' WHERE news_id=20");
-        var current=queue.claim();assertFalse(queue.finish(old,"PASS","旧结果","model"));
-        assertTrue(queue.finish(current,"PASS","初审通过，等待终审","model"));
+        var current=queue.claim();assertFalse(queue.finish(old,ModerationVerdict.pass("旧结果"),"model","moderation@v1"));
+        assertTrue(queue.finish(current,ModerationVerdict.pass("初审通过，等待终审"),"model","moderation@v1"));
         assertEquals("PENDING_ADMIN",service.get(null,20,true).state());assertEquals(0,jdbc.queryForObject("SELECT publish_status FROM cms_news WHERE id=20",Integer.class));
-        assertFalse(queue.finish(current,"PASS","重复结果","model"));
+        assertFalse(queue.finish(current,ModerationVerdict.pass("重复结果"),"model","moderation@v1"));
     }
     @Test void interruptedModerationBecomesRetryableErrorInsteadOfAutomaticPass() {
         var queue=new CommunityModerationQueue(jdbc,new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())),service);

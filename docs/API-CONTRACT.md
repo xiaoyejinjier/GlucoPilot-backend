@@ -26,6 +26,14 @@
 
 **迁移与前端清理**：V45 新建 user_account_cancellation、openid 放宽为 NULL、chk_ua_status 扩展至 0..4；V46 verify_channel 扩为 1=短信/2=邮箱/3=微信并新增 pre_status 列；V47 为 auth_sms_code / auth_email_code 增加 scene（login/bind/cancel/recover，默认 login）与（目标,scene,is_used）索引，存量按 login 处理。前端注销或“暂不使用”后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
 
+## 私信首次联系限制（2026-10-27）
+
+未关注也可以向有效用户发送第一条私信；对方尚未回复且未互相关注时，同一发送者对同一收件人累计最多一条，不按已读状态或取消/重新关注重置。收到过对方消息属于可回复会话，可以继续发送；双方当前互相关注也可继续发送。取消关注不会删除消息或清空历史额度，原双向会话正常使用。
+
+GET /api/v1/community/messages/{peerUserId} 在原 records/hasMore/nextBeforeId 上增加 sendPermission:{canSend:boolean,following:boolean,mutualFollowing:boolean,state:FIRST_MESSAGE|WAITING_REPLY|OPEN}。本人/对方身份仍校验、其他会话不可读，旧客户端可忽略新增字段。POST同路径仍接收content/clientRequestId、返回原Message；权限由服务端实时校验，等待状态HTTP403/code40301，提示“等待对方回复或相互关注后可继续发信息”。发送时按用户ID顺序锁定有效双方，先处理同clientRequestId的幂等重试，再检查额度并写入；并发不同ID也只允许第一条成功，同ID同内容重试返回原消息、不多占额度。前端按钮不替代后端校验。
+
+聊天页进入及前台轮询刷新权限；首条发送成功即显示等待提示并阻止文本、语音、表情的发送操作。等待时未关注的一方可直接关注，对方回复或互关后恢复发送；刷新失败保留已知状态，新页面无法确认权限时先禁发并提供重试。换账号、离页或旧请求迟到不回填。复用既有community_message/community_follow及账号锁，不新增表或修改旧迁移。
+
 ## 2026-10-27 三端集成与迁移顺序
 
 保留已发布的 V42__device_sync_log.sql 与 V43__community_moderation_ai.sql；此前未上传的食品有效名称唯一性迁移改为 V44__food_active_name_uniqueness.sql，SQL 内容及校验和不变。普通 V41/V42/V43 环境正常执行后续迁移即可。仅已应用本地旧食品 V42 的开发库使用 tools/ReconcileFoodMigrations.java：先 audit 精确核对脚本、描述与校验和，再 apply 全库备份、副本演练、事务调整版本登记，补执行正式设备/审核迁移；最后关闭乱序模式验证全部44个迁移。禁止对正常远端历史使用此工具或直接 repair 校验和。本次本机兼容已执行完成，原业务列数据逐表SHA-256一致。

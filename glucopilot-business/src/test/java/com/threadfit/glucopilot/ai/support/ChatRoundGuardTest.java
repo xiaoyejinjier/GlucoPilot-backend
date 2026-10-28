@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -50,6 +52,33 @@ class ChatRoundGuardTest {
         guard.release(KEY);
         guard.release(KEY);
         assertTrue(guard.inFlightCount() == 0);
+    }
+
+    @Test
+    void 拿不到执行权时应返回空令牌() {
+        assertNotNull(guard.tryAcquireToken(KEY));
+        assertNull(guard.tryAcquireToken(KEY), "同一条用户消息不能同时生成两轮");
+    }
+
+    /**
+     * 释放有两条路径（done 之前、doFinally 兜底）。第一次释放后下一轮可能立刻拿到同一个 key，
+     * 兜底那次若不看令牌就删，会把<b>别人的</b>锁删掉，单飞保护静默失效。
+     */
+    @Test
+    void 带令牌释放不能删掉下一轮刚拿到的锁() {
+        Long first = guard.tryAcquireToken(KEY);
+        assertNotNull(first);
+
+        guard.release(KEY, first);
+        Long second = guard.tryAcquireToken(KEY);
+        assertNotNull(second, "上一轮释放后必须能立刻重来");
+
+        // 兜底释放（还拿着上一轮的旧令牌）——不能把第二轮的执行权放掉
+        guard.release(KEY, first);
+        assertFalse(guard.tryAcquire(KEY), "旧令牌的兜底释放不应影响新一轮");
+
+        guard.release(KEY, second);
+        assertTrue(guard.tryAcquire(KEY));
     }
 
     @Test

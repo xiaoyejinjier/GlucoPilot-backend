@@ -17,6 +17,7 @@ public enum ErrorCode {
     BIZ_REJECTED(HttpStatus.BAD_REQUEST, 40001, "业务校验失败或凭证错误"),
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, 40100, "未登录或 Token 失效"),
     FORBIDDEN(HttpStatus.FORBIDDEN, 40300, "无权限、账号禁用或注销中"),
+    MESSAGE_REQUEST_PENDING(HttpStatus.FORBIDDEN, 40301, "等待对方回复或相互关注后可继续发信息"),
     NOT_FOUND(HttpStatus.NOT_FOUND, 40400, "资源不存在或不属于当前用户"),
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, 40500, "接口不支持此请求方法，请确认后端版本与请求方式"),
     CONFLICT(HttpStatus.CONFLICT, 40900, "冲突（唯一键、乐观锁、账号占用）"),

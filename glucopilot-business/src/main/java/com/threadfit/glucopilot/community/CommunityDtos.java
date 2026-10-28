@@ -38,7 +38,8 @@ public final class CommunityDtos {
                             boolean hidden, long replyCount, long likeCount) {}
     public record Message(String id, String senderId, String recipientId, String content,
                           LocalDateTime createdAt, LocalDateTime readAt, boolean mine) {}
-    public record Messages(List<Message> records, boolean hasMore, String nextBeforeId) {}
+    public record MessagePermission(boolean canSend,boolean following,boolean mutualFollowing,String state) {}
+    public record Messages(List<Message> records, boolean hasMore, String nextBeforeId,MessagePermission sendPermission) {}
     public record Conversation(Profile peer, Message lastMessage, long unreadCount) {}
     public record Unread(long unreadCount, String latestMessageId, String latestSenderId) {}
 }

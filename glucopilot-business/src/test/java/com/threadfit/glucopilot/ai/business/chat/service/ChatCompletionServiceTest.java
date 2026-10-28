@@ -102,13 +102,16 @@ class ChatCompletionServiceTest {
             mock(com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService.class);
     private final ChatContextRecorder chatContextRecorder = mock(ChatContextRecorder.class);
 
+    /** 真实的单飞保护（不是 mock）：用例要断言"done 事件到达时锁已经放开"。 */
+    private final ChatRoundGuard roundGuard = new ChatRoundGuard();
+
     private ChatCompletionService service;
 
     @BeforeEach
     void setUp() {
         service = new ChatCompletionServiceImpl(registry, chatMessageMapper, chatSessionService,
                 chatMessageService, ownedMediaResolver, visionAnalyzer, new EnglishPreambleGuard(),
-                new ChatRoundGuard(), new JsonUtils(new ObjectMapper()), promptTemplateService,
+                roundGuard, new JsonUtils(new ObjectMapper()), promptTemplateService,
                 toolRegistry, new TokenEstimator(), chatSummaryService,
                 userChatMemoryService, chatContextRecorder);
         when(promptTemplateService.systemPrompt(any())).thenReturn("system prompt");
@@ -172,6 +175,8 @@ class ChatCompletionServiceTest {
         assertEquals("delta", events.get(0).event());
         assertEquals("error", events.get(1).event());
         assertTrue(payload(events.get(1)).contains("\"code\":50000"), payload(events.get(1)));
+        // 错误事件到达客户端时执行权必须已放开，否则用户点"重试"会收到"正在生成中"
+        assertEquals(0, roundGuard.inFlightCount(), "error 事件发出时执行权必须已经释放");
 
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
                 eq("部分内容"), anyString(), any(), any(),
@@ -330,6 +335,10 @@ class ChatCompletionServiceTest {
         useModel(Flux.just(textChunk("第一轮")));
 
         service.complete(USER_ID, SESSION_ID, request()).collectList().block();
+
+        // 关键：done 到达时就该放开——doFinally 是"先传播 onComplete 再执行回调"，
+        // 只靠它会让"收到 done 立刻重发"偶发被判正在生成中（CI 上曾稳定复现）
+        assertEquals(0, roundGuard.inFlightCount(), "done 事件发出时执行权必须已经释放");
 
         // 第二轮不应再抛"正在生成中"（此时会因为 mock 的幂等回查返回 null 而正常开流）
         assertNotNull(service.complete(USER_ID, SESSION_ID, request()));

@@ -43,6 +43,11 @@ public class DataExportService {
         } catch(Exception ex) {String message=ex instanceof BizException?ex.getMessage():"文件生成失败，请稍后重试";jdbc.update("UPDATE data_export_task SET task_status=3,error_msg=?,finished_at=CURRENT_TIMESTAMP WHERE id=?",message,id);}
         return get(viewer,id);
     }
+    /** 账号注销：物理删除导出任务与导出文件（data_export_file 是 LONGBLOB，无对象存储副本）。 */
+    @Transactional public void purgeAccountData(long user){
+        jdbc.update("DELETE FROM data_export_file WHERE task_id IN (SELECT id FROM data_export_task WHERE user_id=?)",user);
+        jdbc.update("DELETE FROM data_export_task WHERE user_id=?",user);
+    }
     public byte[] file(Long viewer,long id){var task=get(viewer,id);if(!task.status().equals("done"))throw new BizException(ErrorCode.CONFLICT,"导出文件尚未生成，请稍后再试");var bytes=jdbc.queryForList("SELECT file_bytes FROM data_export_file WHERE task_id=?",byte[].class,id);if(bytes.isEmpty())throw missing();byte[] stored=bytes.getFirst();if(stored.length>=5&&stored[0]=='%'&&stored[1]=='P'&&stored[2]=='D'&&stored[3]=='F'&&stored[4]=='-')return stored;
         // Convert completed legacy workbooks from their saved snapshot, never from current health records.
         try(var book=new XSSFWorkbook(new ByteArrayInputStream(stored))){return ExportPdf.create(task,legacy(book,"血糖记录",new String[]{"record_date","node_code","glucose_value","source_type","recorded_at","remark"}),legacy(book,"饮食记录",new String[]{"record_date","node_code","foods_text","carbs_g","hunger_level","supplement_text","recorded_at"}));}

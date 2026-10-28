@@ -127,6 +127,13 @@ public class HealthProfileServiceImpl implements HealthProfileService {
         return toHealthView(entity);
     }
 
+    /** 账号注销：物理删除健康档案（幂等，重复调用返回 0 行受影响）。 */
+    @Override
+    @Transactional
+    public void purgeAccountData(Long userId) {
+        userHealthMapper.purgeByUserId(userId);
+    }
+
     /** 读取当前用户健康档案行；行缺失时兜底插入一条"未填写(0)"的新行并返回，
      *  避免历史数据导致空指针 500；与 user 侧 requireProfile/requireAccount 行为一致。 */
     private UserHealth requireHealth(Long userId) {

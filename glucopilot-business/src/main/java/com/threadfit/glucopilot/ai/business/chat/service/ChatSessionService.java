@@ -50,4 +50,11 @@ public interface ChatSessionService {
 
     /** 实体 → 2.23 出参。 */
     ChatDtos.SessionResponse toResponse(ChatSession session);
+
+    /**
+     * 账号注销：物理删除该用户全部对话数据（消息 / 分片 / 工具调用 / 会话）。
+     * <p>
+     * 独立事务、幂等；由注销 worker 经 user 模块编排调用，不经过 controller。
+     */
+    void purgeAccountData(Long userId);
 }

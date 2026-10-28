@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.business.chat.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -115,4 +116,8 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
             + "AND (summary_upto_msg_id IS NULL OR summary_upto_msg_id < #{uptoMsgId})")
     int updateSummary(@Param("sessionId") Long sessionId, @Param("summary") String summary,
                       @Param("uptoMsgId") Long uptoMsgId);
+
+    /** 账号注销：物理删除该用户全部会话（历史删除态一并清掉）。 */
+    @Delete("DELETE FROM chat_session WHERE user_id = #{userId}")
+    int purgeByUserId(@Param("userId") Long userId);
 }

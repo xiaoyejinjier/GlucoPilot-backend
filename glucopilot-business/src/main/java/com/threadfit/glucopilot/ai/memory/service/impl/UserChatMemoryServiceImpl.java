@@ -247,6 +247,12 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         return true;
     }
 
+    /** 账号注销：物理删除该用户全部长期记忆。 */
+    @Override
+    public void purgeAccountData(Long userId) {
+        memoryMapper.purgeByUserId(userId);
+    }
+
     // ------------------------------------------------------------------ 抽取（异步）
 
     /** 会话结束时调用：异步抽取该会话的长期记忆。不阻塞、不抛异常。 */

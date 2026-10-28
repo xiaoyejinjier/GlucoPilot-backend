@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.memory.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 import com.threadfit.glucopilot.ai.memory.entity.ChatUserMemoryEntity;
@@ -35,4 +36,13 @@ public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
     @Update("UPDATE chat_user_memory SET is_deleted = 1, deleted_at = NOW(3), deleted_by = #{deletedBy} "
             + "WHERE user_id = #{userId} AND is_deleted = 0")
     int logicDeleteAllByUser(@Param("userId") Long userId, @Param("deletedBy") Long deletedBy);
+
+    /**
+     * 账号注销：物理删除该用户的全部长期记忆。
+     * <p>
+     * 与上面的逻辑删除刻意不同——注销后"系统记过什么"不能以任何形式留存，
+     * 逻辑删除的行仍然可读，不满足删除权。
+     */
+    @Delete("DELETE FROM chat_user_memory WHERE user_id = #{userId}")
+    int purgeByUserId(@Param("userId") Long userId);
 }

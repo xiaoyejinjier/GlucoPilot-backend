@@ -14,6 +14,8 @@ public class AuthEmailCode extends BaseEntity {
 
     private String email;
     private String verifyCode;
+    /** 发送场景 login/bind/cancel/recover，消费时必须匹配。 */
+    private String scene;
     private LocalDateTime expireAt;
     private Integer isUsed;
     private String clientIp;

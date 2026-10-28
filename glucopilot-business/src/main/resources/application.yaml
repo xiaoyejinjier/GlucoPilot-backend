@@ -328,6 +328,14 @@ glucopilot:
   mail:
     from: ${MAIL_FROM:}
 
+# 账号注销异步清理 worker（方案 §6.4）
+# enabled=false 时不做任何清理：只影响后台执行，C 端提交注销仍然生效并立即失效会话
+account:
+  cancellation:
+    enabled: ${ACCOUNT_CANCELLATION_ENABLED:true}
+    initial-delay: ${ACCOUNT_CANCELLATION_INITIAL_DELAY:20000}
+    poll-delay: ${ACCOUNT_CANCELLATION_POLL_DELAY:30000}
+
 # Official RuoYi framework settings; secrets supplied by deployment environment.
 ruoyi:
   name: GlucoPilot

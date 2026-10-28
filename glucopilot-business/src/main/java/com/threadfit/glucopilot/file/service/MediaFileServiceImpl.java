@@ -137,6 +137,34 @@ public class MediaFileServiceImpl implements MediaFileService {
     }
 
     /**
+     * 账号注销：删除 C 端业务媒体（bizType 1..6）的对象与行；7/8 社区配图/视频保留。
+     * <p>
+     * 顺序：<b>先删对象，再删行</b>。反过来的话行没了就再也拿不到 storageKey，
+     * 一旦对象删除失败就成了"永久孤儿"，重试也救不回来。
+     * <p>
+     * 共用一个 storageKey 的其他行仍存在时不删对象——同一张图可能被多行业务引用
+     * （例如同一次上传登记出来的头像与相册），按用户全删会让别人的引用变成 404。
+     */
+    @Override
+    @Transactional
+    public void purgeAccountData(Long userId) {
+        List<MediaFile> owned = mediaFileMapper.selectList(new LambdaQueryWrapper<MediaFile>()
+                .eq(MediaFile::getUserId, userId)
+                .between(MediaFile::getBizType,
+                        CodeEnum.MediaBizType.AVATAR.getCode(), CodeEnum.MediaBizType.CHAT_VOICE.getCode()));
+        for (MediaFile file : owned) {
+            String storageKey = file.getStorageKey();
+            if (storageKey == null || storageKey.isBlank()) {
+                continue;
+            }
+            if (mediaFileMapper.countOtherReferences(storageKey, userId) == 0) {
+                objectStorageService.deleteObject(storageKey);
+            }
+        }
+        mediaFileMapper.purgeUserBusinessFiles(userId);
+    }
+
+    /**
      * 落库入口：写入一条 media_file，fileUrl 也由此处统一生成（file_url 由服务端 resolve，非客户端传入）。
      */
     private MediaFile insertMediaFile(MediaBizType bizType, RegisterRequest request, Long userId) {

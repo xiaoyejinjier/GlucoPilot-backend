@@ -53,6 +53,16 @@ public interface ObjectStorageService {
      */
     byte[] getObject(String storageKey);
 
+    /**
+     * 删除对象（账号注销清理用）。
+     *
+     * <p>契约：<b>幂等</b>——对象不存在视为成功，不抛异常；只有真正删除失败才抛出。
+     * 调用方按“失败可重试”处理，所以这里不能把“已经没了”当成错误。
+     *
+     * @param storageKey {@link #buildStorageKey} 生成的对象 Key
+     */
+    void deleteObject(String storageKey);
+
     /** 当前实现对应的 provider 落库值。 */
     StorageProvider provider();
 

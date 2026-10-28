@@ -24,7 +24,7 @@ public interface CodeEnum {
     @Getter
     @RequiredArgsConstructor
     enum AccountStatus implements CodeEnum {
-        DISABLED(0), NORMAL(1), CANCELLING(2);
+        DISABLED(0), NORMAL(1), CANCELLING(2), CANCELLED(3), CANCELLED_RECOVERABLE(4);
         private final int code;
     }
 
@@ -174,6 +174,38 @@ public interface CodeEnum {
     @RequiredArgsConstructor
     enum ThemeCode implements CodeEnum {
         GREEN(1), TEAL(2), SIMPLE(3);
+        private final int code;
+    }
+
+    /** 注销模式（user_account_cancellation.mode）。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum CancellationMode implements CodeEnum {
+        IMMEDIATE(1), ISOLATE_7D(2);
+        private final int code;
+    }
+
+    /** 注销状态（user_account_cancellation.status）。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum CancellationStatus implements CodeEnum {
+        PENDING(0), RUNNING(1), EXECUTED(2), RECOVERED(3), FAILED(4);
+        private final int code;
+    }
+
+    /** 注销原因（user_account_cancellation.reason_code，可空）。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum CancellationReason implements CodeEnum {
+        NOT_USING(1), PRIVACY(2), EXPERIENCE(3), OTHER(4);
+        private final int code;
+    }
+
+    /** 注销验证通道（user_account_cancellation.verify_channel）：1短信 2邮箱 3微信(wx.login code 现场验证)。 */
+    @Getter
+    @RequiredArgsConstructor
+    enum CancellationVerifyChannel implements CodeEnum {
+        SMS(1), EMAIL(2), WECHAT(3);
         private final int code;
     }
 }

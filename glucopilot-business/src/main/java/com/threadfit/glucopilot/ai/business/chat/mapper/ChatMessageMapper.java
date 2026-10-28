@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.business.chat.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -121,4 +122,13 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
             + "</script>")
     List<java.util.Map<String, Object>> selectLastMessagePerSession(
             @Param("sessionIds") java.util.Collection<Long> sessionIds);
+
+    /**
+     * 账号注销：物理删除该用户全部消息。
+     * <p>
+     * 必须<b>先于</b> chat_session 删除执行：会话没了就再也找不到归属。
+     * 按 user_id 而不是 session_id 删，才能同时覆盖"已逻辑删除但没被物理清除"的历史会话消息。
+     */
+    @Delete("DELETE FROM chat_message WHERE user_id = #{userId}")
+    int purgeByUserId(@Param("userId") Long userId);
 }

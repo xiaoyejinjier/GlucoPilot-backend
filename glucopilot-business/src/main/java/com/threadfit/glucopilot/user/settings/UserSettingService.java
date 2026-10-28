@@ -104,6 +104,12 @@ public class UserSettingService {
         return created;
     }
 
+    /** 账号注销：物理删除偏好设置行（纯用户侧数据，无留存理由）。 */
+    @Transactional
+    public void purgeAccountData(Long userId) {
+        userSettingMapper.purgeByUserId(userId);
+    }
+
     static Integer toFlag(Boolean value) {
         return Boolean.TRUE.equals(value) ? 1 : 0;
     }

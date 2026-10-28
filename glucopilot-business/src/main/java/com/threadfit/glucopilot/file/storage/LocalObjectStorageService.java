@@ -101,6 +101,15 @@ public class LocalObjectStorageService implements ObjectStorageService {
         }
     }
 
+    @Override
+    public void deleteObject(String storageKey) {
+        try {
+            Files.deleteIfExists(resolvePath(storageKey));
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "删除文件失败");
+        }
+    }
+
     /** Newly introduced article drafts must never bypass article visibility via the local preview route. */
     public byte[] getPublicObject(String storageKey) {
         Path relative=root.relativize(resolvePath(storageKey));

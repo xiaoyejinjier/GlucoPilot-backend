@@ -9,6 +9,7 @@ import com.threadfit.glucopilot.file.vo.FileVos.UploadCredential;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
 import io.minio.StatObjectArgs;
 import io.minio.errors.ErrorResponseException;
 import lombok.extern.slf4j.Slf4j;
@@ -130,6 +131,19 @@ public class MinioObjectStorageService implements ObjectStorageService {
             throw unavailable("read",e);
         } catch (Exception e) {
             throw unavailable("read",e);
+        }
+    }
+
+    /** removeObject 本身幂等：对象不存在也返回成功，正好符合注销清理“已删即成功”的契约。 */
+    @Override
+    public void deleteObject(String storageKey) {
+        try {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(props.getBucket())
+                    .object(storageKey)
+                    .build());
+        } catch (Exception e) {
+            throw unavailable("delete",e);
         }
     }
 

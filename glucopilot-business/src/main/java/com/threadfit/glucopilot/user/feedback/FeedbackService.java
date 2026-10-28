@@ -53,6 +53,12 @@ public class FeedbackService {
         return PageResult.of(mapped);
     }
 
+    /** 账号注销：物理删除该用户提交的反馈（正文可能含健康信息）。 */
+    @Transactional
+    public void purgeAccountData(Long userId) {
+        feedbackMapper.purgeByUserId(userId);
+    }
+
     private static FeedbackDtos.FeedbackItem toItem(Feedback f) {
         return FeedbackDtos.FeedbackItem.builder()
                 .id(String.valueOf(f.getId()))

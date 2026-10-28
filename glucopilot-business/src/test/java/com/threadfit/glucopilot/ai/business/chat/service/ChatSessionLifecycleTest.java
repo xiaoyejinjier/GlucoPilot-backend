@@ -64,6 +64,11 @@ class ChatSessionLifecycleTest {
     private ChatSessionMapper chatSessionMapper;
     @Mock
     private ChatMessageMapper chatMessageMapper;
+    /** 注销清理用：本用例不涉及，只要求构造参数齐备。 */
+    @Mock
+    private com.threadfit.glucopilot.ai.business.chat.mapper.ChatContextMapper chatContextMapper;
+    @Mock
+    private com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper chatToolCallMapper;
     @Mock
     private AiChatClientRegistry chatClientRegistry;
     @Mock
@@ -80,8 +85,9 @@ class ChatSessionLifecycleTest {
     @BeforeEach
     void setUp() {
         properties = new AIProperties();
-        service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, properties,
-                chatClientRegistry, promptTemplateService, userChatMemoryService);
+        service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, chatContextMapper,
+                chatToolCallMapper, properties, chatClientRegistry, promptTemplateService,
+                userChatMemoryService);
     }
 
     private static ChatSession session(Long id, int status, boolean deleted, boolean pinned) {

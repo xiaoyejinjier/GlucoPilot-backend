@@ -116,7 +116,7 @@ public class UserAccountService {
     /** 换绑手机号：先验验证码（避免账号枚举），再查占用。 */
     @Transactional
     public UserDtos.PhoneBindResult bindPhone(Long userId, UserDtos.PhoneBindRequest request) {
-        authService.consumeSmsCode(request.getPhone(), request.getVerifyCode());
+        authService.consumeSmsCode(request.getPhone(), request.getVerifyCode(), "bind");
 
         UserAccount account = requireAccount(userId);
         if (request.getPhone().equals(account.getPhone())) {
@@ -135,7 +135,7 @@ public class UserAccountService {
 
     public UserDtos.EmailBindResult bindEmail(Long userId, UserDtos.EmailBindRequest request) {
         String email = EmailUtils.normalize(request.getEmail());
-        authService.consumeEmailCode(email, request.getVerifyCode());
+        authService.consumeEmailCode(email, request.getVerifyCode(), "bind");
         UserAccount account = requireAccount(userId);
         if (email.equals(account.getEmail())) {
             return UserDtos.EmailBindResult.builder().emailMasked(EmailUtils.mask(account.getEmail())).build();
@@ -175,6 +175,18 @@ public class UserAccountService {
         created.setGender(0);
         userProfileMapper.insert(created);
         return created;
+    }
+
+    /**
+     * 账号注销：写墓碑 + 资料脱敏（同一事务）。
+     * <p>
+     * 两件事必须一起成功：只脱敏不写墓碑，账号还能登录；只写墓碑不脱敏，
+     * 社区仍能显示真实昵称/头像。这是清理链路的最后一步，调用前所有业务数据已删完。
+     */
+    @Transactional
+    public void anonymizeAccount(Long userId) {
+        userProfileMapper.anonymizeByUserId(userId);
+        userAccountMapper.tombstoneById(userId);
     }
 
     private static String nullIfBlank(String value) {

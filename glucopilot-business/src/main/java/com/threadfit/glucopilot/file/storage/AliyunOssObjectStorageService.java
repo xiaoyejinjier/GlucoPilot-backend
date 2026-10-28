@@ -70,6 +70,17 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
         }
     }
 
+    /** OSS deleteObject 幂等：对象不存在不报错。 */
+    @Override
+    public void deleteObject(String storageKey) {
+        try {
+            ossClient.deleteObject(props.getBucket(), storageKey);
+        } catch (Exception e) {
+            log.warn("OSS 删除对象失败 bucket={} key={}", props.getBucket(), storageKey, e);
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "删除文件失败");
+        }
+    }
+
     @Override
     public StorageProvider provider() {
         return StorageProvider.ALIYUN_OSS;

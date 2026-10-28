@@ -1,25 +1,30 @@
 package com.threadfit.glucopilot.file.storage;
 
+import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.enums.CodeEnum.StorageProvider;
+import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.file.config.StorageProperties;
 import com.threadfit.glucopilot.file.vo.FileVos.UploadCredential;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -28,6 +33,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *
  * 前置条件：本地 MinIO 运行在 {@code http://localhost:9000}（admin/admin123456），
  * 桶 {@code glucopilot-dev}。未运行时测试自动跳过，不阻塞本地单元测试 / CI。
+ * <p>上传走同源代理的等价路径 {@code acceptUpload}（HTTP 代理层的契约由
+ * {@code MinioFailureSemanticsTest} 覆盖），本类覆盖的是 MinIO 真实语义：
+ * 写入后对象可 HEAD、可 Range 读；缺失对象与连通/权限故障区分。
  */
 class MinioObjectStorageServiceTest {
 
@@ -36,7 +44,6 @@ class MinioObjectStorageServiceTest {
     private static final Long USER_ID = 1001L;
 
     private static MinioObjectStorageService storageService;
-    private static HttpClient httpClient;
 
     @BeforeAll
     static void setUp() {
@@ -72,19 +79,39 @@ class MinioObjectStorageServiceTest {
         }
 
         storageService = new MinioObjectStorageService(props);
-        httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
+    }
+
+    /** 现行 createUploadCredential 基于 ServletUriComponentsBuilder 生成同源代理 URL，需要请求上下文。 */
+    @BeforeEach
+    void bindRequestContext() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setScheme("http");
+        request.setServerName("backend.example.test");
+        request.setServerPort(8080);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    }
+
+    @AfterEach
+    void resetRequestContext() {
+        RequestContextHolder.resetRequestAttributes();
+    }
+
+    @AfterAll
+    static void tearDown() {
+        RequestContextHolder.resetRequestAttributes();
     }
 
     @Test
-    void credentialHasPresignedUrlAndContractConformingKey() {
+    void credentialExposesSameOriginProxyUrlAndContractConformingKey() {
         UploadCredential credential =
                 storageService.createUploadCredential(MediaBizType.AVATAR, "jpg", 1024L, USER_ID);
 
-        assertNotNull(credential.getUploadUrl());
-        assertTrue(credential.getUploadUrl().contains("/" + BUCKET + "/"), "预签名 URL 应为 path-style");
-        assertTrue(credential.getUploadUrl().contains("X-Amz-Signature"), "预签名 URL 应含签名");
+        // 同源代理上传入口（不走 MinIO 预签名直传，避免依赖桶 CORS）
+        assertTrue(credential.getUploadUrl().startsWith(
+                "http://backend.example.test:8080/api/v1/media-files/minio-uploads/"),
+                "uploadUrl 应为同源代理地址: " + credential.getUploadUrl());
+        String token = credential.getUploadUrl().substring(credential.getUploadUrl().lastIndexOf('/') + 1);
+        assertTrue(token.matches("[0-9a-f]{32}"), "一次性 token 应为 32 位 hex: " + token);
         assertEquals((long) ObjectStorageService.EXPIRE_SECONDS, credential.getExpireIn());
 
         // storageKey = {bizType}/{yyyy}/{MM}/{userId}/{uuid32}.{ext}
@@ -94,24 +121,41 @@ class MinioObjectStorageServiceTest {
     }
 
     @Test
-    void uploadedObjectCanBeStatted() throws Exception {
+    void uploadedObjectCanBeStattedAndRangeRead() {
         UploadCredential credential =
                 storageService.createUploadCredential(MediaBizType.GLUCOSE, "png", 2048L, USER_ID);
+        String token = credential.getUploadUrl().substring(credential.getUploadUrl().lastIndexOf('/') + 1);
+        byte[] body = new byte[2048];
+        new java.util.Random(42).nextBytes(body);
 
-        byte[] body = "fake-png-bytes".getBytes(StandardCharsets.UTF_8);
-        HttpRequest request = HttpRequest.newBuilder(URI.create(credential.getUploadUrl()))
-                .PUT(HttpRequest.BodyPublishers.ofByteArray(body))
-                .header("Content-Type", "image/png")
-                .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        assertTrue(response.statusCode() < 300, "直传应成功，实际 " + response.statusCode() + ": " + response.body());
+        storageService.acceptUpload(token, new ByteArrayInputStream(body), body.length);
 
-        assertTrue(storageService.objectExists(credential.getStorageKey()), "对象直传后应存在");
+        assertTrue(storageService.objectExists(credential.getStorageKey()), "写入后对象应存在");
+        assertEquals(body.length, storageService.objectSize(credential.getStorageKey()), "HEAD 查询应返回真实大小");
+        try (InputStream range = storageService.openObject(credential.getStorageKey(), 100, 28)) {
+            assertArrayEquals(java.util.Arrays.copyOfRange(body, 100, 128),
+                    range.readAllBytes(), "Range 读取应返回请求区间");
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+
+        // 一次性凭证：同一 token 二次消费必须拒绝
+        assertThrows(IllegalArgumentException.class,
+                () -> storageService.acceptUpload(token, new ByteArrayInputStream(body), body.length));
     }
 
     @Test
     void unknownKeyDoesNotExist() {
         assertFalse(storageService.objectExists("1/2099/01/" + USER_ID + "/not-exist.png"));
+    }
+
+    @Test
+    void missingKeySizeAndRangeReadAreNotFound() {
+        String key = "1/2099/01/" + USER_ID + "/not-exist.png";
+        assertEquals(ErrorCode.NOT_FOUND,
+                assertThrows(BizException.class, () -> storageService.objectSize(key)).getErrorCode());
+        assertEquals(ErrorCode.NOT_FOUND,
+                assertThrows(BizException.class, () -> storageService.openObject(key, 0, 1)).getErrorCode());
     }
 
     @Test

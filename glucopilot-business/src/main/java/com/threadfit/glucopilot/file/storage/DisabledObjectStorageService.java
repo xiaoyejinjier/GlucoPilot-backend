@@ -8,6 +8,8 @@ import com.threadfit.glucopilot.file.vo.FileVos.UploadCredential;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
+import java.io.InputStream;
+
 /** Explicit storage-off mode for deployments without object storage credentials. */
 @Service
 @ConditionalOnProperty(prefix = "glucopilot.storage", name = "provider", havingValue = "disabled")
@@ -35,6 +37,16 @@ public class DisabledObjectStorageService implements ObjectStorageService {
 
     @Override
     public byte[] getObject(String storageKey) {
+        throw unavailable();
+    }
+
+    @Override
+    public long objectSize(String storageKey) {
+        throw unavailable();
+    }
+
+    @Override
+    public InputStream openObject(String storageKey, long offset, long length) {
         throw unavailable();
     }
 

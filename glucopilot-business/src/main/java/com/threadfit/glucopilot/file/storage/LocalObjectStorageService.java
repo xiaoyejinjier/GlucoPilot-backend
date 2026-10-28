@@ -6,13 +6,20 @@ import com.threadfit.glucopilot.common.enums.CodeEnum.StorageProvider;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.file.config.StorageProperties;
 import com.threadfit.glucopilot.file.vo.FileVos.UploadCredential;
+import org.apache.commons.io.input.BoundedInputStream;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -59,21 +66,42 @@ public class LocalObjectStorageService implements ObjectStorageService {
                 .build();
     }
 
-    /** 消费一次性凭证并落盘；成功或失败后 token 均不能再次使用。 */
-    public void acceptUpload(String token, byte[] bytes) {
+    /**
+     * 消费一次性凭证并落盘；成功或失败后 token 均不能再次使用。
+     * <p>凭证校验放在读取请求体之前，避免 100MB 视频传完才被告知凭证已过期。
+     * <p>先写同目录临时文件、完整拷贝成功后再原子 move 到目标 key：拷贝中途断连、磁盘写失败
+     * 或字节数不符都不会在目标 key 留下半截文件——{@code objectExists} 与后续登记只会看到
+     * 「不存在」或「完整对象」两种状态。
+     */
+    public void acceptUpload(String token, InputStream body, long contentLength) {
         PendingUpload pending = pendingUploads.remove(token);
         if (pending == null || pending.expiresAt().isBefore(Instant.now())) {
             throw new IllegalArgumentException("上传凭证不存在或已过期");
         }
-        if (bytes == null || bytes.length != pending.sizeBytes()) {
+        if (contentLength >= 0 && contentLength != pending.sizeBytes()) {
             throw new IllegalArgumentException("上传文件大小与凭证不一致");
         }
         Path target = resolvePath(pending.storageKey());
+        Path temp = null;
         try {
             Files.createDirectories(target.getParent());
-            Files.write(target, bytes);
+            temp = Files.createTempFile(target.getParent(), "upload-", ".tmp");
+            long written = Files.copy(body, temp, StandardCopyOption.REPLACE_EXISTING);
+            if (written != pending.sizeBytes()) {
+                throw new IllegalArgumentException("上传文件大小与凭证不一致");
+            }
+            Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            temp = null;
         } catch (IOException e) {
             throw new IllegalStateException("保存上传文件失败", e);
+        } finally {
+            if (temp != null) {
+                try {
+                    Files.deleteIfExists(temp);
+                } catch (IOException suppressed) {
+                    // 临时文件清理失败不影响失败语义：token 已消费，目标 key 未产生任何对象
+                }
+            }
         }
     }
 
@@ -96,6 +124,34 @@ public class LocalObjectStorageService implements ObjectStorageService {
     public byte[] getObject(String storageKey) {
         try {
             return Files.readAllBytes(resolvePath(storageKey));
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+        }
+    }
+
+    @Override
+    public long objectSize(String storageKey) {
+        try {
+            return Files.size(resolvePath(storageKey));
+        } catch (NoSuchFileException e) {
+            throw new BizException(ErrorCode.NOT_FOUND, "文件不存在");
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+        }
+    }
+
+    @Override
+    public InputStream openObject(String storageKey, long offset, long length) {
+        try {
+            FileInputStream file = new FileInputStream(resolvePath(storageKey).toFile());
+            file.getChannel().position(offset);
+            return BoundedInputStream.builder()
+                    .setInputStream(new BufferedInputStream(file))
+                    .setMaxCount(length)
+                    .setPropagateClose(true)
+                    .get();
+        } catch (FileNotFoundException e) {
+            throw new BizException(ErrorCode.NOT_FOUND, "文件不存在");
         } catch (IOException e) {
             throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
         }

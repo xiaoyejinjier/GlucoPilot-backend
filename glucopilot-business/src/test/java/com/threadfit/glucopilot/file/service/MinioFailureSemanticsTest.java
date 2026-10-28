@@ -41,8 +41,8 @@ class MinioFailureSemanticsTest {
             var credential=storage.createUploadCredential(com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType.AVATAR,"jpg",3L,2L);
             assertTrue(credential.getUploadUrl().startsWith("https://backend.example.test/api/v1/media-files/minio-uploads/"));
             String token=credential.getUploadUrl().substring(credential.getUploadUrl().lastIndexOf('/')+1);
-            storage.acceptUpload(token,new byte[]{1,2,3});verify(client).putObject(any(PutObjectArgs.class));
-            assertThrows(IllegalArgumentException.class,()->storage.acceptUpload(token,new byte[]{1,2,3}));
+            storage.acceptUpload(token,new java.io.ByteArrayInputStream(new byte[]{1,2,3}),3);verify(client).putObject(any(PutObjectArgs.class));
+            assertThrows(IllegalArgumentException.class,()->storage.acceptUpload(token,new java.io.ByteArrayInputStream(new byte[]{1,2,3}),3));
         }finally{org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();}
     }
 }

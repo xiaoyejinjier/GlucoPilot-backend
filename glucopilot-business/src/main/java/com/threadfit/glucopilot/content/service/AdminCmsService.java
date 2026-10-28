@@ -12,6 +12,7 @@ import com.threadfit.glucopilot.content.entity.CmsBanner;
 import com.threadfit.glucopilot.content.entity.CmsNews;
 import com.threadfit.glucopilot.content.mapper.CmsBannerMapper;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
+import com.threadfit.glucopilot.content.media.CmsMediaService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +31,7 @@ public class AdminCmsService {
 
     private final CmsBannerMapper bannerMapper;
     private final CmsNewsMapper newsMapper;
+    private final CmsMediaService cmsMediaService;
 
     public List<AdminCmsDtos.NewsItem> listNews() {
         return newsMapper.selectList(new LambdaQueryWrapper<CmsNews>()
@@ -39,6 +41,7 @@ public class AdminCmsService {
 
     @Transactional
     public AdminCmsDtos.NewsItem saveNews(AdminCmsDtos.NewsSaveRequest req) {
+        cmsMediaService.validateVideoUrl(req.getVideoUrl());
         CmsNews row = req.getId() == null ? new CmsNews() : requireNews(req.getId());
         row.setTitle(req.getTitle().trim());
         row.setSummaryText(req.getSummary());

@@ -1,6 +1,15 @@
 # 生产/课程默认 MinIO（图、视频同一套 ObjectStorage）。敏感项来自服务器 .env。
 # 若运维显式设置 STORAGE_PROVIDER=aliyun-oss，仍可用下方 OSS_*（或改配 MINIO_*）。
 # 严禁在本文件写入真实 IP、AK/SK、桶地址。
+
+# 直传是 PUT application/octet-stream，不经过 Tomcat 表单体解析，max-http-form-post-size 与之无关；
+# 100MB 视频能否上传，实际取决于反向代理 client_max_body_size（Nginx 已设 110m）。
+# max-swallow-size 只作用于"请求体没读完就响应"的提前拒绝场景（凭证无效/大小不符/415），
+# 调小可避免为无效请求吞掉整个 100MB 请求体；错误响应仍会正常返回给客户端。
+server:
+  tomcat:
+    max-swallow-size: 8MB
+
 glucopilot:
   storage:
     provider: ${STORAGE_PROVIDER:minio}

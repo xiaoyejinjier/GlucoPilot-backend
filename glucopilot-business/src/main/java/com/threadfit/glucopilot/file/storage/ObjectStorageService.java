@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.common.enums.CodeEnum.StorageProvider;
 import com.threadfit.glucopilot.common.util.IdUtils;
 import com.threadfit.glucopilot.file.vo.FileVos.UploadCredential;
 
+import java.io.InputStream;
 import java.time.LocalDate;
 
 /**
@@ -52,6 +53,29 @@ public interface ObjectStorageService {
      * @throws com.threadfit.glucopilot.common.exception.BizException 对象不存在或读取失败
      */
     byte[] getObject(String storageKey);
+
+    /**
+     * 对象字节数（HEAD 查询），不下载内容。
+     * <p>用于大对象（如 100MB 视频）先校验体积，避免把它整段读进内存。
+     *
+     * @param storageKey {@link #buildStorageKey} 生成的对象 Key
+     * @return 字节数
+     * @throws com.threadfit.glucopilot.common.exception.BizException 对象不存在（404）或存储故障（500）
+     */
+    long objectSize(String storageKey);
+
+    /**
+     * 打开对象的一段用于流式读取（视频 Range 请求、大对象哈希）。
+     * <p>返回的流从 {@code offset} 开始、最多 {@code length} 字节，<b>调用方负责关闭</b>。
+     * 与 {@link #getObject} 的区别是不把内容整体读进堆内存。
+     *
+     * @param storageKey {@link #buildStorageKey} 生成的对象 Key
+     * @param offset     起始偏移（字节）
+     * @param length     读取长度（字节），不得超过对象剩余长度
+     * @return 定位于 offset 的输入流
+     * @throws com.threadfit.glucopilot.common.exception.BizException 对象不存在（404）或存储故障（500）
+     */
+    InputStream openObject(String storageKey, long offset, long length);
 
     /**
      * 删除对象（账号注销清理用）。

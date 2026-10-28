@@ -8,7 +8,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/** 内容媒体（资讯/轮播）相关请求与响应 DTO。 */
+/** 内容媒体（资讯配图/轮播图/资讯视频）相关请求与响应 DTO。 */
 public final class CmsMediaDtos {
 
     private CmsMediaDtos() {
@@ -17,7 +17,7 @@ public final class CmsMediaDtos {
     /** 申请上传凭证。 */
     @Data
     public static class UploadCredentialRequest {
-        /** 素材用途：news（资讯配图）或 banner（轮播图）。 */
+        /** 素材用途：news（资讯配图）、banner（轮播图）或 news-video（资讯视频）。 */
         @NotBlank
         private String purpose;
 
@@ -25,7 +25,7 @@ public final class CmsMediaDtos {
         @NotNull
         private Integer bizType;
 
-        /** MIME，仅允许 image/jpeg、image/png。 */
+        /** MIME：图片用途仅允许 image/jpeg、image/png；news-video 仅允许 video/mp4。 */
         @NotBlank
         private String mimeType;
 
@@ -38,7 +38,7 @@ public final class CmsMediaDtos {
     /** 直传完成后的登记请求。 */
     @Data
     public static class RegisterRequest {
-        /** 素材用途：news 或 banner。 */
+        /** 素材用途：news、banner 或 news-video。 */
         @NotBlank
         private String purpose;
 
@@ -50,6 +50,7 @@ public final class CmsMediaDtos {
         @NotBlank
         private String storageKey;
 
+        /** MIME：图片用途 image/jpeg、image/png；news-video 为 video/mp4。 */
         @NotBlank
         private String mimeType;
 

@@ -14,6 +14,15 @@ public final class MediaFileConstant {
     /** 默认单文件大小上限（20MB）。 */
     public static final long DEFAULT_MAX_SIZE_BYTES = 20L * 1024 * 1024;
 
+    /** CMS 内容图片单文件上限（5MB）。 */
+    public static final long CMS_IMAGE_MAX_BYTES = 5L * 1024 * 1024;
+
+    /** CMS 资讯视频单文件上限（100MB）。 */
+    public static final long CMS_VIDEO_MAX_BYTES = 100L * 1024 * 1024;
+
+    /** CMS 内容图片 MIME 白名单（仅 JPG/PNG）。 */
+    private static final Set<String> CMS_IMAGE_MIMES = Set.of("image/jpeg", "image/png");
+
     /** 图片类 MIME 白名单。 */
     private static final Set<String> IMAGE_MIMES =
             Set.of("image/jpeg", "image/png", "image/webp", "image/gif");
@@ -48,6 +57,19 @@ public final class MediaFileConstant {
             return AUDIO_MIMES.contains(mimeType.toLowerCase());
         }
         return IMAGE_MIMES.contains(mimeType.toLowerCase());
+    }
+
+    /** CMS 素材 MIME 是否合法：视频仅 MP4，图片仅 JPG/PNG。 */
+    public static boolean isCmsMimeAllowed(boolean video, String mimeType) {
+        if (mimeType == null) {
+            return false;
+        }
+        return video ? "video/mp4".equalsIgnoreCase(mimeType) : CMS_IMAGE_MIMES.contains(mimeType.toLowerCase());
+    }
+
+    /** CMS 素材单文件上限：视频 100MB，图片 5MB。 */
+    public static long cmsMaxBytes(boolean video) {
+        return video ? CMS_VIDEO_MAX_BYTES : CMS_IMAGE_MAX_BYTES;
     }
 
     /** 由 MIME 推导存储扩展名；未知 MIME 回退 bin。 */

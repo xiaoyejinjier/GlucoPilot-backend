@@ -330,12 +330,12 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 | --- | --- | --- |
 | `GET /admin/v1/cms-media?purpose=` | `content:media:manage` | `purpose` 可选 `news` / `banner` / `news-video` / 省略（全部） |
 | `POST /admin/v1/cms-media/upload-credentials` | `content:media:manage` | 请求 `{ purpose, bizType: 5, mimeType, sizeBytes }` |
-| `POST /admin/v1/cms-media` | `content:media:manage` | 请求 `{ purpose, bizType: 5, storageKey, mimeType, sizeBytes }`；建议带 `X-Idempotency-Key` |
+| `POST /admin/v1/cms-media` | `content:media:manage` | 请求 `{ purpose, bizType: 5, storageKey, mimeType, sizeBytes }`；带 `X-Idempotency-Key` 时 24h 内同键重试直接回放首次登记结果 |
 | `DELETE /admin/v1/cms-media/{id}` | `content:media:manage` | 软删除（`file_status=0`），仅本人运营账号上传的素材 |
 | `GET /api/v1/cms/images/{id}` | 公开 | 返回已登记 CMS 图片二进制 |
-| `GET /api/v1/cms/videos/{id}` | 公开 | 返回已登记 CMS 视频（MP4）二进制 |
+| `GET /api/v1/cms/videos/{id}` | 公开 | 已登记 CMS 视频（MP4）；支持单段 `Range`，命中返回 `206` + `Content-Range`，内容流式输出 |
 
-`media_file` 使用 `biz_type=CMS(5)`，`ops_id` 为当前运营，`user_id` 为空。Banner `image` / 资讯 `coverUrl` / `videoUrl` 填上述稳定相对路径。资讯正文 `contentBody` 为 **HTML**（管理端富文本）；小程序详情用 `rich-text` 渲染，正文插图使用 `/api/v1/cms/images/{id}`。
+`media_file` 使用 `biz_type=CMS(5)`，`ops_id` 为当前运营，`user_id` 为空。Banner `image` / 资讯 `coverUrl` / `videoUrl` 填上述稳定相对路径。资讯 `videoUrl` 允许空值或 `http(s)` 外链；填 `/api/v1/cms/videos/{id}` 时，保存会校验该视频已登记且在架，否则 40000。资讯正文 `contentBody` 为 **HTML**（管理端富文本）；小程序详情用 `rich-text` 渲染，正文插图使用 `/api/v1/cms/images/{id}`。
 
 ## 管理端食物图片
 

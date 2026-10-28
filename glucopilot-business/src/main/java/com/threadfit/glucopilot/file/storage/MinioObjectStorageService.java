@@ -17,7 +17,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
-import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.UUID;
@@ -65,20 +64,20 @@ public class MinioObjectStorageService implements ObjectStorageService {
                 .build();
     }
 
-    /** 消费一次性凭证并写入 MinIO。 */
-    public void acceptUpload(String token, byte[] bytes) {
+    /** 消费一次性凭证并写入 MinIO；凭证校验先于读请求体，大文件不会读完整段才报过期。 */
+    public void acceptUpload(String token, InputStream body, long contentLength) {
         PendingUpload pending = pendingUploads.remove(token);
         if (pending == null || pending.expiresAt().isBefore(Instant.now())) {
             throw new IllegalArgumentException("上传凭证不存在或已过期");
         }
-        if (bytes == null || bytes.length != pending.sizeBytes()) {
+        if (contentLength >= 0 && contentLength != pending.sizeBytes()) {
             throw new IllegalArgumentException("上传文件大小与凭证不一致");
         }
         try {
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(props.getBucket())
                     .object(pending.storageKey())
-                    .stream(new ByteArrayInputStream(bytes), bytes.length, -1)
+                    .stream(body, pending.sizeBytes(), -1)
                     .contentType("application/octet-stream")
                     .build());
         } catch (Exception e) {
@@ -106,6 +105,38 @@ public class MinioObjectStorageService implements ObjectStorageService {
             throw unavailable("stat",e);
         } catch (Exception e) {
             throw unavailable("stat",e);
+        }
+    }
+
+    @Override
+    public long objectSize(String storageKey) {
+        try {
+            return minioClient.statObject(StatObjectArgs.builder()
+                    .bucket(props.getBucket())
+                    .object(storageKey)
+                    .build()).size();
+        } catch (ErrorResponseException e) {
+            if (isMissing(e)) throw new BizException(ErrorCode.NOT_FOUND, "文件不存在");
+            throw unavailable("stat",e);
+        } catch (Exception e) {
+            throw unavailable("stat",e);
+        }
+    }
+
+    @Override
+    public InputStream openObject(String storageKey, long offset, long length) {
+        try {
+            return minioClient.getObject(GetObjectArgs.builder()
+                    .bucket(props.getBucket())
+                    .object(storageKey)
+                    .offset(offset)
+                    .length(length)
+                    .build());
+        } catch (ErrorResponseException e) {
+            if (isMissing(e)) throw new BizException(ErrorCode.NOT_FOUND, "文件不存在");
+            throw unavailable("read",e);
+        } catch (Exception e) {
+            throw unavailable("read",e);
         }
     }
 

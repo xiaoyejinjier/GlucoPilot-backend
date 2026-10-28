@@ -2,6 +2,8 @@ package com.threadfit.glucopilot.file.storage;
 
 import com.aliyun.oss.HttpMethod;
 import com.aliyun.oss.OSS;
+import com.aliyun.oss.OSSException;
+import com.aliyun.oss.model.GetObjectRequest;
 import com.aliyun.oss.model.OSSObject;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
@@ -65,6 +67,40 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
             }
         } catch (Exception e) {
             // 读失败必须留下痕迹：这是「图片送模型」链路里最难定位的一环（成功路径无日志）
+            log.warn("OSS 读取对象失败 bucket={} key={}", props.getBucket(), storageKey, e);
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+        }
+    }
+
+    @Override
+    public long objectSize(String storageKey) {
+        try {
+            return ossClient.getObjectMetadata(props.getBucket(), storageKey).getContentLength();
+        } catch (OSSException e) {
+            if ("NoSuchKey".equals(e.getErrorCode())) {
+                throw new BizException(ErrorCode.NOT_FOUND, "文件不存在");
+            }
+            log.warn("OSS 读取对象元数据失败 bucket={} key={} code={}", props.getBucket(), storageKey, e.getErrorCode());
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+        } catch (Exception e) {
+            log.warn("OSS 读取对象元数据失败 bucket={} key={}", props.getBucket(), storageKey, e);
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+        }
+    }
+
+    @Override
+    public InputStream openObject(String storageKey, long offset, long length) {
+        try {
+            GetObjectRequest request = new GetObjectRequest(props.getBucket(), storageKey);
+            request.setRange(offset, offset + length - 1);
+            return ossClient.getObject(request).getObjectContent();
+        } catch (OSSException e) {
+            if ("NoSuchKey".equals(e.getErrorCode())) {
+                throw new BizException(ErrorCode.NOT_FOUND, "文件不存在");
+            }
+            log.warn("OSS 读取对象失败 bucket={} key={} code={}", props.getBucket(), storageKey, e.getErrorCode());
+            throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
+        } catch (Exception e) {
             log.warn("OSS 读取对象失败 bucket={} key={}", props.getBucket(), storageKey, e);
             throw new BizException(ErrorCode.INTERNAL_ERROR, "读取文件失败");
         }

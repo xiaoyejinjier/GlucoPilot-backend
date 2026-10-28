@@ -2,16 +2,21 @@ package com.threadfit.glucopilot.content.media;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.common.idempotency.IdempotencyStore;
+import com.threadfit.glucopilot.common.util.JsonUtils;
 import com.threadfit.glucopilot.content.media.CmsMediaDtos.MediaItem;
 import com.threadfit.glucopilot.content.media.CmsMediaDtos.RegisterRequest;
 import com.threadfit.glucopilot.content.media.CmsMediaDtos.UploadCredentialRequest;
+import com.threadfit.glucopilot.file.constant.MediaFileConstant;
 import com.threadfit.glucopilot.file.entity.MediaFile;
 import com.threadfit.glucopilot.file.mapper.MediaFileMapper;
 import com.threadfit.glucopilot.file.storage.ObjectStorageService;
 import com.threadfit.glucopilot.file.vo.FileVos;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -21,6 +26,7 @@ import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.format.DateTimeFormatter;
@@ -28,31 +34,31 @@ import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
  * CMS 资讯/轮播图/资讯视频素材：走统一对象存储（local / MinIO / OSS），稳定地址不依赖预签名过期。
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class CmsMediaService {
-    private static final long MAX_IMAGE_BYTES = 5L * 1024 * 1024;
-    private static final long MAX_VIDEO_BYTES = 100L * 1024 * 1024;
     private static final long MAX_PIXELS = 16_000_000;
     private static final String BIZ_NEWS = "CONTENT_NEWS";
     private static final String BIZ_BANNER = "CONTENT_BANNER";
     private static final String BIZ_NEWS_VIDEO = "CONTENT_NEWS_VIDEO";
     private static final String MIME_MP4 = "video/mp4";
+    private static final String VIDEO_PATH_PREFIX = "/api/v1/cms/videos/";
     private static final Set<String> IMAGE_PURPOSES = Set.of("news", "banner");
     private static final Set<String> ALL_PURPOSES = Set.of("news", "banner", "news-video");
-    private static final Map<String, String> IMAGE_FORMATS =
-            Map.of("image/jpeg", "jpg", "image/png", "png");
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final ObjectStorageService storage;
     private final MediaFileMapper mediaFileMapper;
+    private final IdempotencyStore idempotencyStore;
+    private final JsonUtils jsonUtils;
 
     /** 按用途筛选；purpose 为空或 all 时返回全部 CMS 素材（图+视频）。 */
     public List<MediaItem> list(String purpose) {
@@ -72,6 +78,25 @@ public class CmsMediaService {
 
     @Transactional
     public MediaItem register(RegisterRequest request, Long opsId) {
+        // 接口级幂等：透传 X-Idempotency-Key 时按「cms:register:{opsId}:{key}」判重，
+        // 重试/重复提交直接回放首次登记结果，避免并发下产生多条指向同一对象的记录。
+        String idempotencyKey = RequestContext.getIdempotencyKey();
+        String snapshotKey = idempotencyKey == null
+                ? null : IdempotencyStore.key("cms:register", opsId, idempotencyKey);
+        if (snapshotKey != null) {
+            Optional<String> snapshot = idempotencyStore.find(snapshotKey);
+            if (snapshot.isPresent()) {
+                return jsonUtils.fromJson(snapshot.get(), MediaItem.class);
+            }
+        }
+        MediaItem item = doRegister(request, opsId);
+        if (snapshotKey != null) {
+            idempotencyStore.saveIfAbsent(snapshotKey, item);
+        }
+        return item;
+    }
+
+    private MediaItem doRegister(RegisterRequest request, Long opsId) {
         String purpose = normalizePurpose(request.getPurpose());
         validate(purpose, request.getBizType(), request.getMimeType(), request.getSizeBytes());
         String key = request.getStorageKey();
@@ -89,20 +114,33 @@ public class CmsMediaService {
             return toItem(existing);
         }
 
-        byte[] bytes = storage.getObject(key);
-        long max = isVideo(request.getMimeType()) ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
-        if (bytes.length != request.getSizeBytes() || bytes.length > max) {
+        // 视频最大 100MB：体积用 HEAD 校验，内容用流式读取，避免整段进堆内存。
+        long max = MediaFileConstant.cmsMaxBytes(isVideo(request.getMimeType()));
+        long actualSize = storage.objectSize(key);
+        if (actualSize != request.getSizeBytes() || actualSize > max) {
             throw new BizException(ErrorCode.BAD_REQUEST, "实际文件大小与上传凭证不一致");
         }
 
         Integer width = null;
         Integer height = null;
+        String digest;
         if (isVideo(request.getMimeType())) {
-            inspectMp4(bytes);
+            try (InputStream head = storage.openObject(key, 0, Math.min(actualSize, 64))) {
+                inspectMp4(head);
+            } catch (IOException e) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "视频内容读取失败");
+            }
+            try (InputStream all = storage.openObject(key, 0, actualSize)) {
+                digest = sha256(all);
+            } catch (IOException e) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "视频内容读取失败");
+            }
         } else {
+            byte[] bytes = storage.getObject(key);
             ImageInfo info = inspectImage(bytes, request.getMimeType());
             width = info.width();
             height = info.height();
+            digest = sha256(bytes);
         }
 
         MediaFile row = new MediaFile();
@@ -114,10 +152,10 @@ public class CmsMediaService {
         row.setStorageKey(key);
         row.setFileUrl("");
         row.setMimeType(request.getMimeType());
-        row.setSizeBytes((long) bytes.length);
+        row.setSizeBytes(actualSize);
         row.setWidthPx(width);
         row.setHeightPx(height);
-        row.setSha256Hex(sha256(bytes));
+        row.setSha256Hex(digest);
         row.setFileStatus(1);
         mediaFileMapper.insert(row);
         row.setFileUrl(publicPath(row));
@@ -135,11 +173,17 @@ public class CmsMediaService {
         }
         row.setFileStatus(0);
         mediaFileMapper.updateById(row);
+        // 软删后稳定地址已不可读，及时回收对象（尤其 100MB 视频）；删除失败只记日志，留待离线清理。
+        try {
+            storage.deleteObject(row.getStorageKey());
+        } catch (RuntimeException e) {
+            log.warn("CMS 素材对象回收失败 id={} key={}", id, row.getStorageKey(), e);
+        }
     }
 
     public MediaFile requireImage(Long id) {
         MediaFile row = requireCms(id);
-        if (row.getMimeType() == null || !IMAGE_FORMATS.containsKey(row.getMimeType())) {
+        if (!MediaFileConstant.isCmsMimeAllowed(false, row.getMimeType())) {
             throw new BizException(ErrorCode.NOT_FOUND, "内容图片不存在");
         }
         return row;
@@ -155,6 +199,47 @@ public class CmsMediaService {
 
     public byte[] read(MediaFile row) {
         return storage.getObject(row.getStorageKey());
+    }
+
+    /** 视频对象的字节数（HEAD 查询，不下载内容）。 */
+    public long size(MediaFile row) {
+        return storage.objectSize(row.getStorageKey());
+    }
+
+    /** 打开视频的一段用于流式输出（Range 支持）；调用方负责关闭。 */
+    public InputStream openVideo(MediaFile row, long offset, long length) {
+        return storage.openObject(row.getStorageKey(), offset, length);
+    }
+
+    /**
+     * 校验资讯 {@code videoUrl}：空值放行；CMS 稳定路径必须指向已登记且在架的资讯视频；外链仅允许 http(s)。
+     * <p>避免管理端把不存在/已下架的 {@code /api/v1/cms/videos/{id}} 或任意协议串写进正文。
+     */
+    public void validateVideoUrl(String videoUrl) {
+        if (!StringUtils.hasText(videoUrl)) {
+            return;
+        }
+        String url = videoUrl.trim();
+        if (url.startsWith(VIDEO_PATH_PREFIX)) {
+            String idPart = url.substring(VIDEO_PATH_PREFIX.length());
+            if (!idPart.matches("\\d{1,18}") || !isNewsVideo(Long.parseLong(idPart))) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "视频地址对应的资讯视频不存在或已下架");
+            }
+            return;
+        }
+        if (!url.matches("(?i)https?://\\S+")) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "视频地址仅支持 http(s) 外链或 /api/v1/cms/videos/{id}");
+        }
+    }
+
+    private boolean isNewsVideo(Long id) {
+        MediaFile row = mediaFileMapper.selectById(id);
+        return row != null
+                && Objects.equals(row.getBizType(), MediaBizType.CMS.getCode())
+                && BIZ_NEWS_VIDEO.equals(row.getBizId())
+                && Objects.equals(row.getFileStatus(), 1)
+                && row.getUserId() == null
+                && row.getOpsId() != null;
     }
 
     private MediaFile requireCms(Long id) {
@@ -232,14 +317,13 @@ public class CmsMediaService {
     }
 
     private String extensionOf(String mimeType) {
-        if (MIME_MP4.equals(mimeType)) {
+        if (isVideo(mimeType)) {
             return "mp4";
         }
-        String ext = IMAGE_FORMATS.get(mimeType);
-        if (ext == null) {
+        if (!MediaFileConstant.isCmsMimeAllowed(false, mimeType)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "不支持的文件格式");
         }
-        return ext;
+        return MediaFileConstant.extOf(mimeType);
     }
 
     private void validate(String purpose, Integer bizType, String mimeType, Long sizeBytes) {
@@ -247,25 +331,26 @@ public class CmsMediaService {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择合法的内容媒体文件");
         }
         if ("news-video".equals(purpose)) {
-            if (!MIME_MP4.equals(mimeType)) {
+            if (!MediaFileConstant.isCmsMimeAllowed(true, mimeType)) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "资讯视频仅支持 MP4（video/mp4）");
             }
-            if (sizeBytes == null || sizeBytes <= 0 || sizeBytes > MAX_VIDEO_BYTES) {
+            if (sizeBytes == null || sizeBytes <= 0 || sizeBytes > MediaFileConstant.CMS_VIDEO_MAX_BYTES) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "视频大小不能超过 100MB");
             }
             return;
         }
-        if (!IMAGE_PURPOSES.contains(purpose) || !IMAGE_FORMATS.containsKey(mimeType)) {
+        if (!IMAGE_PURPOSES.contains(purpose) || !MediaFileConstant.isCmsMimeAllowed(false, mimeType)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择 JPG 或 PNG 格式的内容图片");
         }
-        if (sizeBytes == null || sizeBytes <= 0 || sizeBytes > MAX_IMAGE_BYTES) {
+        if (sizeBytes == null || sizeBytes <= 0 || sizeBytes > MediaFileConstant.CMS_IMAGE_MAX_BYTES) {
             throw new BizException(ErrorCode.BAD_REQUEST, "图片大小不能超过 5MB");
         }
     }
 
-    /** ISO BMFF：前若干字节含 ASCII "ftyp"。 */
-    private void inspectMp4(byte[] bytes) {
-        if (bytes == null || bytes.length < 12) {
+    /** ISO BMFF：前若干字节含 ASCII "ftyp"；只读对象头部，不加载整段视频。 */
+    private void inspectMp4(InputStream in) throws IOException {
+        byte[] bytes = in.readNBytes(64);
+        if (bytes.length < 12) {
             throw new BizException(ErrorCode.BAD_REQUEST, "不是有效的 MP4 文件");
         }
         boolean ftyp = false;
@@ -314,6 +399,21 @@ public class CmsMediaService {
     private String sha256(byte[] bytes) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 流式计算 SHA-256，不把大对象读进内存。 */
+    private String sha256(InputStream in) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                digest.update(buffer, 0, read);
+            }
+            return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }

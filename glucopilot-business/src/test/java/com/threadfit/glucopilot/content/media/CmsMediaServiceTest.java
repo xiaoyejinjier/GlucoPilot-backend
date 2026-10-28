@@ -2,6 +2,8 @@ package com.threadfit.glucopilot.content.media;
 
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.common.idempotency.IdempotencyStore;
+import com.threadfit.glucopilot.common.util.JsonUtils;
 import com.threadfit.glucopilot.content.media.CmsMediaDtos.RegisterRequest;
 import com.threadfit.glucopilot.file.entity.MediaFile;
 import com.threadfit.glucopilot.file.mapper.MediaFileMapper;
@@ -15,11 +17,14 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -32,12 +37,15 @@ class CmsMediaServiceTest {
 
     @Mock private ObjectStorageService storage;
     @Mock private MediaFileMapper mediaFileMapper;
+    @Mock private IdempotencyStore idempotencyStore;
+    @Mock private JsonUtils jsonUtils;
     @InjectMocks private CmsMediaService service;
 
     @Test
     void registersBannerImageUnderOpsIdentity() throws Exception {
         byte[] bytes = png();
         when(storage.objectExists(KEY)).thenReturn(true);
+        when(storage.objectSize(KEY)).thenReturn((long) bytes.length);
         when(storage.getObject(KEY)).thenReturn(bytes);
         when(storage.provider()).thenReturn(CodeEnum.StorageProvider.MINIO);
         when(storage.bucket()).thenReturn("glucopilot");
@@ -99,7 +107,9 @@ class CmsMediaServiceTest {
         String videoKey = "5/2026/10/-9/" + "b".repeat(32) + ".mp4";
         byte[] bytes = mp4();
         when(storage.objectExists(videoKey)).thenReturn(true);
-        when(storage.getObject(videoKey)).thenReturn(bytes);
+        when(storage.objectSize(videoKey)).thenReturn((long) bytes.length);
+        when(storage.openObject(eq(videoKey), anyLong(), anyLong()))
+                .thenAnswer(invocation -> new ByteArrayInputStream(bytes));
         when(storage.provider()).thenReturn(CodeEnum.StorageProvider.MINIO);
         when(storage.bucket()).thenReturn("glucopilot");
         when(mediaFileMapper.insert(any(MediaFile.class))).thenAnswer(invocation -> {

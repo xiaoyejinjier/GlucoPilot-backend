@@ -112,8 +112,8 @@ class AiModelRuntimeConfigTest {
         assertEquals("db", snapshot.resolveText("deepseek-v4-flash").source());
         assertEquals("sk-yaml-text", snapshot.resolveText("deepseek-v4-flash").apiKey());
         // 视觉通道：DB 里有 qwen3-vl-plus 就用它（同样继承 yaml 密钥）
-        assertEquals("db", snapshot.resolveVision().source());
-        assertEquals("sk-yaml-vision", snapshot.resolveVision().apiKey());
+        assertEquals("db", snapshot.resolveVisionDefault().source());
+        assertEquals("sk-yaml-vision", snapshot.resolveVisionDefault().apiKey());
         // 未登记的编码回落 yaml 规格
         assertEquals("yaml", snapshot.resolveText("unknown-model").source());
         assertEquals("deepseek-v4-flash", snapshot.resolveText("unknown-model").modelEndpoint());
@@ -200,8 +200,8 @@ class AiModelRuntimeConfigTest {
 
         AiRuntimeConfigService.Snapshot snapshot = service(mapper, new AiModelCipher(MASTER_KEY)).snapshot();
 
-        assertEquals("db", snapshot.resolveVision().source());
-        assertEquals("qwen-vl-internal", snapshot.resolveVision().modelCode());
+        assertEquals("db", snapshot.resolveVisionDefault().source());
+        assertEquals("qwen-vl-internal", snapshot.resolveVisionDefault().modelCode());
         assertEquals("默认标记", snapshot.visionDefaultReason());
     }
 
@@ -216,7 +216,7 @@ class AiModelRuntimeConfigTest {
 
         // 视觉行参与的是视觉默认判定；文本默认只能在文本行里选，没有就是 yaml
         assertEquals("deepseek-v4-pro", snapshot.resolveTextDefault().modelEndpoint());
-        assertEquals("qwen-vl-internal", snapshot.resolveVision().modelCode());
+        assertEquals("qwen-vl-internal", snapshot.resolveVisionDefault().modelCode());
     }
 
     @Test
@@ -226,8 +226,8 @@ class AiModelRuntimeConfigTest {
 
         AiRuntimeConfigService.Snapshot snapshot = service(mapper, new AiModelCipher(MASTER_KEY)).snapshot();
 
-        assertEquals("yaml", snapshot.resolveVision().source());
-        assertEquals("qwen3-vl-plus", snapshot.resolveVision().modelEndpoint());
+        assertEquals("yaml", snapshot.resolveVisionDefault().source());
+        assertEquals("qwen3-vl-plus", snapshot.resolveVisionDefault().modelEndpoint());
         assertEquals("yaml 兜底", snapshot.visionDefaultReason());
     }
 
@@ -288,8 +288,8 @@ class AiModelRuntimeConfigTest {
         AiRuntimeConfigService.Snapshot snapshot = service.snapshot();
 
         assertEquals(1, snapshot.skipped(), "解不开密钥的行应被跳过");
-        assertEquals("yaml", snapshot.resolveVision().source(), "视觉通道回落到 yaml 配置");
-        assertEquals("sk-yaml-vision", snapshot.resolveVision().apiKey());
+        assertEquals("yaml", snapshot.resolveVisionDefault().source(), "视觉通道回落到 yaml 配置");
+        assertEquals("sk-yaml-vision", snapshot.resolveVisionDefault().apiKey());
     }
 
     @Test

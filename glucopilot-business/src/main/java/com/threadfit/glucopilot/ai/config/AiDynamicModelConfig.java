@@ -78,7 +78,7 @@ public class AiDynamicModelConfig {
     public ChatModel glucopilotVisionChatModel(AiRuntimeConfigService runtimeConfig,
                                                ChatModelFactory chatModelFactory) {
         return new DynamicChatModel("vision", runtimeConfig, chatModelFactory,
-                AiRuntimeConfigService.Snapshot::resolveVision,
+                AiRuntimeConfigService.Snapshot::resolveVisionDefault,
                 AiRuntimeConfigService.Snapshot::yamlVision,
                 null);
     }

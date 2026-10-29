@@ -306,11 +306,12 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
         // 按用途分流：视觉行只可能供视觉通道，文本行只可能供文本通道。
         // 之前两个判断串在一起，一条视觉行若恰好被选成文本默认会同时显示两个角色。
         if (typeOf(entity) == AiModelType.VISION) {
-            AiModelSpec vision = snapshot.resolveVision();
-            boolean used = "db".equals(vision.source()) && entity.getModelCode().equals(vision.modelCode());
+            AiModelSpec vision = snapshot.resolveVisionDefault();
+            boolean used = snapshot.visionDefaultFromDb() && entity.getModelCode().equals(vision.modelCode());
             return used ? "vision" : null;
         }
-        return entity.getModelCode().equals(snapshot.resolveTextDefault().modelCode()) ? "text-default" : null;
+        return snapshot.textDefaultFromDb() && entity.getModelCode().equals(snapshot.resolveTextDefault().modelCode())
+                ? "text-default" : null;
     }
 
     /** DB 里的用途（null/空 → TEXT），集中一处以便与 V45 回填口径保持一致。 */

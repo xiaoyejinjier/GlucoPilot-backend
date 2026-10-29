@@ -125,7 +125,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     public AiModelSpec textSpec(SceneCode scene) {
         Snapshot snapshot = snapshot();
         if (scene.isRequiresVision()) {
-            return snapshot.resolveVision();
+            return snapshot.resolveVisionDefault();
         }
         String bound = aiProperties.scene(scene).getModelCode();
         if (StringUtils.hasText(bound)) {
@@ -143,7 +143,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
 
     /** 视觉场景（阶段 1）应使用的模型。 */
     public AiModelSpec visionSpec() {
-        return snapshot().resolveVision();
+        return snapshot().resolveVisionDefault();
     }
 
     /**
@@ -225,7 +225,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
 
             if (previous == null || previous.version() != version) {
                 AiModelSpec textDefault = snapshot.resolveTextDefault();
-                AiModelSpec visionDefault = snapshot.resolveVision();
+                AiModelSpec visionDefault = snapshot.resolveVisionDefault();
                 log.info("AI 运行时配置已加载：DB 生效 {} 个模型（跳过 {}），文本默认={}[{}]（判据：{}），"
                                 + "视觉默认={}[{}]（判据：{}）",
                         snapshot.dbModelCount(), skipped,

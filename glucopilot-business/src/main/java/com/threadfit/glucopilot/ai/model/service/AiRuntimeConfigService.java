@@ -79,6 +79,11 @@ public interface AiRuntimeConfigService {
             return textDefaultReason == null ? "yaml 兜底" : textDefaultReason;
         }
 
+        /** 文本默认是否来自后台（而不是 yaml 兜底）。 */
+        public boolean textDefaultFromDb() {
+            return textDefault != null && "db".equals(textDefault.source());
+        }
+
         /**
          * 按模型编码解析（场景绑定等显式指定编码的场景）。code 为空或查不到时回落 yaml 文本规格。
          * <p>
@@ -103,7 +108,7 @@ public interface AiRuntimeConfigService {
          * <p>
          * 与文本通道同理：<b>DB 里明明有启用的视觉行，就不该悄悄退回 yaml</b>。
          */
-        public AiModelSpec resolveVision() {
+        public AiModelSpec resolveVisionDefault() {
             return visionDefault == null ? yamlVision : visionDefault;
         }
 
@@ -112,7 +117,7 @@ public interface AiRuntimeConfigService {
         }
 
         /** 视觉默认是否来自后台（而不是 yaml 兜底）。 */
-        public boolean visionFromDb() {
+        public boolean visionDefaultFromDb() {
             return visionDefault != null && "db".equals(visionDefault.source());
         }
 

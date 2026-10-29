@@ -48,45 +48,55 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
         String key = header == null ? null : IdempotencyStore.key(
                 "meal:analysis:" + request.getMediaId() + ":" + hash(foodText), userId, header);
         if (key != null) {
-            var snapshot = idempotency.find(key);
-            if (snapshot.isPresent()) return json.fromJson(snapshot.get(), MealAnalysisDtos.Result.class);
+            IdempotencyStore.Claim claim = idempotency.claim(key);
+            if (claim instanceof IdempotencyStore.Claim.Replay replay) {
+                return json.fromJson(replay.json(), MealAnalysisDtos.Result.class);
+            }
+            if (claim instanceof IdempotencyStore.Claim.InFlight) {
+                throw new BizException(ErrorCode.CONFLICT, "相同请求处理中，请稍后重试");
+            }
         }
-        String model = properties.getMeal().getModel();
-        String raw;
         try {
-            raw = vision.analyze(media, SceneCode.MEAL_ANALYSIS,
-                    "识别图片中的餐食并输出约定 JSON。补充文字仅是识别线索：" + foodText);
-        } catch (BizException e) {
-            throw e;
-        } catch (RuntimeException e) {
-            throw new BizException(ErrorCode.INTERNAL_ERROR, "餐食识别调用失败，请检查千问视觉模型及 API 配置后重试");
+            String model = properties.getMeal().getModel();
+            String raw;
+            try {
+                raw = vision.analyze(media, SceneCode.MEAL_ANALYSIS,
+                        "识别图片中的餐食并输出约定 JSON。补充文字仅是识别线索：" + foodText);
+            } catch (BizException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw new BizException(ErrorCode.INTERNAL_ERROR, "餐食识别调用失败，请检查千问视觉模型及 API 配置后重试");
+            }
+            MealAnalysisDtos.ModelResult recognized = parse(raw);
+            List<MealAnalysisDtos.Item> items = new ArrayList<>();
+            LinkedHashSet<String> warnings = new LinkedHashSet<>();
+            LinkedHashSet<String> names = new LinkedHashSet<>();
+            if (recognized.getWarning() != null && !recognized.getWarning().isBlank()) {
+                warnings.add(recognized.getWarning().substring(0, Math.min(200, recognized.getWarning().length())));
+            }
+            int newCount = 0;
+            for (MealAnalysisDtos.ModelFood food : recognized.getFoods()) {
+                if (food == null) continue;
+                String name = MealFoodCatalogService.normalizeName(food.getName());
+                if (name.isBlank() || name.length() > 64 || !names.add(name)) continue;
+                MealFoodCatalogService.Resolution resolution = catalog.resolve(food, model, media.getId());
+                items.add(resolution.item());
+                if (resolution.added()) newCount++;
+                if (resolution.item().getWeightG() == null) warnings.add("请确认食物重量后保存");
+                if (resolution.item().getCarbsG() == null) warnings.add("部分食物或营养不确定，请补充说明后重新识别");
+                if ("AI_ESTIMATE".equals(resolution.item().getNutritionSource())) warnings.add("新食品营养为模型估算，已加入食品库待运营核对");
+            }
+            if (items.isEmpty()) throw new BizException(ErrorCode.BIZ_REJECTED, "未识别出餐食，请重新拍摄清晰照片");
+            var result = MealAnalysisDtos.Result.builder().model(model).items(items)
+                    .carbsG(total(items, false)).caloriesKcal(total(items, true))
+                    .matchedCount((int) items.stream().filter(item -> "LIBRARY".equals(item.getNutritionSource())).count())
+                    .newFoodsCount(newCount).warnings(List.copyOf(warnings)).build();
+            if (key != null) idempotency.complete(key, result);
+            return result;
+        } catch (RuntimeException ex) {
+            if (key != null) idempotency.release(key);
+            throw ex;
         }
-        MealAnalysisDtos.ModelResult recognized = parse(raw);
-        List<MealAnalysisDtos.Item> items = new ArrayList<>();
-        LinkedHashSet<String> warnings = new LinkedHashSet<>();
-        LinkedHashSet<String> names = new LinkedHashSet<>();
-        if (recognized.getWarning() != null && !recognized.getWarning().isBlank()) {
-            warnings.add(recognized.getWarning().substring(0, Math.min(200, recognized.getWarning().length())));
-        }
-        int newCount = 0;
-        for (MealAnalysisDtos.ModelFood food : recognized.getFoods()) {
-            if (food == null) continue;
-            String name = MealFoodCatalogService.normalizeName(food.getName());
-            if (name.isBlank() || name.length() > 64 || !names.add(name)) continue;
-            MealFoodCatalogService.Resolution resolution = catalog.resolve(food, model, media.getId());
-            items.add(resolution.item());
-            if (resolution.added()) newCount++;
-            if (resolution.item().getWeightG() == null) warnings.add("请确认食物重量后保存");
-            if (resolution.item().getCarbsG() == null) warnings.add("部分食物或营养不确定，请补充说明后重新识别");
-            if ("AI_ESTIMATE".equals(resolution.item().getNutritionSource())) warnings.add("新食品营养为模型估算，已加入食品库待运营核对");
-        }
-        if (items.isEmpty()) throw new BizException(ErrorCode.BIZ_REJECTED, "未识别出餐食，请重新拍摄清晰照片");
-        var result = MealAnalysisDtos.Result.builder().model(model).items(items)
-                .carbsG(total(items, false)).caloriesKcal(total(items, true))
-                .matchedCount((int) items.stream().filter(item -> "LIBRARY".equals(item.getNutritionSource())).count())
-                .newFoodsCount(newCount).warnings(List.copyOf(warnings)).build();
-        if (key != null) idempotency.saveIfAbsent(key, result);
-        return result;
     }
 
     MealAnalysisDtos.ModelResult parse(String raw) {

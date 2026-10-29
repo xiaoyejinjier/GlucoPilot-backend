@@ -13,6 +13,7 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,12 +42,12 @@ public class MockDeviceAdapter implements DevicePayloadAdapter {
             if (row == null || row.isNull()) {
                 continue;
             }
-            LocalDate recordDate = LocalDate.parse(requireText(row, "recordDate"));
+            LocalDate recordDate = parseRecordDate(requireText(row, "recordDate"));
             String nodeCode = requireText(row, "nodeCode");
             if (!GlucoseNodes.isGlucoseNode(nodeCode)) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "非法血糖节点: " + nodeCode);
             }
-            BigDecimal value = new BigDecimal(requireText(row, "value"));
+            BigDecimal value = parseValue(requireText(row, "value"));
             String unit = textOrNull(row, "unit");
             BigDecimal mmol = UnitConversion.toMmolL(value, unit);
             String externalId = textOrNull(row, "externalRecordId");
@@ -56,6 +57,22 @@ public class MockDeviceAdapter implements DevicePayloadAdapter {
             throw new BizException(ErrorCode.BAD_REQUEST, "MOCK readings 不能为空");
         }
         return samples;
+    }
+
+    private static LocalDate parseRecordDate(String raw) {
+        try {
+            return LocalDate.parse(raw);
+        } catch (DateTimeParseException ex) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "非法日期: " + raw);
+        }
+    }
+
+    private static BigDecimal parseValue(String raw) {
+        try {
+            return new BigDecimal(raw);
+        } catch (NumberFormatException ex) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "非法血糖值: " + raw);
+        }
     }
 
     private static String requireText(JsonNode node, String field) {

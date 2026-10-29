@@ -35,7 +35,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -78,22 +77,27 @@ public class CmsMediaService {
 
     @Transactional
     public MediaItem register(RegisterRequest request, Long opsId) {
-        // 接口级幂等：透传 X-Idempotency-Key 时按「cms:register:{opsId}:{key}」判重，
-        // 重试/重复提交直接回放首次登记结果，避免并发下产生多条指向同一对象的记录。
+        // 接口级幂等：透传 X-Idempotency-Key 时先 Redis 占锁再落库，避免并发重复登记。
         String idempotencyKey = RequestContext.getIdempotencyKey();
-        String snapshotKey = idempotencyKey == null
-                ? null : IdempotencyStore.key("cms:register", opsId, idempotencyKey);
-        if (snapshotKey != null) {
-            Optional<String> snapshot = idempotencyStore.find(snapshotKey);
-            if (snapshot.isPresent()) {
-                return jsonUtils.fromJson(snapshot.get(), MediaItem.class);
-            }
+        if (idempotencyKey == null) {
+            return doRegister(request, opsId);
         }
-        MediaItem item = doRegister(request, opsId);
-        if (snapshotKey != null) {
-            idempotencyStore.saveIfAbsent(snapshotKey, item);
+        String snapshotKey = IdempotencyStore.key("cms:register", opsId, idempotencyKey);
+        IdempotencyStore.Claim claim = idempotencyStore.claim(snapshotKey);
+        if (claim instanceof IdempotencyStore.Claim.Replay replay) {
+            return jsonUtils.fromJson(replay.json(), MediaItem.class);
         }
-        return item;
+        if (claim instanceof IdempotencyStore.Claim.InFlight) {
+            throw new BizException(ErrorCode.CONFLICT, "相同请求处理中，请稍后重试");
+        }
+        try {
+            MediaItem item = doRegister(request, opsId);
+            idempotencyStore.complete(snapshotKey, item);
+            return item;
+        } catch (RuntimeException ex) {
+            idempotencyStore.release(snapshotKey);
+            throw ex;
+        }
     }
 
     private MediaItem doRegister(RegisterRequest request, Long opsId) {

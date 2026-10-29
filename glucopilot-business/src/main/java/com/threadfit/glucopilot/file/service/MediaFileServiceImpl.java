@@ -81,20 +81,27 @@ public class MediaFileServiceImpl implements MediaFileService {
             return toResult(duplicated.get());
         }
 
-        // 4. 接口级幂等：透传 X-Idempotency-Key 时按「media:register:{userId}:{key}」判重，
-        //    重试/重复提交直接回放首次的 result，避免并发下重复落库。
+        // 4. 接口级幂等：透传 X-Idempotency-Key 时先 Redis 占锁再落库，
+        //    避免「先查后写」竞态下并发重复 insert。
         String idempotencyKey = RequestContext.getIdempotencyKey();
         if (idempotencyKey != null) {
             String key = IdempotencyStore.key("media:register", userId, idempotencyKey);
-            Optional<String> snapshot = idempotencyStore.find(key);
-            if (snapshot.isPresent()) {
-                return jsonUtils.fromJson(snapshot.get(), MediaFileRegisterResult.class);
+            IdempotencyStore.Claim claim = idempotencyStore.claim(key);
+            if (claim instanceof IdempotencyStore.Claim.Replay replay) {
+                return jsonUtils.fromJson(replay.json(), MediaFileRegisterResult.class);
             }
-            MediaFile saved = insertMediaFile(bizType, request, userId);
-            MediaFileRegisterResult result = toResult(saved);
-            // saveIfAbsent：多个并发同时走到这里时只有首个能写入，其余按快照返回，保证幂等
-            idempotencyStore.saveIfAbsent(key, result);
-            return result;
+            if (claim instanceof IdempotencyStore.Claim.InFlight) {
+                throw new BizException(ErrorCode.CONFLICT, "相同请求处理中，请稍后重试");
+            }
+            try {
+                MediaFile saved = insertMediaFile(bizType, request, userId);
+                MediaFileRegisterResult result = toResult(saved);
+                idempotencyStore.complete(key, result);
+                return result;
+            } catch (RuntimeException ex) {
+                idempotencyStore.release(key);
+                throw ex;
+            }
         }
 
         return toResult(insertMediaFile(bizType, request, userId));

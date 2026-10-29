@@ -58,7 +58,9 @@ public class GlobalExceptionHandler {
             MissingServletRequestParameterException.class,
             MethodArgumentTypeMismatchException.class,
             HttpMessageNotReadableException.class,
-            IllegalArgumentException.class
+            IllegalArgumentException.class,
+            java.time.format.DateTimeParseException.class,
+            NumberFormatException.class
     })
     public ResponseEntity<ApiResponse<Void>> handleBadRequest(Exception ex) {
         return ResponseEntity

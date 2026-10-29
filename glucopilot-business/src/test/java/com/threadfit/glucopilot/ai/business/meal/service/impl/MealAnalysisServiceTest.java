@@ -18,7 +18,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.json.JsonMapper;
 import java.math.BigDecimal;
-import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -76,7 +75,7 @@ class MealAnalysisServiceTest {
         when(media.findOwnedMedia(8L, 1L, MediaBizType.MEAL)).thenReturn(new MediaFile());
         RequestContext.setIdempotencyKey("request-key");
         var previous = MealAnalysisDtos.Result.builder().model("qwen3-vl-plus").matchedCount(1).build();
-        when(idempotency.find(anyString())).thenReturn(Optional.of(json.toJson(previous)));
+        when(idempotency.claim(anyString())).thenReturn(new IdempotencyStore.Claim.Replay(json.toJson(previous)));
         assertEquals(1, service.analyze(1L, request()).getMatchedCount());
         verifyNoInteractions(vision, catalog);
     }

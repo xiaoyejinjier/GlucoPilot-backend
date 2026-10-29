@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.user.account;
+package com.threadfit.glucopilot.user.cancellation;
 
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CaptchaView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.QueryView;

@@ -2,7 +2,7 @@ package com.threadfit.glucopilot.user.controller;
 
 import com.threadfit.glucopilot.common.api.ApiResponse;
 import com.threadfit.glucopilot.common.context.RequestContext;
-import com.threadfit.glucopilot.user.account.AccountCancellationService;
+import com.threadfit.glucopilot.user.cancellation.AccountCancellationService;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CaptchaView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.QueryView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.RecoveryView;

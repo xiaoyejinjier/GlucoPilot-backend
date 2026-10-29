@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.user.account;
+package com.threadfit.glucopilot.user.cancellation;
 
 import com.threadfit.glucopilot.ai.business.chat.service.ChatSessionService;
 import com.threadfit.glucopilot.ai.business.ocr.service.OcrTaskService;
@@ -11,6 +11,7 @@ import com.threadfit.glucopilot.file.service.MediaFileService;
 import com.threadfit.glucopilot.glucose.record.GlucoseRecordService;
 import com.threadfit.glucopilot.meal.service.MealRecordService;
 import com.threadfit.glucopilot.profile.health.service.HealthProfileService;
+import com.threadfit.glucopilot.user.account.UserAccountService;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.feedback.FeedbackService;
 import com.threadfit.glucopilot.user.settings.UserSettingService;

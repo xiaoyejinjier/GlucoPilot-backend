@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.user.account;
+package com.threadfit.glucopilot.user.cancellation;
 
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationStatus;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;

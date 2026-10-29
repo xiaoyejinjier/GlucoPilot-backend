@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.user.account;
+package com.threadfit.glucopilot.user.cancellation;
 
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;

@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.user.account;
+package com.threadfit.glucopilot.user.cancellation;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.auth.dto.AuthDtos;

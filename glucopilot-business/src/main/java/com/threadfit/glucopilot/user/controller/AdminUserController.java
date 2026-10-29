@@ -4,7 +4,7 @@ import com.threadfit.glucopilot.common.api.ApiResponse;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.constant.PermCodes;
-import com.threadfit.glucopilot.user.account.AdminUserService;
+import com.threadfit.glucopilot.user.admin.AdminUserService;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

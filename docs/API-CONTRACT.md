@@ -249,7 +249,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ### 异常事件查询及处理
 
-- 规则版本 `glucose-alert-v1`：有效实测 `(0,40)` 中 `<3.9` 为LOW，`>=10.0` 为HIGH，单位mmol/L。这是产品提醒阈值，不替代个人诊疗目标；缺失值和餐食预测不生成提醒，不改变原图表/达标率。
+- 规则版本 `glucose-alert-v1`：有效实测 `0.1–39.9 mmol/L`（最多 1 位小数）中 `<3.9` 为LOW，`>=10.0` 为HIGH，单位mmol/L。这是产品提醒阈值，不替代个人诊疗目标；缺失值和餐食预测不生成提醒，不改变原图表/达标率。
 - 来源为未删除的 `glucose_record` 六个非餐点节点，排除删除账号。当前事件id为血糖记录ID字符串，默认PENDING；运营跟进保存到 `gp_glucose_alert_case`，追加审计到 `gp_glucose_alert_log`（迁移V16），不改历史血糖。
 - `glucoseValue + recordedAt` 构成测量快照；重新测量或改值后新快照待处理，旧跟进不得覆盖新测量。原记录恢复正常或删除后退出当前异常列表，日志保留。
 
@@ -606,7 +606,7 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 
 成功结果中的 `ocrResult` 固定为：`schemaVersion=1`、`bizType=1`、`suggestedValue`（`mmol/L`，无法可靠识别时为 `null`）、`confidence`（`0-100`）和 `rawText`。即使状态成功，`suggestedValue=null` 也表示图片质量不足，客户端必须进入手工输入。任务失败时返回 `errorMsg`，客户端仍应允许用户手工记录。
 
-用户确认后调用 `PUT /api/v1/glucose-records/by-node`：采纳 OCR 值时必须传 `sourceType=2` 和原 `mediaId`；用户改为手工输入时传 `sourceType=1`，但仍可携带原 `mediaId` 供追溯。非空 `mediaId` 必须属于当前用户、状态可用且类型为 `GLUCOSE(2)`。血糖值继续执行 `(0,40)` 的服务端范围校验，识别接口不得直接写入 `glucose_record`。
+用户确认后调用 `PUT /api/v1/glucose-records/by-node`：采纳 OCR 值时必须传 `sourceType=2` 和原 `mediaId`；用户改为手工输入时传 `sourceType=1`，但仍可携带原 `mediaId` 供追溯。非空 `mediaId` 必须属于当前用户、状态可用且类型为 `GLUCOSE(2)`。血糖值继续执行服务端校验：`mmol/L`，范围 `0.1–39.9`（`DECIMAL(4,1)`，最多 1 位小数）；多余小数位或越界返回 `40000`，不得依赖数据库舍入。识别接口不得直接写入 `glucose_record`。
 
 ## 邮箱登录（合入）
 

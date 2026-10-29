@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -96,6 +97,18 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ErrorCode.METHOD_NOT_ALLOWED.getHttpStatus())
                 .headers(ex.getHeaders())
                 .body(ApiResponse.fail(ErrorCode.METHOD_NOT_ALLOWED));
+    }
+
+    /**
+     * 数据库约束（CHECK/唯一键/非空等）冲突属于提交内容不合法，统一按 400 返回。
+     * 响应只给通用文案，不回传表名、约束名或 SQL；详细原因仅记录在服务端日志。
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        log.warn("data integrity violation", ex);
+        return ResponseEntity
+                .status(ErrorCode.BAD_REQUEST.getHttpStatus())
+                .body(ApiResponse.fail(ErrorCode.BAD_REQUEST, "数据校验失败，请检查提交内容"));
     }
 
     @ExceptionHandler(Exception.class)

@@ -63,6 +63,14 @@ class GlucoseRecordServiceTest {
     }
 
     @Test
+    void rejectsValueWithMoreThanOneDecimal() {
+        assertThrows(BizException.class, () -> service.upsertByNode(USER_ID,
+                upsertRequest("before_breakfast", new BigDecimal("0.04"))));
+        assertThrows(BizException.class, () -> service.upsertByNode(USER_ID,
+                upsertRequest("before_breakfast", new BigDecimal("39.96"))));
+    }
+
+    @Test
     void insertsBeforeBreakfastWhenAbsent() {
         when(glucoseRecordMapper.selectOne(any())).thenReturn(null);
         when(glucoseRecordMapper.insert(any(GlucoseRecord.class))).thenAnswer(inv -> {

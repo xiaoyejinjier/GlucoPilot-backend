@@ -319,8 +319,16 @@ public class GlucoseRecordService {
     }
 
     private static void assertValueInRange(BigDecimal value) {
-        if (value == null || value.compareTo(VALUE_LOW) <= 0 || value.compareTo(VALUE_HIGH) >= 0) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "血糖值须在 (0, 40) mmol/L 之间");
+        if (value == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "血糖值不能为空");
+        }
+        // 列精度为 DECIMAL(4,1)，超过 1 位小数会在落库时被四舍五入，
+        // 既可能静默改变用户输入，也可能舍入到 0.0/40.0 后触发 CHECK 约束。
+        if (value.stripTrailingZeros().scale() > 1) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "血糖值最多保留 1 位小数");
+        }
+        if (value.compareTo(VALUE_LOW) <= 0 || value.compareTo(VALUE_HIGH) >= 0) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "血糖值须在 0.1–39.9 mmol/L 之间");
         }
     }
 

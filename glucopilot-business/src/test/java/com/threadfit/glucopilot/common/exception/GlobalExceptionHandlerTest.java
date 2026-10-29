@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.common.exception;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpMethod;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -58,6 +59,16 @@ class GlobalExceptionHandlerTest {
         assertEquals("会话不存在", json.get("message").asText());
     }
 
+    @Test
+    void dataIntegrityViolationUsesBadRequestWithoutSqlDetails() throws Exception {
+        var response = mvc.perform(get("/test/constraint-violation")).andReturn().getResponse();
+        assertEquals(400, response.getStatus());
+        var json = new ObjectMapper().readTree(response.getContentAsByteArray());
+        assertEquals(40000, json.get("code").asInt());
+        assertEquals("数据校验失败，请检查提交内容", json.get("message").asText());
+        assertFalse(json.get("message").asText().contains("chk_gr_val"));
+    }
+
     @RestController
     static class Routes {
         @GetMapping("/test/read-only")
@@ -71,6 +82,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/test/business-missing")
         String missingBusinessResource() {
             throw new BizException(com.threadfit.glucopilot.common.api.ErrorCode.NOT_FOUND, "会话不存在");
+        }
+
+        @GetMapping("/test/constraint-violation")
+        String constraintViolation() {
+            throw new DataIntegrityViolationException("Check constraint 'chk_gr_val' is violated");
         }
     }
 }

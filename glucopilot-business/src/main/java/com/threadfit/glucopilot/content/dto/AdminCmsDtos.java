@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.content.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
 
@@ -14,10 +15,18 @@ public final class AdminCmsDtos {
 
     @Data
     @Builder
+    public static class NewsTag {
+        private String code;
+        private String name;
+    }
+
+    @Data
+    @Builder
     public static class NewsItem {
         private Long id;
         private String title;
         private String summary;
+        /** 兼容回传；管理端改以 tags 分类 */
         private String channel;
         private String type;
         private String coverUrl;
@@ -31,6 +40,7 @@ public final class AdminCmsDtos {
         private Integer collects;
         private String createdAt;
         private String updatedAt;
+        private List<NewsTag> tags;
     }
 
     @Data
@@ -39,8 +49,14 @@ public final class AdminCmsDtos {
         @NotBlank
         private String title;
         private String summary;
-        @NotBlank
+        /** 已废弃：忽略客户端传入，服务端固定 channel_code=4 */
         private String channel;
+        /** 已启用标签 code；与 customTags 合计去重后 1～3 个 */
+        @Size(max = 3)
+        private List<String> tagCodes;
+        /** 自定义标签名，服务端创建或复用已有标签 */
+        @Size(max = 3)
+        private List<String> customTags;
         @NotBlank
         private String type;
         private String coverUrl;

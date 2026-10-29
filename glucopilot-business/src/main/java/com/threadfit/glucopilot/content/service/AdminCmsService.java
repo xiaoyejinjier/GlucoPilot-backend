@@ -7,6 +7,7 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.model.BaseEntity;
 import com.threadfit.glucopilot.common.mybatis.SoftDeletes;
+import com.threadfit.glucopilot.community.CommunityPublicationService;
 import com.threadfit.glucopilot.content.dto.AdminCmsDtos;
 import com.threadfit.glucopilot.content.entity.CmsBanner;
 import com.threadfit.glucopilot.content.entity.CmsNews;
@@ -28,10 +29,13 @@ public class AdminCmsService {
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
     private static final String[] CHANNELS = {"", "企业动态", "行业快讯", "设备新知", "控糖科普"};
+    /** 管理端不再采集频道；固定写入控糖科普以兼容存量 C 端按频道查询。 */
+    private static final int DEFAULT_CHANNEL_CODE = 4;
 
     private final CmsBannerMapper bannerMapper;
     private final CmsNewsMapper newsMapper;
     private final CmsMediaService cmsMediaService;
+    private final CommunityPublicationService communityPublicationService;
 
     public List<AdminCmsDtos.NewsItem> listNews() {
         return newsMapper.selectList(new LambdaQueryWrapper<CmsNews>()
@@ -45,7 +49,7 @@ public class AdminCmsService {
         CmsNews row = req.getId() == null ? new CmsNews() : requireNews(req.getId());
         row.setTitle(req.getTitle().trim());
         row.setSummaryText(req.getSummary());
-        row.setChannelCode(channelCode(req.getChannel()));
+        row.setChannelCode(DEFAULT_CHANNEL_CODE);
         row.setContentType("video".equalsIgnoreCase(req.getType()) ? 2 : 1);
         row.setCoverUrl(req.getCoverUrl());
         row.setVideoUrl(req.getVideoUrl());
@@ -68,6 +72,7 @@ public class AdminCmsService {
         } else {
             newsMapper.updateById(row);
         }
+        communityPublicationService.replaceOfficialTags(row.getId(), req.getTagCodes(), req.getCustomTags());
         return toNews(requireNews(row.getId()));
     }
 
@@ -134,6 +139,9 @@ public class AdminCmsService {
             case 2 -> "unpublished";
             default -> "draft";
         };
+        List<AdminCmsDtos.NewsTag> tags = communityPublicationService.tags(n.getId().longValue()).stream()
+                .map(t -> AdminCmsDtos.NewsTag.builder().code(t.code()).name(t.name()).build())
+                .toList();
         return AdminCmsDtos.NewsItem.builder()
                 .id(n.getId())
                 .title(n.getTitle())
@@ -151,6 +159,7 @@ public class AdminCmsService {
                 .collects(n.getCollectCount() == null ? 0 : n.getCollectCount())
                 .createdAt(fmt(n.getGmtCreate()))
                 .updatedAt(fmt(n.getGmtModified()))
+                .tags(tags)
                 .build();
     }
 
@@ -183,15 +192,6 @@ public class AdminCmsService {
             throw new BizException(ErrorCode.NOT_FOUND, "Banner 不存在");
         }
         return row;
-    }
-
-    private static int channelCode(String channel) {
-        for (int i = 1; i < CHANNELS.length; i++) {
-            if (CHANNELS[i].equals(channel)) {
-                return i;
-            }
-        }
-        throw new BizException(ErrorCode.BAD_REQUEST, "频道不正确");
     }
 
     private static int statusCode(String status) {

@@ -77,6 +77,32 @@ public class CommunityPublicationService {
         jdbc.update("DELETE FROM community_article_tag WHERE news_id=?",id);
         for(String code:codes) jdbc.update("INSERT INTO community_article_tag(news_id,tag_id) SELECT ?,id FROM community_tag WHERE code=? AND enabled=1",id,code);
     }
+    /** 官方资讯保存：预置 tagCodes + 可选 customTags，合计去重后 1～3 个并覆盖关联。 */
+    public List<String> replaceOfficialTags(long newsId, List<String> tagCodes, List<String> customTags) {
+        List<String> predefined = tagCodes == null ? List.of() : tagCodes;
+        List<String> custom = customTags == null ? List.of() : customTags;
+        if (predefined.size() > 3 || custom.size() > 3 || predefined.size() + custom.size() < 1) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择或填写1～3个标签");
+        }
+        Set<String> allowed = new HashSet<>(jdbc.queryForList(
+                "SELECT code FROM community_tag WHERE enabled=1 ORDER BY id FOR UPDATE", String.class));
+        if (predefined.stream().anyMatch(code -> code == null || code.isBlank() || !allowed.contains(code.trim()))) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "标签不存在或已停用");
+        }
+        LinkedHashSet<String> resolved = new LinkedHashSet<>();
+        for (String code : predefined) {
+            resolved.add(code.trim());
+        }
+        for (String raw : custom) {
+            resolved.add(customTag(raw));
+        }
+        if (resolved.isEmpty() || resolved.size() > 3) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "最多选择3个标签");
+        }
+        List<String> codes = List.copyOf(resolved);
+        saveTags(newsId, codes);
+        return codes;
+    }
     private boolean same(Article article,Submit request,List<String> codes) {
         var scope=request.visibility()==null?null:access.normalize(Long.parseLong(article.author().userId()),request.visibility(),request.viewerIds());
         return (scope==null || (article.visibility().equals(scope.visibility())&&article.viewerIds().equals(scope.viewerIds())))

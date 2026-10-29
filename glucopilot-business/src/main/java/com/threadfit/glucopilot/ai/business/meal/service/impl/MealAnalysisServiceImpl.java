@@ -37,6 +37,7 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
     private final JsonUtils json;
     private final IdempotencyStore idempotency;
 
+    @Override
     public MealAnalysisDtos.Result analyze(Long userId, MealAnalysisDtos.Request request) {
         if (!GlucoseNodes.isMealNode(request.getNodeCode())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择早餐、中餐或晚餐节点");

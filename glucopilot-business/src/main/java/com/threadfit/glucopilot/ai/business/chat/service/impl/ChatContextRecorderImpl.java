@@ -56,6 +56,7 @@ public class ChatContextRecorderImpl implements ChatContextRecorder {
      * @param contextRound   会话内轮次号（null/&lt;1 按 1）
      * @param shards         装配阶段算出的分片（空表示无内容可记，直接跳过）
      */
+    @Override
     public void record(Long userId, Long sessionId, Long triggerMsgId, Long assistantMsgId,
                        String modelCode, Integer contextRound, List<ChatContextShard> shards) {
         if (userId == null || sessionId == null || shards == null || shards.isEmpty()) {

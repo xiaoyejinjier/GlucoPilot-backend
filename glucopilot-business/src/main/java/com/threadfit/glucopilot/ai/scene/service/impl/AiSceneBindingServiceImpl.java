@@ -49,12 +49,14 @@ public class AiSceneBindingServiceImpl implements AiSceneBindingService {
     }
 
     /** 某场景的绑定；没有配置时返回 {@link SceneBinding#INHERIT}（永不返回 null，调用方不必判空）。 */
+    @Override
     public SceneBinding binding(SceneCode scene) {
         Snapshot snapshot = snapshot();
         SceneBinding binding = snapshot.bySceneCode().get(scene.getCode());
         return binding == null ? SceneBinding.INHERIT : binding;
     }
 
+    @Override
     public Snapshot snapshot() {
         Snapshot existing = current.get();
         if (existing == null || isStale()) {
@@ -68,6 +70,7 @@ public class AiSceneBindingServiceImpl implements AiSceneBindingService {
     }
 
     /** 后台保存后调用：本实例立即生效。 */
+    @Override
     public void refreshNow() {
         synchronized (loadLock) {
             load();

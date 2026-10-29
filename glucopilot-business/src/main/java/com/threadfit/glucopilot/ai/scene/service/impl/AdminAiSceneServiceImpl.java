@@ -67,6 +67,7 @@ public class AdminAiSceneServiceImpl implements AdminAiSceneService {
 
     // ------------------------------------------------------------------ 查询
 
+    @Override
     public AdminAiSceneDtos.SceneList list() {
         List<AdminAiSceneDtos.SceneRow> rows = new ArrayList<>();
         for (SceneCode scene : SceneCode.values()) {
@@ -100,6 +101,7 @@ public class AdminAiSceneServiceImpl implements AdminAiSceneService {
     // ------------------------------------------------------------------ 保存
 
     @Transactional
+    @Override
     public AdminAiSceneDtos.SceneRow save(String sceneCode, AdminAiSceneDtos.SaveRequest request) {
         SceneCode scene = SceneCode.findByCodeOrConfigKey(sceneCode);
         if (scene == null) {

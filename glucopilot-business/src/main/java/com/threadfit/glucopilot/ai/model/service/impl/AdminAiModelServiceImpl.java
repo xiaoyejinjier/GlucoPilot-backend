@@ -58,6 +58,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
 
     // ------------------------------------------------------------------ 查询
 
+    @Override
     public AdminAiModelDtos.ModelList list() {
         List<AdminAiModelDtos.ModelRow> rows = new ArrayList<>();
         for (AiModelConfigEntity entity : mapper.selectList(null)) {
@@ -72,6 +73,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
                 .build();
     }
 
+    @Override
     public AdminAiModelDtos.ModelRow detail(Long id) {
         return toRow(require(id));
     }
@@ -79,6 +81,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
     // ------------------------------------------------------------------ 写入
 
     @Transactional
+    @Override
     public AdminAiModelDtos.ModelRow create(AdminAiModelDtos.SaveRequest request) {
         if (!StringUtils.hasText(request.getModelCode())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "模型编码不能为空");
@@ -106,6 +109,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
     }
 
     @Transactional
+    @Override
     public AdminAiModelDtos.ModelRow update(Long id, AdminAiModelDtos.SaveRequest request) {
         if (request.getConfigVersion() == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "缺少 configVersion（乐观锁），请刷新后重试");
@@ -155,6 +159,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
     }
 
     @Transactional
+    @Override
     public AdminAiModelDtos.ModelRow setEnabled(Long id, Integer enabled) {
         AiModelConfigEntity existing = require(id);
         mapper.updateEnabled(id, isYes(enabled) ? 1 : 0);
@@ -173,6 +178,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
     }
 
     @Transactional
+    @Override
     public AdminAiModelDtos.ModelRow setDefault(Long id) {
         AiModelConfigEntity existing = require(id);
         mapper.markDefault(id);
@@ -188,6 +194,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
      * 测试<b>不</b>推进 {@code config_version}（{@link AiModelConfigMapper#updateTestResult} 里没碰它）：
      * 否则"点一次测试"就会被当成一次配置变更，把别人正在编辑的表单判成版本冲突。
      */
+    @Override
     public AdminAiModelDtos.TestResult test(Long id) {
         AiModelConfigEntity entity = require(id);
         AiModelSpec spec = toSpecForTest(entity);

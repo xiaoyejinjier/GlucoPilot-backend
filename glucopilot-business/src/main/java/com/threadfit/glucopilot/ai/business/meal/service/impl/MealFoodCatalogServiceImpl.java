@@ -26,12 +26,14 @@ public class MealFoodCatalogServiceImpl implements MealFoodCatalogService {
     private final FoodCategoryMapper categories;
 
     @Transactional
+    @Override
     public Resolution resolve(MealAnalysisDtos.ModelFood input, String model) {
         return resolve(input, model, null);
     }
 
     /** sourceMediaId由餐食识别入口完成媒体归属校验后提供。 */
     @Transactional
+    @Override
     public Resolution resolve(MealAnalysisDtos.ModelFood input, String model, Long sourceMediaId) {
         if (sourceMediaId != null && sourceMediaId <= 0) sourceMediaId = null;
         String name = MealFoodCatalogService.normalizeName(input.getName());

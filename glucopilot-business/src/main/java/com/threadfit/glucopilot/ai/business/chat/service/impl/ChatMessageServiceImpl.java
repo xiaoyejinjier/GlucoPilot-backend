@@ -67,6 +67,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final MediaFileService mediaFileService;
 
     @Transactional
+    @Override
     public ChatDtos.SendMessageResponse appendUserMessage(Long userId, Long sessionId, ChatDtos.SendMessageRequest request) {
         // 归属校验 + 状态校验：不属于当前用户按 404；已结束/已归档的会话不能继续写（见 requireActive 注释）
         chatSessionService.requireActive(userId, sessionId);
@@ -169,6 +170,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
      * 复用 {@code uk_session_seq(session_id, seq_no)} 索引；{@code hasMore} 用"多取一条"判断，
      * 不额外查总数（历史消息可能上万条，COUNT 没有意义）。
      */
+    @Override
     public ChatDtos.HistoryResponse readHistory(Long userId, Long sessionId, Integer pageSize, Integer beforeSeq) {
         chatSessionService.requireOwned(userId, sessionId);
         if ((pageSize != null && (pageSize < 1 || pageSize > MAX_HISTORY_PAGE_SIZE))
@@ -249,6 +251,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
      * 防重复扣费要靠 {@code ChatRoundGuard} 在<b>调模型之前</b>拦截（见 ChatCompletionService）。
      */
     @Transactional
+    @Override
     public ChatMessage appendAssistantMessage(Long userId,
                                               Long sessionId,
                                               Long replyToMsgId,

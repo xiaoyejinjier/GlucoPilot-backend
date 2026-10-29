@@ -61,6 +61,7 @@ public class OcrTaskServiceImpl implements OcrTaskService {
         this.taskExecutor = taskExecutor;
     }
 
+    @Override
     public TaskView create(CreateRequest request, Long userId) {
         OcrBizType bizType = CodeEnum.of(OcrBizType.class, request.getBizType());
         if (bizType != OcrBizType.GLUCOSE) {
@@ -108,6 +109,7 @@ public class OcrTaskServiceImpl implements OcrTaskService {
         }
     }
 
+    @Override
     public TaskView detail(Long id, Long userId) {
         OcrTask task = taskMapper.selectOne(new LambdaQueryWrapper<OcrTask>()
                 .eq(OcrTask::getId, id)

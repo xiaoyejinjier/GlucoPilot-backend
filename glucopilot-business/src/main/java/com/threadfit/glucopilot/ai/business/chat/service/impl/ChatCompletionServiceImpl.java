@@ -175,6 +175,7 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
     /** ③ 期：本轮 prompt 的分片元数据（落库后回填 assistant_msg_id 再写 chat_context）。 */
     private final ChatContextRecorder chatContextRecorder;
 
+    @Override
     public Flux<ServerSentEvent<byte[]>> complete(Long userId, Long sessionId, ChatDtos.CompletionRequest request) {
         // 同步校验：这些异常在返回 Flux 之前抛出，客户端拿到的仍是标准 JSON 错误响应
         // 归属 + 状态：已结束/已归档的会话不能再往里写（否则消息进了老会话、/current 却指着新会话）

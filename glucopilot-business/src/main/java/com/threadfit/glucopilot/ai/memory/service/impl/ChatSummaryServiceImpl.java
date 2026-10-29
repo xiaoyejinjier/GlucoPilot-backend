@@ -96,6 +96,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      * <p>
      * <b>不阻塞、不抛异常</b>：这个方法在流式收尾的回调里被调用，任何异常都不该影响这一轮的结果。
      */
+    @Override
     public void maybeSummarizeAsync(Long userId, Long sessionId) {
         if (summaryClient == null || sessionId == null) {
             return;
@@ -281,11 +282,13 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
     }
 
     /** 当前是否有摘要任务在跑（E2E/单测断言用）。 */
+    @Override
     public boolean inFlight() {
         return summaryGuard.inFlightCount() > 0;
     }
 
     /** 供 E2E 断言：摘要场景当前用的提示词来源。 */
+    @Override
     public Map<String, String> debugInfo() {
         return Map.of("scene", SceneCode.SUMMARY.getCode(),
                 "promptSource", promptTemplateService.source(SceneCode.SUMMARY));

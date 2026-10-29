@@ -65,6 +65,7 @@ public class AdminChatMemoryServiceImpl implements AdminChatMemoryService {
      * 分页参数缺省/越界一律<b>夹紧</b>（null、0、负数按缺省值；超过 100 按 100），
      * 而不是报 400：运营页会把输入框原样带上，参数不合法就让整页打不开，属于把后端校验的锅甩给用户。
      */
+    @Override
     public AdminChatMemoryDtos.MemoryList list(Long userId, Integer pageNum, Integer pageSize) {
         if (userId == null) {
             // 路径变量理论上不会为空；真为空时按"没有记忆"返回，避免用 null 去查全表
@@ -103,6 +104,7 @@ public class AdminChatMemoryServiceImpl implements AdminChatMemoryService {
      * 而在"谁在什么时候行使了删除权"。
      */
     @Transactional
+    @Override
     public AdminChatMemoryDtos.DeleteResult deleteAll(Long userId) {
         if (userId == null) {
             return AdminChatMemoryDtos.DeleteResult.builder().deleted(0).build();

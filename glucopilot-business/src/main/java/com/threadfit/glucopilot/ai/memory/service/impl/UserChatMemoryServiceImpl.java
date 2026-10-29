@@ -110,6 +110,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * <p>
      * 读失败返回空列表（记忆是增强项，读不到就当没有，绝不让这一轮问答失败）。
      */
+    @Override
     public List<MemoryItem> forInjection(Long userId) {
         if (userId == null) {
             return List.of();
@@ -151,6 +152,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * 另外它不做 {@code inject-max-items} 截断：那个上限是为了省 token，不是为了隐瞒；
      * 这里给出全部有效记忆（键只允许五类、同键至多一条，行数天然有界）。
      */
+    @Override
     public List<UserChatMemoryDtos.MemoryRow> listOwnForUser(Long userId) {
         if (userId == null) {
             return List.of();
@@ -174,6 +176,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     }
 
     /** 用户自助删除全部长期记忆（合规：用户有权清掉系统对他的记忆）。返回删除条数。 */
+    @Override
     public int deleteAllForUser(Long userId) {
         if (userId == null) {
             return 0;
@@ -256,6 +259,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     // ------------------------------------------------------------------ 抽取（异步）
 
     /** 会话结束时调用：异步抽取该会话的长期记忆。不阻塞、不抛异常。 */
+    @Override
     public void extractAsync(Long userId, Long sessionId, String reason) {
         if (memoryClient == null || userId == null || sessionId == null) {
             return;
@@ -418,6 +422,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     }
 
     /** 当前是否有抽取任务在跑（E2E/断言用）。 */
+    @Override
     public boolean inFlight() {
         return extractGuard.inFlightCount() > 0;
     }

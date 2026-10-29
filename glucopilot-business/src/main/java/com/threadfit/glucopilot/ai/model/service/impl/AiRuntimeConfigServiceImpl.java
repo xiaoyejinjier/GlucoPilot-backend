@@ -102,6 +102,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     // ------------------------------------------------------------------ 对外
 
     /** 当前快照（按需刷新，带 TTL 与并发保护）。 */
+    @Override
     public Snapshot snapshot() {
         Snapshot existing = current.get();
         if (existing == null || isStale()) {
@@ -115,6 +116,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     }
 
     /** 后台保存后调用：立即生效（当前实例），不等 TTL。 */
+    @Override
     public void refreshNow() {
         synchronized (loadLock) {
             load();
@@ -122,6 +124,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     }
 
     /** 文本场景实际应使用的模型（场景绑定 → DB 默认 → yaml）。 */
+    @Override
     public AiModelSpec textSpec(SceneCode scene) {
         Snapshot snapshot = snapshot();
         if (scene.isRequiresVision()) {
@@ -142,6 +145,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     }
 
     /** 视觉场景（阶段 1）应使用的模型。 */
+    @Override
     public AiModelSpec visionSpec() {
         return snapshot().resolveVisionDefault();
     }
@@ -151,6 +155,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
      * <p>
      * 返回 null 表示这个编码既不是启用中的 DB 配置、也不是 yaml 里的那个模型名。
      */
+    @Override
     public AiModelSpec specByModelCode(String modelCode) {
         if (!StringUtils.hasText(modelCode)) {
             return null;
@@ -163,6 +168,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
      * 此时必须用那个模型对应的凭据与端点，否则会出现"用 A 的 key 调 B 的模型"。
      * 找不到时返回 null，由调用方回落到通道默认。
      */
+    @Override
     public AiModelSpec specByModelName(String modelName) {
         if (!StringUtils.hasText(modelName)) {
             return null;

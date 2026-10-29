@@ -60,6 +60,7 @@ public class AdminAiPromptServiceImpl implements AdminAiPromptService {
 
     // ------------------------------------------------------------------ 查询（4.11）
 
+    @Override
     public AdminAiPromptDtos.PromptList list(String sceneCode, Integer status) {
         LambdaQueryWrapper<AiPromptTemplateEntity> wrapper = new LambdaQueryWrapper<>();
         if (StringUtils.hasText(sceneCode)) {
@@ -84,6 +85,7 @@ public class AdminAiPromptServiceImpl implements AdminAiPromptService {
     }
 
     /** 四个场景的元信息 + 当前生效版本（前端用它渲染场景卡片与"生效中"标记）。 */
+    @Override
     public List<AdminAiPromptDtos.SceneOption> sceneOptions() {
         List<AdminAiPromptDtos.SceneOption> options = new ArrayList<>();
         for (SceneCode scene : SceneCode.values()) {
@@ -107,6 +109,7 @@ public class AdminAiPromptServiceImpl implements AdminAiPromptService {
     // ------------------------------------------------------------------ 新增/编辑（4.12）
 
     @Transactional
+    @Override
     public AdminAiPromptDtos.SaveResult create(AdminAiPromptDtos.SaveRequest request) {
         SceneCode scene = requireScene(request.getSceneCode());
         Payload payload = validate(scene, request);
@@ -140,6 +143,7 @@ public class AdminAiPromptServiceImpl implements AdminAiPromptService {
     }
 
     @Transactional
+    @Override
     public AdminAiPromptDtos.SaveResult update(Long id, AdminAiPromptDtos.SaveRequest request) {
         AiPromptTemplateEntity base = require(id);
         SceneCode scene = requireScene(StringUtils.hasText(request.getSceneCode())
@@ -239,6 +243,7 @@ public class AdminAiPromptServiceImpl implements AdminAiPromptService {
      * @param configVersion 可选乐观锁：给了就校验（前端会把列表里的值带上），没给只做状态校验
      */
     @Transactional
+    @Override
     public void deleteDraft(Long id, Long configVersion) {
         AiPromptTemplateEntity row = require(id);
         if (row.getIsEnabled() != null && row.getIsEnabled() == 1) {
@@ -260,6 +265,7 @@ public class AdminAiPromptServiceImpl implements AdminAiPromptService {
     // ------------------------------------------------------------------ 启用（4.13）
 
     @Transactional
+    @Override
     public void activate(Long id) {
         AiPromptTemplateEntity row = require(id);
         SceneCode scene = SceneCode.findByCode(row.getSceneCode());

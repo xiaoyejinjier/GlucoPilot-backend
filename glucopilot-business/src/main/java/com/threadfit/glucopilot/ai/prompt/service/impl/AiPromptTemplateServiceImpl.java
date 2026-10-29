@@ -113,21 +113,25 @@ public class AiPromptTemplateServiceImpl implements AiPromptTemplateService {
     // ------------------------------------------------------------------ 对外读取
 
     /** 场景当前生效的系统提示词原文（未渲染）。 */
+    @Override
     public String systemPrompt(SceneCode scene) {
         return resolve(scene).text();
     }
 
     /** 场景当前生效的提示词模板，需要变量时用 {@link PromptTemplate#render(Map)}。 */
+    @Override
     public PromptTemplate template(SceneCode scene) {
         return resolve(scene).template();
     }
 
     /** 按变量渲染系统提示词。 */
+    @Override
     public String render(SceneCode scene, Map<String, Object> variables) {
         return resolve(scene).template().render(variables);
     }
 
     /** 注入 ChatClient 的渲染器（与模板同源，避免两处各配一套语法）。 */
+    @Override
     public TemplateRenderer renderer() {
         return renderer;
     }
@@ -138,16 +142,19 @@ public class AiPromptTemplateServiceImpl implements AiPromptTemplateService {
      * 库表版本与内置版本的标签形态刻意保持一致（{@code chat@v1}）：
      * 这样历史会话记录不会因为「提示词挪进后台」而在同一个维度上出现两种写法。
      */
+    @Override
     public String versionTag(SceneCode scene) {
         return resolve(scene).versionTag();
     }
 
     /** 当前生效来源，用于日志与后台排障：{@code db#12}（库表行 id）或 {@code classpath}。 */
+    @Override
     public String source(SceneCode scene) {
         return resolve(scene).source();
     }
 
     /** 后台保存/启用后调用：本实例立即生效，不必等 TTL。 */
+    @Override
     public void refreshNow() {
         synchronized (loadLock) {
             load();
@@ -155,6 +162,7 @@ public class AiPromptTemplateServiceImpl implements AiPromptTemplateService {
     }
 
     /** 当前快照里的库表版本（场景 → 行 id），后台排障用。 */
+    @Override
     public Map<String, Long> dbSnapshotIds() {
         Map<String, Long> ids = new LinkedHashMap<>();
         snapshot().byScene().forEach((scene, loaded) -> ids.put(scene.getCode(), loaded.rowId()));

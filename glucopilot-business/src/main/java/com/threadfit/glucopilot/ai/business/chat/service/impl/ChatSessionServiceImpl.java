@@ -81,6 +81,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
      * 注意不要试图用「包一层事务再查一次」来修：MySQL 默认 REPEATABLE READ，
      * 事务内再查读到的仍是第一次读的快照，并发方提交之后依然看不见（已实测）。
      */
+    @Override
     public ChatSession getOrCreate(Long userId, Integer sessionType) {
         ChatSession existing = chatSessionMapper.selectActiveByUserId(userId);
         if (existing != null) {
@@ -108,6 +109,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
      * {@code previous == null}（本来就没有进行中会话）时不调用——没有旧会话就没有可抽的东西。
      */
     @Transactional
+    @Override
     public ChatSession openNew(Long userId, Integer sessionType) {
         // 旧会话 ID 必须在结束之前读：endActiveSessions 之后它就查不到了（这正是它要干的事）
         ChatSession previous = chatSessionMapper.selectActiveByUserId(userId);
@@ -199,6 +201,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
      * <p>
      * 「最后一条消息预览」用一次窗口函数查询批量取回，不做 N+1。
      */
+    @Override
     public ChatDtos.SessionListResponse list(Long userId, Integer sessionStatus, Integer pageNum, Integer pageSize) {
         archiveIdleSessions(userId);
 
@@ -287,6 +290,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
      * 删掉的如果是进行中会话：`/current` 下次会新建一条（不需要在这里补建）。
      */
     @Transactional
+    @Override
     public void delete(Long userId, Long sessionId) {
         ChatSession session = chatSessionMapper.selectByIdIncludingDeleted(sessionId);
         if (session == null || !userId.equals(session.getUserId())) {
@@ -306,6 +310,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     }
 
     /** 置顶/取消置顶（契约只给了 is_pinned 字段，没有接口，这里补最小写接口）。 */
+    @Override
     public void setPinned(Long userId, Long sessionId, boolean pinned) {
         requireOwned(userId, sessionId);
         int updated = chatSessionMapper.updatePinned(sessionId, userId,
@@ -320,6 +325,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
      * 校验会话存在且属于当前用户。
      * 不属于当前用户时按 404 处理（不返回 403，避免泄露「该会话存在」）。
      */
+    @Override
     public ChatSession requireOwned(Long userId, Long sessionId) {
         ChatSession session = chatSessionMapper.selectById(sessionId);
         if (session == null || !userId.equals(session.getUserId())) {
@@ -329,6 +335,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     }
 
     /** 首条消息到达时用消息内容生成标题（已是自定义标题则不动）。 */
+    @Override
     public void renameIfDefault(Long sessionId, String contentText) {
         if (contentText == null || contentText.isBlank()) {
             return;
@@ -350,6 +357,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
      * 列表里它既不在"最近"也不在"进行中"，彻底说不清。
      * 因此这里明确拒绝，并让前端提示"该会话已结束，请新建对话"。
      */
+    @Override
     public ChatSession requireActive(Long userId, Long sessionId) {
         ChatSession session = requireOwned(userId, sessionId);
         if (session.getSessionStatus() == null || session.getSessionStatus() != STATUS_ACTIVE) {
@@ -361,6 +369,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         return session;
     }
 
+    @Override
     public ChatDtos.SessionResponse toResponse(ChatSession session) {
         return ChatDtos.SessionResponse.from(session);
     }

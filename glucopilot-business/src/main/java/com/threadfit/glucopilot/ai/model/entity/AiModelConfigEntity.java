@@ -31,6 +31,14 @@ public class AiModelConfigEntity {
     /** 厂商：1 自研 2 OpenAI 兼容 3 通义 4 文心 5 其他（沿用 DDL 注释）。 */
     private Integer providerCode;
 
+    /**
+     * 用途：{@code TEXT}（文本）/ {@code VISION}（视觉，多模态）。
+     * <p>
+     * 由 V45 引入。为 null 时按 TEXT 处理（历史行与旧前端都写不出这个字段）。
+     * 它与 {@link #providerCode} 正交：厂商决定"用什么协议连"，用途决定"能干什么、归哪个通道判默认"。
+     */
+    private String modelType;
+
     private String apiBaseUrl;
 
     /** 密钥密文（AES-GCM）。为空表示"沿用环境变量/yaml 里的密钥"。 */

@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.business.meal;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.AiModelType;
 import com.threadfit.glucopilot.ai.config.AiVisionClientConfig;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
@@ -73,7 +74,8 @@ class MealVisionLiveTest {
                 props.getVision().getMaxTokens(),
                 null,
                 Duration.ofSeconds(props.getVision().getTimeoutSeconds()),
-                "yaml"));
+                "yaml",
+                AiModelType.VISION));
         var client = new AiVisionClientConfig().visionChatClient(visionModel, prompts);
         AiChatClientRegistry registry = mock(AiChatClientRegistry.class);
         when(registry.visionClient(SceneCode.MEAL_ANALYSIS)).thenReturn(client);

@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.core;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.AiModelType;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
@@ -57,8 +58,12 @@ class SceneModelResolverTest {
     }
 
     private static AiModelSpec spec(String code, String endpoint) {
-        return new AiModelSpec(code, code, 1, null, null, endpoint,
-                null, null, null, null, null, "db");
+        return spec(code, endpoint, AiModelType.TEXT);
+    }
+
+    private static AiModelSpec spec(String code, String endpoint, AiModelType type) {
+        return new AiModelSpec(code, code, type == AiModelType.VISION ? 2 : 1, null, null, endpoint,
+                null, null, null, null, null, "db", type);
     }
 
     private static AiSceneBindingService.SceneBinding binding(String modelCode, Double temperature,
@@ -162,9 +167,36 @@ class SceneModelResolverTest {
 
     @Test
     void 视觉场景的模型来自视觉通道而不是后台绑定() {
+        when(sceneBindings.binding(SceneCode.CHAT_IMAGE)).thenReturn(inherit());
         when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "db"));
 
         assertEquals("qwen-vl", resolver.modelCode(SceneCode.CHAT_IMAGE));
+    }
+
+    @Test
+    void 视觉场景绑定了视觉模型时应采纳绑定() {
+        when(sceneBindings.binding(SceneCode.CHAT_IMAGE)).thenReturn(binding("qwen-vl-max", null, null, null));
+        when(runtimeConfig.specByModelCode("qwen-vl-max")).thenReturn(spec("qwen-vl-max", "qwen-vl-max-endpoint", AiModelType.VISION));
+        when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "db"));
+
+        assertEquals("qwen-vl-max", resolver.modelCode(SceneCode.CHAT_IMAGE));
+        // 绑定了模型就必须把它写进请求级 options（不然"绑定生效了但请求还发旧模型"）
+        OpenAiChatOptions options = (OpenAiChatOptions) resolver.visionOptionsBuilder(SceneCode.CHAT_IMAGE).build();
+        assertEquals("qwen-vl-max-endpoint", options.getModel());
+        assertTrue(resolver.hasOverrides(SceneCode.CHAT_IMAGE));
+    }
+
+    @Test
+    void 视觉场景绑定了文本模型时应回落通道视觉模型() {
+        // 视觉场景绑一个文本模型是最容易犯的配置错：把 DeepSeek 塞进多模态请求只会 400，
+        // 且错误信息与"绑定没生效"长得一样，所以这里必须显式回落而不是硬发
+        when(sceneBindings.binding(SceneCode.CHAT_IMAGE)).thenReturn(binding("flash", null, null, null));
+        when(runtimeConfig.specByModelCode("flash")).thenReturn(spec("flash", "flash-endpoint", AiModelType.TEXT));
+        when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "db"));
+
+        assertEquals("qwen-vl", resolver.modelCode(SceneCode.CHAT_IMAGE));
+        assertNull(resolver.visionOptionsBuilder(SceneCode.CHAT_IMAGE),
+                "用途不匹配的绑定不该写进视觉请求");
     }
 
     @Test

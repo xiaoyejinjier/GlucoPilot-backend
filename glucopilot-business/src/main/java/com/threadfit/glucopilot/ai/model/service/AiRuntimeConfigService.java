@@ -51,6 +51,8 @@ public interface AiRuntimeConfigService {
      * @param yamlVision          yaml 里的视觉通道规格（兜底）
      * @param textDefault         文本通道的"默认"规格；null = 没有后台默认
      * @param textDefaultReason   默认是怎么选出来的（排障用）
+     * @param visionDefault       视觉通道的"默认"规格（后台 VISION 行）；null = 没有后台视觉默认
+     * @param visionDefaultReason 视觉默认的判据（排障用）
      * @param skipped             读取时跳过的坏行数（解密失败/字段缺失）
      */
     record Snapshot(long version,
@@ -60,6 +62,8 @@ public interface AiRuntimeConfigService {
                     AiModelSpec yamlVision,
                     AiModelSpec textDefault,
                     String textDefaultReason,
+                    AiModelSpec visionDefault,
+                    String visionDefaultReason,
                     int skipped) {
 
         /**
@@ -92,14 +96,24 @@ public interface AiRuntimeConfigService {
         }
 
         /**
-         * 视觉通道解析：视觉模型编码取自 {@code ai.vision.model}（yaml），DB 里同一 <b>endpoint</b> 的行优先。
+         * 视觉通道解析：后台 {@code model_type='VISION'} 的默认行 → 唯一/最近启用的视觉行 → yaml。
          * <p>
-         * 按 endpoint 而不是 model_code 反查：这两列可以不同名（后台允许"编码 qwen-vl、端点 qwen3-vl-plus"），
-         * 早先按 model_code 查是撞上 V13 种子里两列恰好相等才没暴露。
+         * 批次 2 之前这里按 {@code model_endpoint} 反查，等于"只有和 yaml 同名的那一个视觉模型能被后台接管"；
+         * 现在按<b>用途</b>判定，后台新增的任意视觉模型都能成为视觉默认（这才是"自由配置视觉模型"）。
+         * <p>
+         * 与文本通道同理：<b>DB 里明明有启用的视觉行，就不该悄悄退回 yaml</b>。
          */
         public AiModelSpec resolveVision() {
-            AiModelSpec spec = byName.get(yamlVision.modelEndpoint());
-            return spec != null && "db".equals(spec.source()) ? spec : yamlVision;
+            return visionDefault == null ? yamlVision : visionDefault;
+        }
+
+        public String visionDefaultReason() {
+            return visionDefaultReason == null ? "yaml 兜底" : visionDefaultReason;
+        }
+
+        /** 视觉默认是否来自后台（而不是 yaml 兜底）。 */
+        public boolean visionFromDb() {
+            return visionDefault != null && "db".equals(visionDefault.source());
         }
 
         public AiModelSpec resolveByName(String modelName) {

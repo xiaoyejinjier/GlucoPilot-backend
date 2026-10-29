@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.model.runtime;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiChannelProperties;
+import com.threadfit.glucopilot.ai.config.AiModelType;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -102,7 +103,7 @@ class AiModelRuntimeConfigTest {
         AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
         when(mapper.selectEnabled()).thenReturn(List.of(
                 row("deepseek-v4-flash", 1, null),
-                row("qwen3-vl-plus", 2, null)));
+                visionRow("qwen3-vl-plus")));
 
         AiRuntimeConfigService service = service(mapper, new AiModelCipher(MASTER_KEY));
         AiRuntimeConfigService.Snapshot snapshot = service.snapshot();
@@ -133,7 +134,7 @@ class AiModelRuntimeConfigTest {
         // flash 已停用（selectEnabled 不会返回它），只剩新启用的 pro 与视觉行，且 pro 没标默认
         when(mapper.selectEnabled()).thenReturn(List.of(
                 noDefault(row("deepseek-v4-pro", 1, null)),
-                row("qwen3-vl-plus", 2, null)));
+                visionRow("qwen3-vl-plus")));
 
         AiRuntimeConfigService service = service(mapper, new AiModelCipher(MASTER_KEY));
         AiRuntimeConfigService.Snapshot snapshot = service.snapshot();
@@ -179,7 +180,7 @@ class AiModelRuntimeConfigTest {
     @Test
     void 一个文本候选都没有时应回落yaml() {
         AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
-        when(mapper.selectEnabled()).thenReturn(List.of(row("qwen3-vl-plus", 2, null)));
+        when(mapper.selectEnabled()).thenReturn(List.of(visionRow("qwen3-vl-plus")));
 
         AiRuntimeConfigService.Snapshot snapshot = service(mapper, new AiModelCipher(MASTER_KEY)).snapshot();
 
@@ -189,17 +190,45 @@ class AiModelRuntimeConfigTest {
     }
 
     @Test
-    void 视觉行应按端点而不是编码反查() {
+    void 视觉默认应能选中端点与yaml不同的视觉模型() {
         AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
-        // 编码与端点不同名：编码是业务起的名字，端点才是发给厂商的模型名
-        AiModelConfigEntity vision = row("qwen-vl", 2, null);
-        vision.setModelEndpoint("qwen3-vl-plus");
+        // 批次 2 之前视觉行只能靠"端点等于 ai.vision.model"被认出来，于是运营新增一个
+        // 端点名不同的视觉模型（如 qwen-vl-max），后台怎么点都不会生效
+        AiModelConfigEntity vision = visionRow("qwen-vl-internal");
+        vision.setModelEndpoint("qwen-vl-max");
         when(mapper.selectEnabled()).thenReturn(List.of(vision));
 
         AiRuntimeConfigService.Snapshot snapshot = service(mapper, new AiModelCipher(MASTER_KEY)).snapshot();
 
         assertEquals("db", snapshot.resolveVision().source());
-        assertEquals("qwen-vl", snapshot.resolveVision().modelCode());
+        assertEquals("qwen-vl-internal", snapshot.resolveVision().modelCode());
+        assertEquals("默认标记", snapshot.visionDefaultReason());
+    }
+
+    @Test
+    void 视觉行标了默认也不能抢走文本默认() {
+        AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
+        AiModelConfigEntity vision = visionRow("qwen-vl-internal"); // is_default=1
+        when(mapper.selectEnabled()).thenReturn(List.of(
+                noDefault(row("deepseek-v4-pro", 1, null)), vision));
+
+        AiRuntimeConfigService.Snapshot snapshot = service(mapper, new AiModelCipher(MASTER_KEY)).snapshot();
+
+        // 视觉行参与的是视觉默认判定；文本默认只能在文本行里选，没有就是 yaml
+        assertEquals("deepseek-v4-pro", snapshot.resolveTextDefault().modelEndpoint());
+        assertEquals("qwen-vl-internal", snapshot.resolveVision().modelCode());
+    }
+
+    @Test
+    void 没有视觉行时视觉默认应回落yaml() {
+        AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
+        when(mapper.selectEnabled()).thenReturn(List.of(row("deepseek-v4-pro", 1, null)));
+
+        AiRuntimeConfigService.Snapshot snapshot = service(mapper, new AiModelCipher(MASTER_KEY)).snapshot();
+
+        assertEquals("yaml", snapshot.resolveVision().source());
+        assertEquals("qwen3-vl-plus", snapshot.resolveVision().modelEndpoint());
+        assertEquals("yaml 兜底", snapshot.visionDefaultReason());
     }
 
     @Test
@@ -236,7 +265,7 @@ class AiModelRuntimeConfigTest {
     @Test
     void 文本通道默认不应被yaml里同名的模型名钉死() {
         AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
-        when(mapper.selectEnabled()).thenReturn(List.of(row("deepseek-v4-pro", 1, null), row("qwen3-vl-plus", 2, null)));
+        when(mapper.selectEnabled()).thenReturn(List.of(row("deepseek-v4-pro", 1, null), visionRow("qwen3-vl-plus")));
 
         AiRuntimeConfigService service = service(mapper, new AiModelCipher(MASTER_KEY));
         AiRuntimeConfigService.Snapshot snapshot = service.snapshot();
@@ -253,7 +282,7 @@ class AiModelRuntimeConfigTest {
         AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
         // 用另一个主密钥加密 → 当前实例解不开
         String foreign = new AiModelCipher("ffffffffffffffffffffffffffffffff").encrypt("sk-foreign");
-        when(mapper.selectEnabled()).thenReturn(List.of(row("qwen3-vl-plus", 2, foreign)));
+        when(mapper.selectEnabled()).thenReturn(List.of(visionRow("qwen3-vl-plus", foreign)));
 
         AiRuntimeConfigService service = service(mapper, new AiModelCipher(MASTER_KEY));
         AiRuntimeConfigService.Snapshot snapshot = service.snapshot();
@@ -445,6 +474,17 @@ class AiModelRuntimeConfigTest {
         return entity;
     }
 
+    /** 视觉用途的行：provider 走 OpenAI 兼容协议、用途=VISION（V45 起类型是显式列）。 */
+    private static AiModelConfigEntity visionRow(String modelCode) {
+        return visionRow(modelCode, null);
+    }
+
+    private static AiModelConfigEntity visionRow(String modelCode, String cipherText) {
+        AiModelConfigEntity entity = row(modelCode, 2, cipherText);
+        entity.setModelType(AiModelType.VISION.name());
+        return entity;
+    }
+
     /** 取消默认标记：用于构造"多行启用但没人标默认"这种最容易走偏的状态。 */
     private static AiModelConfigEntity noDefault(AiModelConfigEntity entity) {
         entity.setIsDefault(0);
@@ -453,7 +493,12 @@ class AiModelRuntimeConfigTest {
 
     private static AiModelSpec spec(String code, String endpoint, String key, String source) {
         return new AiModelSpec(code, code, 1, "https://api.deepseek.com", key, endpoint,
-                0.7, null, 2048, null, Duration.ofSeconds(60), source);
+                0.7, null, 2048, null, Duration.ofSeconds(60), source, AiModelType.TEXT);
+    }
+
+    private static AiModelSpec visionSpec(String code, String endpoint, String key, String source) {
+        return new AiModelSpec(code, code, 2, "https://dashscope.aliyuncs.com/compatible-mode/v1", key, endpoint,
+                0.2, null, 512, null, Duration.ofSeconds(60), source, AiModelType.VISION);
     }
 
     private static AiRuntimeConfigService.Snapshot snapshotOf(AiModelSpec... specs) {
@@ -473,26 +518,29 @@ class AiModelRuntimeConfigTest {
             if ("yaml".equals(spec.source())) {
                 byCode.putIfAbsent(spec.modelCode(), spec);
                 byName.putIfAbsent(spec.modelEndpoint(), spec);
-                if (yamlText == null) {
-                    yamlText = spec;
-                } else {
+                if (spec.vision() && yamlVision == null) {
                     yamlVision = spec;
+                } else if (!spec.vision() && yamlText == null) {
+                    yamlText = spec;
                 }
             }
         }
         if (yamlVision == null) {
-            yamlVision = new AiModelSpec("qwen3-vl-plus", "vision", 2, "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    "sk-yaml-vision", "qwen3-vl-plus", 0.2, null, 512, null, Duration.ofSeconds(60), "yaml");
+            yamlVision = visionSpec("qwen3-vl-plus", "qwen3-vl-plus", "sk-yaml-vision", "yaml");
         }
-        // 文本默认取第一份 DB 规格（等价于 load() 里"默认标记优先"的判定），没有 DB 规格就用 yaml
-        AiModelSpec visionSpec = yamlVision;
+        // 文本默认取第一份 DB 文本规格（等价于 load() 里"默认标记优先"的判定），没有就用 yaml
         AiModelSpec textDefault = byCode.values().stream()
                 .filter(spec -> "db".equals(spec.source()))
-                .filter(spec -> !visionSpec.modelEndpoint().equals(spec.modelEndpoint()))
+                .filter(spec -> !spec.vision())
                 .findFirst()
                 .orElse(yamlText);
+        AiModelSpec visionDefault = byCode.values().stream()
+                .filter(spec -> "db".equals(spec.source()))
+                .filter(AiModelSpec::vision)
+                .findFirst()
+                .orElse(null);
         return new AiRuntimeConfigService.Snapshot(1L, byCode, byName, yamlText, yamlVision, textDefault,
-                "默认标记", 0);
+                "默认标记", visionDefault, visionDefault == null ? "yaml 兜底" : "默认标记", 0);
     }
 
     /** 只为构造"带 model 的 options"用的小工具，避免测试里散落构造细节。 */

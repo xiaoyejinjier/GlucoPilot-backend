@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.ai.model.service.impl;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiChannel;
 import com.threadfit.glucopilot.ai.config.AiChannelProperties;
+import com.threadfit.glucopilot.ai.config.AiModelType;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -44,7 +45,7 @@ import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
  *   <li><b>60 秒 TTL 兜底刷新</b>：本实例改配置走 {@link #refreshNow()} 立即生效；其他实例靠 TTL
  *       最终一致（多实例的 Redis 广播是 P2 的优化项，不是正确性依赖）。</li>
  *   <li><b>文本通道默认 = <u>DB 里被启用且标为默认的那一行</u></b>，而不是"yaml 里那个模型名对应的行"。
- *       判据固定为：默认标记 → 唯一启用 → 最近修改 → yaml（见 {@link #pickTextDefault}）。
+ *       判据固定为：默认标记 → 唯一启用 → 最近修改 → yaml（见 {@link #pickDefault}）；视觉通道同构。
  *       <b>这条是 2026-10-13 一个线上反馈逼出来的</b>：原先通道默认写成
  *       {@code resolveText(yamlText.modelCode())}，于是"停用 flash、启用 pro"之后，
  *       {@code byCode} 里 flash 的 DB 条目消失、yaml 兜底条目又恰好叫 flash，解析结果仍是 flash
@@ -58,11 +59,15 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     /** 其他实例的最终一致窗口：超过这个时长再访问就重新加载一次。 */
     private static final Duration REFRESH_TTL = Duration.ofSeconds(60);
 
-    /** 文本默认值的四种判据。文案会进日志与后台接口，改动要同步前端与文档。 */
+    /** 默认值的四种判据。文案会进日志与后台接口，改动要同步前端与文档。 */
     static final String DEFAULT_FLAG = "默认标记";
     static final String DEFAULT_ONLY_ENABLED = "唯一启用的文本模型";
     static final String DEFAULT_RECENT = "最近修改的文本模型";
     static final String DEFAULT_YAML = "yaml 兜底";
+
+    /** 视觉通道的两条类型化判据（默认标记与 yaml 兜底与文本共用）。 */
+    static final String VISION_ONLY_ENABLED = "唯一启用的视觉模型";
+    static final String VISION_RECENT = "最近修改的视觉模型";
 
     private final AiModelConfigMapper mapper;
     private final AiModelCipher cipher;
@@ -190,7 +195,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
                 byCode.put(spec.modelCode(), spec);
                 byName.put(spec.modelEndpoint(), spec);
                 candidates.add(new Candidate(spec, isYes(row.getIsDefault()), row.getGmtModified(), row.getId(),
-                        yamlVision.modelEndpoint().equals(spec.modelEndpoint())));
+                        spec.type()));
             }
             // yaml 侧也进索引，但优先级低于 DB：同名时以 DB 为准（这正是"后台能覆盖 yaml"的落点）
             byCode.putIfAbsent(yamlText.modelCode(), yamlText);
@@ -201,7 +206,9 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
             byCode.putIfAbsent(yamlVision.modelCode(), yamlVision);
             byName.putIfAbsent(yamlVision.modelEndpoint(), yamlVision);
 
-            DefaultPick pick = pickTextDefault(candidates, yamlText);
+            // 文本与视觉各判一次默认：两者按 model_type 分池，互不干扰
+            DefaultPick textPick = pickDefault(candidates, yamlText, AiModelType.TEXT);
+            DefaultPick visionPick = pickDefault(candidates, yamlVision, AiModelType.VISION);
 
             // 版本号按"内容"而不是时间：TTL 到期但配置没变时不换版本，模型缓存因此不会被无谓清空
             // （否则每 60 秒重建一次 HTTP 客户端，白白抖动连接池）
@@ -212,23 +219,32 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
             }
             long version = versionCounter;
             Snapshot snapshot = new Snapshot(version, byCode, byName, yamlText, yamlVision,
-                    pick.spec(), pick.reason(), skipped);
+                    textPick.spec(), textPick.reason(), visionPick.spec(), visionPick.reason(), skipped);
             current.set(snapshot);
             loadedAtNanos = System.nanoTime();
 
             if (previous == null || previous.version() != version) {
                 AiModelSpec textDefault = snapshot.resolveTextDefault();
-                log.info("AI 运行时配置已加载：DB 生效 {} 个模型（跳过 {}），文本默认={}[{}]（判据：{}），视觉={}[{}]",
+                AiModelSpec visionDefault = snapshot.resolveVision();
+                log.info("AI 运行时配置已加载：DB 生效 {} 个模型（跳过 {}），文本默认={}[{}]（判据：{}），"
+                                + "视觉默认={}[{}]（判据：{}）",
                         snapshot.dbModelCount(), skipped,
                         textDefault.modelEndpoint(), textDefault.source(), snapshot.textDefaultReason(),
-                        snapshot.resolveVision().modelEndpoint(), snapshot.resolveVision().source());
-                if (DEFAULT_RECENT.equals(pick.reason())) {
+                        visionDefault.modelEndpoint(), visionDefault.source(), snapshot.visionDefaultReason());
+                if (DEFAULT_RECENT.equals(textPick.reason())) {
                     log.warn("文本通道没有「已启用且标为默认」的模型，已按最近修改时间选中 {}；"
                             + "请在后台把它显式设为默认，否则下次改动别的模型会让默认模型漂移",
                             textDefault.modelCode());
-                } else if (DEFAULT_ONLY_ENABLED.equals(pick.reason())) {
+                } else if (DEFAULT_ONLY_ENABLED.equals(textPick.reason())) {
                     log.warn("文本通道没有默认模型标记，已使用当前唯一启用的文本模型 {}；建议在后台把它设为默认",
                             textDefault.modelCode());
+                }
+                if (VISION_RECENT.equals(visionPick.reason())) {
+                    log.warn("视觉通道没有「已启用且标为默认」的视觉模型，已按最近修改时间选中 {}；"
+                            + "请在后台把它显式设为默认", visionDefault.modelCode());
+                } else if (VISION_ONLY_ENABLED.equals(visionPick.reason())) {
+                    log.warn("视觉通道没有默认模型标记，已使用当前唯一启用的视觉模型 {}；建议在后台把它设为默认",
+                            visionDefault.modelCode());
                 }
             }
         } catch (RuntimeException e) {
@@ -244,7 +260,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
                 byName.put(yamlText.modelEndpoint(), yamlText);
                 byName.putIfAbsent(yamlVision.modelEndpoint(), yamlVision);
                 current.set(new Snapshot(System.nanoTime(), byCode, byName, yamlText, yamlVision,
-                        yamlText, DEFAULT_YAML, 0));
+                        yamlText, DEFAULT_YAML, null, DEFAULT_YAML, 0));
                 loadedAtNanos = System.nanoTime();
             } else {
                 log.error("AI 运行时配置加载失败，继续沿用上一份快照（版本 {}）", previous.version(), e);
@@ -254,37 +270,39 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     }
 
     /**
-     * 文本通道"用哪个模型"的判定，顺序固定、每步都有名字。
+     * 某个通道"用哪个模型"的判定，顺序固定、每步都有名字。
      *
      * <ol>
-     *   <li><b>默认标记</b>：启用且 {@code is_default=1} 的行——管理员的显式意图，最高优先级；</li>
-     *   <li><b>唯一启用</b>：只剩一个启用的文本候选行时直接用它（典型场景：停用旧的、启用新的）；</li>
+     *   <li><b>默认标记</b>：启用且 {@code is_default=1} 的<b>同类型</b>行——管理员的显式意图，最高优先级；</li>
+     *   <li><b>唯一启用</b>：只剩一个启用的同类型候选时直接用它（典型场景：停用旧的、启用新的）；</li>
      *   <li><b>最近修改</b>：多个候选且都没标默认时，取 {@code gmt_modified} 最新的那行。
-     *       刻意<b>不</b>回落到 yaml：DB 里明明启用着配置却去用 yaml，正是本次要修的那种"后台改了不生效"；</li>
-     *   <li><b>yaml 兜底</b>：DB 里一个可用的文本候选都没有时，才用 yaml/环境变量那套。</li>
+     *       刻意<b>不</b>回落到 yaml：DB 里明明启用着配置却去用 yaml，正是"后台改了不生效"；</li>
+     *   <li><b>yaml 兜底</b>：DB 里一个可用的同类型候选都没有时，才用 yaml/环境变量那套。</li>
      * </ol>
      *
-     * <p>视觉行（{@code model_endpoint} 等于 {@code ai.vision.model}）不参与文本候选：
-     * 它对文本通道是"另一个 provider 的模型"，让它抢默认位只会在对话里报 404。
+     * <p>候选按 {@link AiModelSpec#type()} 过滤：类型来自 V45 的 {@code model_type}。
+     * 之前用「endpoint 是否等于 yaml 视觉模型」猜视觉，漏掉后台新增的视觉模型，
+     * 让它在文本通道里抢默认位（对话直接 404）。
      */
-    private DefaultPick pickTextDefault(List<Candidate> candidates, AiModelSpec yamlText) {
-        List<Candidate> text = candidates.stream().filter(c -> !c.visionLike()).toList();
-        for (Candidate candidate : text) {
+    private DefaultPick pickDefault(List<Candidate> candidates, AiModelSpec fallback, AiModelType type) {
+        List<Candidate> sameType = candidates.stream().filter(c -> c.type() == type).toList();
+        for (Candidate candidate : sameType) {
             if (candidate.isDefault()) {
                 return new DefaultPick(candidate.spec(), DEFAULT_FLAG);
             }
         }
-        if (text.size() == 1) {
-            return new DefaultPick(text.get(0).spec(), DEFAULT_ONLY_ENABLED);
+        boolean vision = type == AiModelType.VISION;
+        if (sameType.size() == 1) {
+            return new DefaultPick(sameType.get(0).spec(), vision ? VISION_ONLY_ENABLED : DEFAULT_ONLY_ENABLED);
         }
-        if (!text.isEmpty()) {
-            Candidate recent = text.stream()
+        if (!sameType.isEmpty()) {
+            Candidate recent = sameType.stream()
                     .max(Comparator.comparing(Candidate::modifiedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
                             .thenComparing(Candidate::id, Comparator.nullsFirst(Comparator.naturalOrder())))
                     .orElseThrow();
-            return new DefaultPick(recent.spec(), DEFAULT_RECENT);
+            return new DefaultPick(recent.spec(), vision ? VISION_RECENT : DEFAULT_RECENT);
         }
-        return new DefaultPick(yamlText, DEFAULT_YAML);
+        return new DefaultPick(fallback, DEFAULT_YAML);
     }
 
     private static boolean isYes(Integer flag) {
@@ -293,7 +311,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
 
     /** 一条启用配置的候选信息：默认判定需要它，但不需要把整行带进快照。 */
     private record Candidate(AiModelSpec spec, boolean isDefault, LocalDateTime modifiedAt, Long id,
-                             boolean visionLike) {
+                             AiModelType type) {
     }
 
     /** 默认值判定结果：规格 + 判据（判据必须能一路走到日志和后台列表）。 */
@@ -320,6 +338,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
 
     /** DB 行 → 规格；密钥解不开返回 null（由调用方计为"跳过"）。 */
     private AiModelSpec toSpec(AiModelConfigEntity row) {
+        AiModelType type = AiModelType.of(row.getModelType());
         String apiKey = "";
         if (StringUtils.hasText(row.getApiKeyCipher())) {
             String decrypted = cipher.decryptOrNull(row.getApiKeyCipher());
@@ -331,13 +350,13 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
             apiKey = decrypted;
         } else {
             // 留空 = 沿用 yaml/环境变量里的密钥：让"只改模型名"不必重新录一遍密钥
-            apiKey = yamlKeyFor(row.getProviderCode());
+            apiKey = yamlKeyFor(type);
         }
         return new AiModelSpec(
                 row.getModelCode(),
                 row.getModelName(),
                 row.getProviderCode() == null ? 1 : row.getProviderCode(),
-                StringUtils.hasText(row.getApiBaseUrl()) ? row.getApiBaseUrl() : defaultBaseUrl(row.getProviderCode()),
+                StringUtils.hasText(row.getApiBaseUrl()) ? row.getApiBaseUrl() : defaultBaseUrl(type),
                 apiKey,
                 row.getModelEndpoint(),
                 toDouble(row.getTemperature()),
@@ -345,7 +364,8 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
                 row.getMaxTokens(),
                 row.getThinking(),
                 Duration.ofMillis(row.getTimeoutMs() == null ? 60_000L : row.getTimeoutMs()),
-                "db");
+                "db",
+                type);
     }
 
     /**
@@ -369,22 +389,28 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
                 config.getMaxTokens(),
                 null,
                 config.timeout(),
-                "yaml");
+                "yaml",
+                text ? AiModelType.TEXT : AiModelType.VISION);
     }
 
     /**
-     * 未自带密钥时，按<b>通道</b>取 yaml 里的对应密钥。
+     * 未自带密钥时，按<b>用途</b>取 yaml 里对应通道的密钥。
      * <p>
-     * 这里仍然用 {@code provider_code} 推断通道——因为「这一行是文本模型还是视觉模型」
-     * 目前没有独立的列可依（批次 2 会加 {@code model_type}）。集中在这一处是为了到时候
-     * 只改这一行，而不是散落在四条回落路径上。
+     * 批次 2 之前这里用 {@code provider_code} 推断通道，于是"厂商填 2（OpenAI 兼容）的文本模型"
+     * 会拿到视觉通道的 key/base-url——串道了还查不出来（调用直接 401/404）。
+     * 类型是显式字段，按它取凭据才是确定性的。
      */
-    private String yamlKeyFor(Integer providerCode) {
-        return channels.channel(AiChannel.ofProviderCode(providerCode)).getApiKey();
+    private String yamlKeyFor(AiModelType type) {
+        return channels.channel(channelOf(type)).getApiKey();
     }
 
-    private String defaultBaseUrl(Integer providerCode) {
-        return channels.channel(AiChannel.ofProviderCode(providerCode)).getBaseUrl();
+    private String defaultBaseUrl(AiModelType type) {
+        return channels.channel(channelOf(type)).getBaseUrl();
+    }
+
+    /** 用途 → 通道：文本模型用文本通道凭据，视觉模型用视觉通道凭据。 */
+    private static AiChannel channelOf(AiModelType type) {
+        return type == AiModelType.VISION ? AiChannel.VISION : AiChannel.TEXT;
     }
 
     private static Double toDouble(BigDecimal value) {
@@ -399,8 +425,10 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
      * @param version           内容指纹版本：内容变了才变（TTL 刷新不换版本）
      * @param byCode            model_code → 规格（含 yaml 侧兜底项）
      * @param byName            model_endpoint → 规格，用于按请求里声明的模型名反查凭据
-     * @param textDefault       文本通道默认规格，加载时定下（见 {@link #pickTextDefault}）
+     * @param textDefault       文本通道默认规格，加载时定下（见 {@link #pickDefault}）
      * @param textDefaultReason 该默认值是怎么选出来的，进日志也进后台列表
+     * @param visionDefault     视觉通道默认规格，加载时定下（见 {@link #pickDefault}）
+     * @param visionDefaultReason 视觉默认值的判据
      * @param skipped           因密钥不可用被跳过的行数（观测用）
      */
 

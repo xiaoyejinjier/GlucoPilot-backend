@@ -107,10 +107,22 @@ public class SceneModelResolver {
      * 就会出现"记录里写 A、实际调 B"的老问题（2026-10-13 的反馈）。
      */
     public String modelCode(SceneCode scene) {
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         if (scene.isRequiresVision()) {
+            // 视觉场景也认后台绑定（批次 2 之前这里是硬编码 visionSpec()，绑定"存了不用"）：
+            // 只有解析到「用途=视觉」的规格才采纳，否则宁可回落通道视觉模型——
+            // 把一个文本模型塞进视觉请求，结果一定是 400/404，而且错误信息与"绑定没生效"长得一样。
+            if (binding.hasModel()) {
+                AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
+                if (bound != null && bound.vision()) {
+                    return bound.modelCode();
+                }
+                log.warn("视觉场景 {} 绑定的模型编码 {} 不可用（未登记、已停用，或用途不是 VISION），"
+                                + "回落通道视觉模型",
+                        scene.getCode(), binding.modelCode());
+            }
             return runtimeConfig.visionSpec().modelCode();
         }
-        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         if (binding.hasModel()) {
             AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
             if (bound != null) {
@@ -133,8 +145,9 @@ public class SceneModelResolver {
     public boolean hasOverrides(SceneCode scene) {
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         if (scene.isRequiresVision()) {
-            // 饮食分析的 model/max-tokens 来自 ai.meal.*（yaml），恒有请求级参数
-            return scene == SceneCode.MEAL_ANALYSIS || binding.hasParams();
+            // 饮食分析的 model/max-tokens 来自 ai.meal.*（yaml），恒有请求级参数；
+            // 其余视觉场景只有在绑定给了参数、或绑定指定了模型（要写 model 去覆盖通道模型）时才有覆盖
+            return scene == SceneCode.MEAL_ANALYSIS || binding.hasParams() || binding.hasModel();
         }
         if (binding.hasModel() || binding.hasParams()) {
             return true;
@@ -221,11 +234,14 @@ public class SceneModelResolver {
         }
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
+        // 后台绑定指定了视觉模型时优先用它：没有这条，视觉场景的绑定只对参数有效、对模型永远无效
+        String boundEndpoint = boundVisionEndpoint(binding);
         if (scene == SceneCode.MEAL_ANALYSIS) {
             // 迁移前的行为原样保留：饮食分析用 ai.meal.* 的模型与大输出上限、温度 0.1
             AIProperties.MealProperties meal = aiProperties.getMeal();
-            if (StringUtils.hasText(meal.getModel())) {
-                builder.model(meal.getModel());
+            String model = boundEndpoint != null ? boundEndpoint : meal.getModel();
+            if (StringUtils.hasText(model)) {
+                builder.model(model);
             }
             Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : meal.getMaxTokens();
             if (maxTokens != null) {
@@ -234,7 +250,10 @@ public class SceneModelResolver {
             builder.temperature(binding.temperature() != null ? binding.temperature() : MEAL_DEFAULT_TEMPERATURE);
             return builder;
         }
-        if (binding.temperature() == null && binding.maxTokens() == null) {
+        if (boundEndpoint != null) {
+            builder.model(boundEndpoint);
+        }
+        if (binding.temperature() == null && binding.maxTokens() == null && boundEndpoint == null) {
             // 其余视觉场景（看图描述、血糖识别）：默认继承视觉模型自身的参数，不额外发请求级 options
             return null;
         }
@@ -245,6 +264,20 @@ public class SceneModelResolver {
             builder.maxCompletionTokens(binding.maxTokens());
         }
         return builder;
+    }
+
+    /**
+     * 场景绑定里指定的、可用的视觉模型端点；没有绑定/不可用/用途不是视觉时返回 null。
+     * <p>
+     * 这里只解析端点、不在这里 WARN：不可用的情况 {@link #modelCode(SceneCode)} 已经 WARN 过一次，
+     * 同一次请求里重复两条相同告警只会稀释日志。
+     */
+    private String boundVisionEndpoint(AiSceneBindingService.SceneBinding binding) {
+        if (!binding.hasModel()) {
+            return null;
+        }
+        AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
+        return bound != null && bound.vision() ? bound.modelEndpoint() : null;
     }
 
     /**

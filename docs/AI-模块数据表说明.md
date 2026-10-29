@@ -15,7 +15,7 @@
 
 | # | 表 | 中文说明 | 首次创建 | 后续改动 | 开发库行数 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`） | 4 |
+| 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`）、V45（`model_type` 模型用途） | 4 |
 | 2 | `ai_prompt_template` | AI 提示词模板表 | V1 | V18（管理面：`variables_json`/`change_note`/`config_version`） | 11 |
 | 3 | `ai_scene_config` | 场景 → 模型与场景级参数 | V19 | — | 4 |
 | 4 | `chat_session` | 聊天会话（含滚动摘要与窗口参数） | V1 | V11（`active_user_id` 生成列）、V21（生命周期） | 102 |
@@ -94,42 +94,44 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 2 | `model_code` | varchar(64) | NO | — | 模型编码，业务唯一键；场景绑定/提示词绑定的都是它 |
 | 3 | `model_name` | varchar(64) | NO | — | 后台展示名称 |
 | 4 | `provider_code` | tinyint unsigned | NO | 1 | 厂商：1 自研、2 OpenAI 兼容、3 通义、4 文心、5 其他；`ChatModelFactory` 据此选构建器 |
-| 5 | `api_base_url` | varchar(512) | YES | — | API Base URL；空则用 SDK 默认 |
-| 6 | `api_key_cipher` | varchar(512) | YES | — | API Key 密文（AES-256-GCM），**禁止明文**；`AiModelCipher.decryptOrNull` 解 |
-| 7 | `model_endpoint` | varchar(128) | YES | — | 真正发给厂商的模型名/部署名（如 `deepseek-chat`、`qwen3-vl-plus`） |
-| 8 | `temperature` | decimal(3,2) | NO | 0.70 | 采样温度 |
-| 9 | `max_tokens` | int unsigned | NO | 2048 | 最大输出 token |
-| 10 | `timeout_ms` | int unsigned | NO | 30000 | 单次调用超时（毫秒） |
-| 11 | `is_default` | tinyint unsigned | NO | 0 | 是否默认模型：默认标记是通道默认判定的第一优先级 |
-| 12 | `is_enabled` | tinyint unsigned | NO | 1 | 是否启用；停用行不进快照 |
-| 13 | `remark` | varchar(255) | YES | — | 备注 |
-| 14 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
-| 15 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
-| 16 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
-| 17 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间（autoupdate） |
-| 18 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
-| 19 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 20 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
-| 21 | `cipher_algo` | varchar(32) | YES | — | 密钥加密算法（如 `AES-GCM`）；NULL = 明文遗留或未配置 |
-| 22 | `key_version` | int unsigned | YES | — | 加密主密钥版本，支持轮换（`AiModelCipher.currentKeyVersion()`） |
-| 23 | `top_p` | decimal(3,2) | YES | — | 核采样；NULL = 用 provider 默认 |
-| 24 | `thinking` | tinyint(1) | YES | — | 是否开推理链（DeepSeek 专有）；NULL = 不显式设置（注意这里是**可空三态**，不是 0/1） |
-| 25 | `extra_params` | json | YES | — | 厂商特有参数，避免为每家加列 |
-| 26 | `config_version` | bigint unsigned | NO | 1 | 配置版本：乐观锁 + 缓存失效判据 |
-| 27 | `last_test_at` | datetime(3) | YES | — | 最近一次连通性测试时间 |
-| 28 | `last_test_ok` | tinyint(1) | YES | — | 最近一次测试是否成功（NULL = 从没测过） |
-| 29 | `last_test_message` | varchar(512) | YES | — | 测试结果摘要（脱敏，不含密钥；`ChatModelFactory.classify` 的可读分类写这里） |
+| 5 | `model_type` | varchar(16) | YES | — | **模型用途**（V45 新增）：`TEXT` 文本（对话/摘要/记忆抽取）、`VISION` 视觉（看图描述/识糖）。**NULL 视为 `TEXT`**（兼容 V45 之前的历史行）。与 `provider_code`（协议）正交：同一厂商可以既有文本又有视觉模型 |
+| 6 | `api_base_url` | varchar(512) | YES | — | API Base URL；空则用 SDK 默认 |
+| 7 | `api_key_cipher` | varchar(512) | YES | — | API Key 密文（AES-256-GCM），**禁止明文**；`AiModelCipher.decryptOrNull` 解 |
+| 8 | `model_endpoint` | varchar(128) | YES | — | 真正发给厂商的模型名/部署名（如 `deepseek-chat`、`qwen3-vl-plus`） |
+| 9 | `temperature` | decimal(3,2) | NO | 0.70 | 采样温度 |
+| 10 | `max_tokens` | int unsigned | NO | 2048 | 最大输出 token |
+| 11 | `timeout_ms` | int unsigned | NO | 30000 | 单次调用超时（毫秒） |
+| 12 | `is_default` | tinyint unsigned | NO | 0 | 是否默认模型：**按用途各有一个**（文本一个、视觉一个），默认标记是同用途通道默认判定的第一优先级 |
+| 13 | `is_enabled` | tinyint unsigned | NO | 1 | 是否启用；停用行不进快照 |
+| 14 | `remark` | varchar(255) | YES | — | 备注 |
+| 15 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
+| 16 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
+| 17 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
+| 18 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间（autoupdate） |
+| 19 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
+| 20 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
+| 21 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 22 | `cipher_algo` | varchar(32) | YES | — | 密钥加密算法（如 `AES-GCM`）；NULL = 明文遗留或未配置 |
+| 23 | `key_version` | int unsigned | YES | — | 加密主密钥版本，支持轮换（`AiModelCipher.currentKeyVersion()`） |
+| 24 | `top_p` | decimal(3,2) | YES | — | 核采样；NULL = 用 provider 默认 |
+| 25 | `thinking` | tinyint(1) | YES | — | 是否开推理链（DeepSeek 专有）；NULL = 不显式设置（注意这里是**可空三态**，不是 0/1）；视觉用途没有这个入参，填了不生效 |
+| 26 | `extra_params` | json | YES | — | 厂商特有参数，避免为每家加列 |
+| 27 | `config_version` | bigint unsigned | NO | 1 | 配置版本：乐观锁 + 缓存失效判据 |
+| 28 | `last_test_at` | datetime(3) | YES | — | 最近一次连通性测试时间 |
+| 29 | `last_test_ok` | tinyint(1) | YES | — | 最近一次测试是否成功（NULL = 从没测过） |
+| 30 | `last_test_message` | varchar(512) | YES | — | 测试结果摘要（脱敏，不含密钥；`ChatModelFactory.classify` 的可读分类写这里） |
 
 **当前开发库的 4 行**（`api_key_cipher` 全为 NULL：这个环境的密钥走 yaml/环境变量，不走库存密文）：
 
-| model_code | provider | model_endpoint | temp | max_tokens | timeout | is_default | is_enabled |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `default_chat` | 1 | `glucopilot-chat-v1` | 0.70 | 2048 | 30000 | 0 | 0 |
-| `deepseek-v4-flash` | 1 | `deepseek-v4-flash` | 0.70 | 2048 | 60000 | 0 | 0 |
-| `qwen3-vl-plus` | 2 | `qwen3-vl-plus` | 0.20 | 512 | 60000 | 0 | 1 |
-| `deepseek-v4-pro` | 1 | `deepseek-v4-pro` | 0.70 | 2048 | 60000 | **1** | 1 |
+| model_code | provider | model_type | model_endpoint | temp | max_tokens | timeout | is_default | is_enabled |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `default_chat` | 1 | TEXT | `glucopilot-chat-v1` | 0.70 | 2048 | 30000 | 0 | 0 |
+| `deepseek-v4-flash` | 1 | TEXT | `deepseek-v4-flash` | 0.70 | 2048 | 60000 | 0 | 0 |
+| `qwen3-vl-plus` | 2 | VISION | `qwen3-vl-plus` | 0.20 | 512 | 60000 | 0 | 1 |
+| `deepseek-v4-pro` | 1 | TEXT | `deepseek-v4-pro` | 0.70 | 2048 | 60000 | **1** | 1 |
 
-> 只有 `deepseek-v4-pro` 既是启用又是默认 → 它就是「通道默认」；`qwen3-vl-plus` 虽然启用，但会被识别为视觉模型（`model_endpoint == ai.vision.model`）而在文本候选中被排除。
+> 只有 `deepseek-v4-pro` 既是启用的文本行又是默认 → 它就是「文本通道默认」；`qwen3-vl-plus` 是唯一的视觉行，`resolveVision()` 因此直接选中它（V45 之前是按 `model_endpoint == ai.vision.model` 反查，端点不同就选不中；现在按 `model_type` 判定）。
+> 迁移回填规则（`V45__ai_model_type.sql`）：先按 `model_endpoint='qwen3-vl-plus'` 标 VISION（与 yaml `ai.vision.model` 的默认值一致），其余 NULL 一律 TEXT；改过视觉模型名的部署需手工修正那一行。
 
 ---
 

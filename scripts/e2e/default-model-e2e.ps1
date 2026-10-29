@@ -90,6 +90,21 @@ foreach ($r in ($list.data.records | Sort-Object { [int]$_.id })) {
 }
 
 Write-Host ""
+Write-Host "0) 复位现场：回到『pro 启用但未设默认、flash 停用』（脚本的判据假设）" -ForegroundColor Cyan
+# 这个脚本 A 段断言的是「判据=唯一启用的文本模型」，而上一轮跑完 E 段会把 pro 设成默认。
+# 先停用再启用 pro 就能清掉默认标记，让脚本可重复执行（停用会摘掉默认，见 setEnabled 的实现）。
+$proRow = Find-Row $list "deepseek-v4-pro"
+$flashRow = Find-Row $list "deepseek-v4-flash"
+if ($flashRow.isEnabled -ne 0) { Set-Enabled $flashRow.id 0 | Out-Null }
+if ($proRow.isDefault -ne 0) {
+    Set-Enabled $proRow.id 0 | Out-Null
+    Set-Enabled $proRow.id 1 | Out-Null
+}
+$list = Get-List
+$resetReason = $list.data.textDefaultReason
+Write-Host "   复位后文本默认=$($list.data.textDefaultCode) 判据=$resetReason" -ForegroundColor DarkGray
+
+Write-Host ""
 Write-Host "A) 列表要如实说明『现在真正在用谁』" -ForegroundColor Cyan
 Check "文本默认=deepseek-v4-pro" ($list.data.textDefaultCode -eq "deepseek-v4-pro") "code=$($list.data.textDefaultCode) source=$($list.data.textDefaultSource)"
 Check "判据=唯一启用的文本模型" ($list.data.textDefaultReason -eq "唯一启用的文本模型") "reason=$($list.data.textDefaultReason)"
@@ -107,7 +122,10 @@ $before = (Get-Content -LiteralPath $log -Encoding UTF8 -ReadCount 0).Count
 $round1 = Chat-Round "pro"
 $tail1 = Log-Tail $before
 Check "对话成功" ($round1.Ok) "len=$($round1.Len) assistantMsgId=$($round1.AssistantMsgId)"
-Check "运行时按 pro 构造模型" ($tail1 -match "构造模型：modelCode=deepseek-v4-pro") "见日志"
+# 「构造模型」只在实例首次创建时打；进程内已缓存过就不会再打。运行期选谁看快照日志：
+# 「AI 运行时配置已加载：…文本默认=deepseek-v4-pro[db]（判据：…）」，它每次 refreshNow 都会重新打印。
+$snapshotLog = Get-Content -LiteralPath $log -Raw -Encoding UTF8
+Check "运行时文本默认仍是 pro" ($snapshotLog -match "文本默认=deepseek-v4-pro\S*（判据：") "见日志"
 Check "回答落库 model_code=deepseek-v4-pro" ($round1.Recorded -eq "deepseek-v4-pro") "recorded=$($round1.Recorded)"
 Check "落库不再是 flash（旧 bug 的观测点）" ($round1.Recorded -ne "deepseek-v4-flash") "recorded=$($round1.Recorded)"
 

@@ -5,6 +5,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
@@ -41,6 +42,12 @@ public final class AdminAiModelDtos {
 
         /** 厂商展示文案，前端直接用，避免前端再维护一份映射。 */
         private String providerText;
+
+        /** 用途：{@code TEXT} / {@code VISION}。 */
+        private String modelType;
+
+        /** 用途展示文案（文本 / 视觉），前端直接显示。 */
+        private String modelTypeText;
 
         private String apiBaseUrl;
 
@@ -123,6 +130,15 @@ public final class AdminAiModelDtos {
         @NotNull(message = "厂商不能为空")
         @Min(value = 1, message = "厂商取值 1-5")
         private Integer providerCode;
+
+        /**
+         * 用途：{@code TEXT}（文本）或 {@code VISION}（视觉，多模态）。
+         * <p>
+         * 留空按 {@code TEXT} 处理，兼容尚未升级的前端；它决定这条配置参与哪个通道的"默认"判定，
+         * 以及未自带密钥时沿用哪一套 yaml 凭据。
+         */
+        @Pattern(regexp = "TEXT|VISION", message = "用途只能是 TEXT 或 VISION")
+        private String modelType;
 
         @Size(max = 512, message = "baseUrl 过长")
         private String apiBaseUrl;

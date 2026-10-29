@@ -1,9 +1,10 @@
 package com.threadfit.glucopilot.ai.model.service.impl;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.AiChannel;
+import com.threadfit.glucopilot.ai.config.AiChannelProperties;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -67,12 +68,14 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     private final AiModelCipher cipher;
     private final AIProperties aiProperties;
 
-    /** yaml/环境变量侧的文本模型（DeepSeek 自研 SDK 那支）。 */
-    private final String yamlTextModel;
-    private final String yamlTextApiKey;
-    private final String yamlTextBaseUrl;
-    private final Double yamlTextTemperature;
-    private final Integer yamlTextMaxTokens;
+    /**
+     * 两个通道的统一配置视图（{@code ai.channels.*}：文本引用 {@code spring.ai.deepseek.*}、
+     * 视觉引用 {@code ai.vision.*}）。
+     * <p>
+     * 用它替代原先的 5 个 {@code @Value}：那 5 个只能表达文本通道，视觉只能从
+     * {@link AIProperties} 另取，于是同一个「yaml 规格」的构造写了两份、字段各漏一半。
+     */
+    private final AiChannelProperties channels;
 
     private final AtomicReference<Snapshot> current = new AtomicReference<>();
     private final Object loadLock = new Object();
@@ -84,19 +87,11 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     public AiRuntimeConfigServiceImpl(AiModelConfigMapper mapper,
                                   AiModelCipher cipher,
                                   AIProperties aiProperties,
-                                  @Value("${spring.ai.deepseek.chat.model:}") String yamlTextModel,
-                                  @Value("${spring.ai.deepseek.api-key:}") String yamlTextApiKey,
-                                  @Value("${spring.ai.deepseek.base-url:}") String yamlTextBaseUrl,
-                                  @Value("${spring.ai.deepseek.chat.temperature:}") Double yamlTextTemperature,
-                                  @Value("${spring.ai.deepseek.chat.max-tokens:}") Integer yamlTextMaxTokens) {
+                                  AiChannelProperties channels) {
         this.mapper = mapper;
         this.cipher = cipher;
         this.aiProperties = aiProperties;
-        this.yamlTextModel = yamlTextModel;
-        this.yamlTextApiKey = yamlTextApiKey;
-        this.yamlTextBaseUrl = yamlTextBaseUrl;
-        this.yamlTextTemperature = yamlTextTemperature;
-        this.yamlTextMaxTokens = yamlTextMaxTokens;
+        this.channels = channels;
     }
 
     // ------------------------------------------------------------------ 对外
@@ -179,8 +174,8 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     private void load() {
         Snapshot previous = current.get();
         try {
-            AiModelSpec yamlText = yamlTextSpec();
-            AiModelSpec yamlVision = yamlVisionSpec();
+            AiModelSpec yamlText = yamlSpec(AiChannel.TEXT);
+            AiModelSpec yamlVision = yamlSpec(AiChannel.VISION);
 
             Map<String, AiModelSpec> byCode = new LinkedHashMap<>();
             Map<String, AiModelSpec> byName = new HashMap<>();
@@ -200,6 +195,11 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
             // yaml 侧也进索引，但优先级低于 DB：同名时以 DB 为准（这正是"后台能覆盖 yaml"的落点）
             byCode.putIfAbsent(yamlText.modelCode(), yamlText);
             byName.putIfAbsent(yamlText.modelEndpoint(), yamlText);
+            // 视觉的 yaml 规格同样进索引：不进的话 specByModelCode("视觉编码") 恒为 null，
+            // 于是「按编码引用」的一切（场景绑定、后台回填 model_code）对视觉通道全是空转。
+            // 视觉与文本在 byCode 里可能同名，putIfAbsent 保证 DB 优先、文本优先于视觉兜底。
+            byCode.putIfAbsent(yamlVision.modelCode(), yamlVision);
+            byName.putIfAbsent(yamlVision.modelEndpoint(), yamlVision);
 
             DefaultPick pick = pickTextDefault(candidates, yamlText);
 
@@ -235,12 +235,14 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
             // 关键：加载失败不改动 current，沿用上一份可用快照（后台误配/库抖动不能让 AI 全挂）
             if (previous == null) {
                 log.error("AI 运行时配置首次加载失败，将完全按 yaml 运行", e);
-                AiModelSpec yamlText = yamlTextSpec();
-                AiModelSpec yamlVision = yamlVisionSpec();
+                AiModelSpec yamlText = yamlSpec(AiChannel.TEXT);
+                AiModelSpec yamlVision = yamlSpec(AiChannel.VISION);
                 Map<String, AiModelSpec> byCode = new LinkedHashMap<>();
                 byCode.put(yamlText.modelCode(), yamlText);
+                byCode.putIfAbsent(yamlVision.modelCode(), yamlVision);
                 Map<String, AiModelSpec> byName = new HashMap<>();
                 byName.put(yamlText.modelEndpoint(), yamlText);
+                byName.putIfAbsent(yamlVision.modelEndpoint(), yamlVision);
                 current.set(new Snapshot(System.nanoTime(), byCode, byName, yamlText, yamlVision,
                         yamlText, DEFAULT_YAML, 0));
                 loadedAtNanos = System.nanoTime();
@@ -346,51 +348,43 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
                 "db");
     }
 
-    private AiModelSpec yamlTextSpec() {
+    /**
+     * 一个通道的 yaml 规格——两个通道共用这一份构造。
+     * <p>
+     * 先前是两个方法各写一遍，结果字段各漏一处：文本漏掉 timeout（写死 60 秒、不读 yaml），
+     * 视觉漏掉 thinking。合并之后新增字段只需要改一处，也不会再出现「一个通道有、另一个没有」。
+     */
+    private AiModelSpec yamlSpec(AiChannel channel) {
+        AiChannelProperties.Channel config = channels.channel(channel);
+        boolean text = channel == AiChannel.TEXT;
         return new AiModelSpec(
-                yamlTextModel,
-                "DeepSeek 文本模型（yaml）",
-                1,
-                yamlTextBaseUrl,
-                yamlTextApiKey,
-                yamlTextModel,
-                yamlTextTemperature,
+                config.getModel(),
+                text ? "DeepSeek 文本模型（yaml）" : "视觉模型（yaml）",
+                text ? 1 : 2,
+                config.getBaseUrl(),
+                config.getApiKey(),
+                config.getModel(),
+                config.getTemperature(),
                 null,
-                yamlTextMaxTokens,
+                config.getMaxTokens(),
                 null,
-                Duration.ofSeconds(60),
+                config.timeout(),
                 "yaml");
     }
 
-    private AiModelSpec yamlVisionSpec() {
-        AIProperties.VisionProperties vision = aiProperties.getVision();
-        return new AiModelSpec(
-                vision.getModel(),
-                "视觉模型（yaml）",
-                2,
-                vision.getBaseUrl(),
-                vision.getApiKey(),
-                vision.getModel(),
-                vision.getTemperature(),
-                null,
-                vision.getMaxTokens(),
-                null,
-                Duration.ofSeconds(vision.getTimeoutSeconds()),
-                "yaml");
-    }
-
-    /** 未自带密钥时，按 provider 取 yaml 里的对应密钥。 */
+    /**
+     * 未自带密钥时，按<b>通道</b>取 yaml 里的对应密钥。
+     * <p>
+     * 这里仍然用 {@code provider_code} 推断通道——因为「这一行是文本模型还是视觉模型」
+     * 目前没有独立的列可依（批次 2 会加 {@code model_type}）。集中在这一处是为了到时候
+     * 只改这一行，而不是散落在四条回落路径上。
+     */
     private String yamlKeyFor(Integer providerCode) {
-        int provider = providerCode == null ? 1 : providerCode;
-        return provider == 1 ? yamlTextApiKey : aiProperties.getVision().getApiKey();
+        return channels.channel(AiChannel.ofProviderCode(providerCode)).getApiKey();
     }
 
     private String defaultBaseUrl(Integer providerCode) {
-        int provider = providerCode == null ? 1 : providerCode;
-        if (provider == 1) {
-            return yamlTextBaseUrl;
-        }
-        return aiProperties.getVision().getBaseUrl();
+        return channels.channel(AiChannel.ofProviderCode(providerCode)).getBaseUrl();
     }
 
     private static Double toDouble(BigDecimal value) {

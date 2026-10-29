@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.model.runtime;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.AiChannelProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -22,6 +23,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -201,6 +203,37 @@ class AiModelRuntimeConfigTest {
     }
 
     @Test
+    void 视觉的yaml规格也应进索引否则按编码引用全是空转() {
+        AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
+        when(mapper.selectEnabled()).thenReturn(List.of());
+
+        AiRuntimeConfigService service = service(mapper, new AiModelCipher(MASTER_KEY));
+
+        // 视觉 yaml 只有 ai.vision.model 一个来源；不进 byCode 的话，任何「按编码引用」
+        // （场景绑定、后台回填 model_code）对视觉通道都查不到东西
+        AiModelSpec vision = service.specByModelCode("qwen3-vl-plus");
+        assertNotNull(vision, "视觉 yaml 规格必须能按编码查到");
+        assertEquals("yaml", vision.source());
+        assertEquals("qwen3-vl-plus", vision.modelEndpoint());
+        // 请求里声明视觉模型名时也要能反查到凭据（byName）
+        assertEquals("sk-yaml-vision", service.specByModelName("qwen3-vl-plus").apiKey());
+    }
+
+    @Test
+    void 文本通道的超时应来自通道配置而不是写死六十秒() {
+        AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
+        when(mapper.selectEnabled()).thenReturn(List.of());
+        AiChannelProperties channels = channels();
+        channels.getText().setTimeoutSeconds(15);
+
+        AiRuntimeConfigService service = service(mapper, new AiModelCipher(MASTER_KEY), channels);
+
+        assertEquals(Duration.ofSeconds(15), service.snapshot().yamlText().timeout(),
+                "yaml 文本规格的超时必须读 ai.channels.text.timeout-seconds");
+        // 视觉通道走自己的配置，互不影响
+        assertEquals(Duration.ofSeconds(60), service.snapshot().yamlVision().timeout());
+    }
+    @Test
     void 文本通道默认不应被yaml里同名的模型名钉死() {
         AiModelConfigMapper mapper = mock(AiModelConfigMapper.class);
         when(mapper.selectEnabled()).thenReturn(List.of(row("deepseek-v4-pro", 1, null), row("qwen3-vl-plus", 2, null)));
@@ -368,17 +401,30 @@ class AiModelRuntimeConfigTest {
     // ---------------------------------------------------------------- 辅助
 
     private AiRuntimeConfigService service(AiModelConfigMapper mapper, AiModelCipher cipher) {
-        AIProperties properties = new AIProperties();
-        AIProperties.VisionProperties vision = properties.getVision();
-        vision.setEnabled(true);
-        vision.setBaseUrl("https://dashscope.aliyuncs.com/compatible-mode/v1");
-        vision.setApiKey("sk-yaml-vision");
-        vision.setModel("qwen3-vl-plus");
-        vision.setTemperature(0.2);
-        vision.setMaxTokens(512);
-        vision.setTimeoutSeconds(60);
-        return new AiRuntimeConfigServiceImpl(mapper, cipher, properties,
-                "deepseek-v4-flash", "sk-yaml-text", "https://api.deepseek.com", 0.7, 2048);
+        return service(mapper, cipher, channels());
+    }
+
+    private AiRuntimeConfigService service(AiModelConfigMapper mapper, AiModelCipher cipher,
+                                           AiChannelProperties channels) {
+        return new AiRuntimeConfigServiceImpl(mapper, cipher, new AIProperties(), channels);
+    }
+
+    /** 两个通道的 yaml 侧取值：与 application.yaml 里的 ai.channels.* 同形。 */
+    static AiChannelProperties channels() {
+        AiChannelProperties channels = new AiChannelProperties();
+        channels.getText().setBaseUrl("https://api.deepseek.com");
+        channels.getText().setApiKey("sk-yaml-text");
+        channels.getText().setModel("deepseek-v4-flash");
+        channels.getText().setTemperature(0.7);
+        channels.getText().setMaxTokens(2048);
+        channels.getText().setTimeoutSeconds(60);
+        channels.getVision().setBaseUrl("https://dashscope.aliyuncs.com/compatible-mode/v1");
+        channels.getVision().setApiKey("sk-yaml-vision");
+        channels.getVision().setModel("qwen3-vl-plus");
+        channels.getVision().setTemperature(0.2);
+        channels.getVision().setMaxTokens(512);
+        channels.getVision().setTimeoutSeconds(60);
+        return channels;
     }
 
     private static AiModelConfigEntity row(String modelCode, int provider, String cipherText) {

@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.ai.config.AIProperties.SceneProperties;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
@@ -64,6 +65,32 @@ public class SceneModelResolver {
         this.aiProperties = aiProperties;
         this.runtimeConfig = runtimeConfig;
         this.sceneBindings = sceneBindings;
+    }
+
+    /**
+     * 启动时点出「视觉场景配了 thinking 但发不出去」这种死配置。
+     * <p>
+     * 视觉通道走 OpenAI 兼容协议，请求级能表达的只有 model/temperature/max-tokens；
+     * 百炼的 {@code qwen3-vl-plus} 也没有 {@code thinking} 这个入参。于是
+     * {@code ai.scenes.<视觉场景>.thinking} 会被静默忽略——运营以为开了深度思考，
+     * 实际发出去的请求里根本没有这个字段。
+     * <p>
+     * 这里刻意只 WARN 不启动失败：这个键在历史上被写过（{@code meal-analysis.thinking: true}），
+     * 让一个无意义的键阻断发版不合理；但必须留一条日志，否则永远没人发现它是死的。
+     */
+    @PostConstruct
+    void warnAboutIgnoredVisionThinking() {
+        for (SceneCode scene : SceneCode.values()) {
+            if (!scene.isRequiresVision()) {
+                continue;
+            }
+            SceneProperties config = aiProperties.getScenes().get(scene.getConfigKey());
+            if (config != null && config.getThinking() != null) {
+                log.warn("ai.scenes.{}.thinking={} 不会生效：视觉通道（OpenAI 兼容协议）没有这个入参，"
+                                + "请删掉该行以免误导。真正影响视觉模型是否推理的是模型自身的部署参数",
+                        scene.getConfigKey(), config.getThinking());
+            }
+        }
     }
 
     /**
@@ -179,6 +206,11 @@ public class SceneModelResolver {
 
     /**
      * 视觉场景的请求级参数（OpenAI 兼容协议）。
+     * <p>
+     * <b>只写三个字段：model / max-completion-tokens / temperature。</b>
+     * 视觉通道的 {@code thinking} 不在这里——OpenAI 兼容协议用 {@code reasoning_effort} 表达推理，
+     * 而百炼的视觉模型并不认，硬发只会 400。若有人配了 {@code ai.scenes.<视觉场景>.thinking}，
+     * 启动时 {@link #warnAboutIgnoredVisionThinking()} 会打 WARN，而不是让它静默失效。
      *
      * @return 需要写进请求的 options；没有任何要写的参数时返回 {@code null}（保持模型自身的默认）
      */

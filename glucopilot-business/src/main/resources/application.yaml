@@ -265,6 +265,29 @@ ai:
     model: ${AI_MEAL_MODEL:qwen3-vl-plus}
     max-tokens: 2048
 
+  # 通道级配置的统一视图：业务代码只读这一份（AiChannelProperties），两个通道形状完全相同。
+  # 刻意「不改前缀、只加视图」：spring.ai.deepseek.* 仍由 starter 消费、ai.vision.* 仍由
+  # AIProperties.VisionProperties 消费，这里用占位符把它们投影成同一形状，避免为了统一而
+  # 把文本通道搬出 starter（那会丢掉自动装配的 RetryTemplate 与观测）。
+  # 超时只作用于非流式调用（连通性测试、审核、摘要、记忆抽取）；SSE 流式不设读超时。
+  channels:
+    text:
+      base-url: ${spring.ai.deepseek.base-url:https://api.deepseek.com}
+      api-key: ${spring.ai.deepseek.api-key:}
+      model: ${spring.ai.deepseek.chat.model:}
+      temperature: ${spring.ai.deepseek.chat.temperature:}
+      max-tokens: ${spring.ai.deepseek.chat.max-tokens:}
+      timeout-seconds: ${AI_TEXT_TIMEOUT_SECONDS:60}
+      connect-timeout-seconds: ${AI_TEXT_CONNECT_TIMEOUT_SECONDS:10}
+    vision:
+      base-url: ${ai.vision.base-url:}
+      api-key: ${ai.vision.api-key:}
+      model: ${ai.vision.model:}
+      temperature: ${ai.vision.temperature:}
+      max-tokens: ${ai.vision.max-tokens:}
+      timeout-seconds: ${ai.vision.timeout-seconds:60}
+      connect-timeout-seconds: ${AI_VISION_CONNECT_TIMEOUT_SECONDS:10}
+
   scenes:
     # 纯文本对话（接口 2.23 / 2.24 / 2.25）：当前唯一已实现的场景
     chat:
@@ -280,21 +303,21 @@ ai:
       prompt: prompts/chat-image/analyze.md
       version: v1
 
-    # 饮食分析 / 拍照估糖（接口 2.20）：需要视觉模型；估算营养与血糖影响属于推理任务，单独开思维链
+    # 饮食分析 / 拍照估糖（接口 2.20）：需要视觉模型；估算营养与血糖影响属于推理任务。
+    # 注意：这里**不能**写 thinking —— 视觉通道走 OpenAI 兼容协议，没有这个入参，
+    # 写了也不会发出去（启动时 SceneModelResolver.warnAboutIgnoredVisionThinking 会告警）。
     meal-analysis:
       prompt: prompts/meal-analysis/system.md
       version: v1
       variables:
         - foodText
       temperature: 0.2
-      thinking: true
 
     # 血糖仪读数识别（接口 2.21 / 2.22）：需要视觉模型；要求稳定不发挥，温度取低
     ocr-glucose:
       prompt: prompts/ocr-glucose/system.md
       version: v1
       temperature: 0
-      thinking: false
 
     # 会话滚动摘要（② 期）：把超出记忆窗口的旧对话压缩成事实摘要（产物是内部上下文，不给用户看）。
     # 温度取低：它要稳定复述而不是发挥；模型可单独在后台绑一个更便宜的（ai_scene_config）。

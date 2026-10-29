@@ -62,6 +62,14 @@ public class ChatModelFactory {
         if (StringUtils.hasText(spec.baseUrl())) {
             api.baseUrl(spec.baseUrl());
         }
+        if (spec.timeout() != null) {
+            // DeepSeekChatOptions 里没有 timeout（连接参数不在 options 上），而 DeepSeekApi.Builder
+            // 也只有 restClientBuilder/webClientBuilder，没有 timeout()——所以后台的 timeout_ms
+            // 只能在这里装进 HTTP 客户端。不装的话：模型不返回就无限等，现象是「偶发卡住两分钟」。
+            // 只作用于非流式调用（call）；SSE 流式由客户端取消与 async request-timeout 兜底。
+            api.restClientBuilder(AiHttpTimeouts.restClientBuilder(
+                    connectTimeoutOf(spec.timeout()), spec.timeout()));
+        }
         DeepSeekChatOptions.Builder options = DeepSeekChatOptions.builder();
         if (StringUtils.hasText(spec.modelEndpoint())) {
             options.model(spec.modelEndpoint());
@@ -91,6 +99,14 @@ public class ChatModelFactory {
         observationRegistry.ifAvailable(builder::observationRegistry);
         retryTemplate.ifAvailable(builder::retryTemplate);
         return builder.build();
+    }
+
+    /** 连接超时：不超过调用超时本身，也不超过 10 秒（连不上通常立刻就有结论）。 */
+    private static Duration connectTimeoutOf(Duration callTimeout) {
+        if (callTimeout == null) {
+            return Duration.ofSeconds(10);
+        }
+        return callTimeout.compareTo(Duration.ofSeconds(10)) < 0 ? callTimeout : Duration.ofSeconds(10);
     }
 
     private ChatModel buildOpenAiCompatible(AiModelSpec spec) {

@@ -1101,8 +1101,8 @@ ChatSummaryServiceImpl ──► summaryChatClient, ChatMessageMapper, ChatSessi
 | AI 相关测试类 | 44 个（`ai/**` 下） |
 | 全量单测 | 747 用例，0 失败 0 错误 2 跳过（110 套件） |
 | 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`DynamicPromptAdvisorTest`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`CommunityModerationParserTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库） |
-| 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 43 |
-| 迁移 | Flyway v43；`MODERATION=moderation@v1`（881 字） |
+| 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 22 |
+| 迁移 | Flyway v49（V45–49 是 V46 能力化、V48 capability、V49 场景参数） |
 
 测试约定（新写测试要遵守）：
 

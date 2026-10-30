@@ -87,6 +87,7 @@ public class AdminAiSceneServiceImpl implements AdminAiSceneService {
                         .eq(AiModelConfigEntity::getIsEnabled, 1)
                         .orderByDesc(AiModelConfigEntity::getIsDefault)
                         .orderByAsc(AiModelConfigEntity::getModelCode))) {
+            AiModelCapability capability = AiModelCapability.parse(entity.getCapability());
             options.add(AdminAiSceneDtos.ModelOption.builder()
                     .code(entity.getModelCode())
                     .name(StringUtils.hasText(entity.getModelName())
@@ -94,6 +95,8 @@ public class AdminAiSceneServiceImpl implements AdminAiSceneService {
                     .providerCode(entity.getProviderCode())
                     .isDefault(entity.getIsDefault() != null && entity.getIsDefault() == 1)
                     .providerName(PROVIDER_TEXT.getOrDefault(entity.getProviderCode(), "未知"))
+                    .capability(capability.value())
+                    .capabilityText(capability.displayText())
                     .build());
         }
         return options;

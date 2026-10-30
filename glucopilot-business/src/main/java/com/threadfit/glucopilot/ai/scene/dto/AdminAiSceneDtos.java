@@ -105,6 +105,17 @@ public class AdminAiSceneDtos {
 
         /** 厂商中文名，前端直接展示。 */
         private String providerName;
+
+        /**
+         * 能力集合（{@code text,tool,stream} / {@code vision,stream}）。
+         *
+         * <p>前端据此过滤下拉：视觉场景只列能力含 vision 的模型、文本场景只列含 text 的。
+         * 过滤只防误选，真正的防线是保存时的硬校验（能力不匹配直接 400）。
+         */
+        private String capability;
+
+        /** 能力的中文展示（「文本 / 工具 / 流式」），避免前端再维护一份映射。 */
+        private String capabilityText;
     }
 
     /** 保存入参：留空 = 不改该字段；{@code clear=true} = 全部改回继承。 */

@@ -1,6 +1,5 @@
 package com.threadfit.glucopilot.ai.model.service.impl;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiChannel;
 import com.threadfit.glucopilot.ai.config.AiChannelProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
@@ -71,14 +70,16 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
 
     private final AiModelConfigMapper mapper;
     private final AiModelCipher cipher;
-    private final AIProperties aiProperties;
 
     /**
      * 两个通道的统一配置视图（{@code ai.channels.*}：文本引用 {@code spring.ai.deepseek.*}、
      * 视觉引用 {@code ai.vision.*}）。
      * <p>
      * 用它替代原先的 5 个 {@code @Value}：那 5 个只能表达文本通道，视觉只能从
-     * {@link AIProperties} 另取，于是同一个「yaml 规格」的构造写了两份、字段各漏一半。
+     * {@code AIProperties} 另取，于是同一个「yaml 规格」的构造写了两份、字段各漏一半。
+     * <p>
+     * C2 起连场景 yaml 也不再参与选模型，因此这里不再依赖 {@code AIProperties}：
+     * 运行时配置只剩「DB 行 + 通道 yaml 兜底」两个来源。
      */
     private final AiChannelProperties channels;
 
@@ -91,11 +92,9 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
 
     public AiRuntimeConfigServiceImpl(AiModelConfigMapper mapper,
                                   AiModelCipher cipher,
-                                  AIProperties aiProperties,
                                   AiChannelProperties channels) {
         this.mapper = mapper;
         this.cipher = cipher;
-        this.aiProperties = aiProperties;
         this.channels = channels;
     }
 
@@ -123,23 +122,20 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
         }
     }
 
-    /** 文本场景实际应使用的模型（场景绑定 → DB 默认 → yaml）。 */
+    /**
+     * 文本场景实际应使用的模型（场景绑定 → 后台默认 → yaml 通道兜底）。
+     * <p>
+     * 这里刻意<b>不再</b>读 yaml 的 {@code ai.scenes.<scene>.model-code}：那个键的优先级曾经排在
+     * 「后台默认模型」之上，于是运营在后台把默认模型换成 B 之后，场景仍然按 yaml 写的 A 去调——
+     * 「记录写 A、实际调 B」的典型来源（2026-10-13 的反馈）。现在场景级选模型只有一处：
+     * {@code ai_scene_config.model_code}（走 {@code SceneModelResolver.modelCode}）。
+     * 残留的老配置会在启动时被 {@code SceneModelResolver#warnAboutDeprecatedSceneModelCode} 点出来。
+     */
     @Override
     public AiModelSpec textSpec(SceneCode scene) {
         Snapshot snapshot = snapshot();
         if (scene.isRequiresVision()) {
             return snapshot.resolveVisionDefault();
-        }
-        String bound = aiProperties.scene(scene).getModelCode();
-        if (StringUtils.hasText(bound)) {
-            AiModelSpec spec = snapshot.byCode().get(bound);
-            if (spec != null) {
-                return spec;
-            }
-            // 场景绑定了一个没登记的编码：只能回到通道默认。刻意不返回"改了模型名的 yaml 规格"，
-            // 否则会拿默认模型的凭据去调场景指定的模型（用 A 的 key 调 B）。
-            log.warn("场景 {} 绑定的模型编码 {} 未在运行时配置中登记，本次使用通道默认模型 {}",
-                    scene.getCode(), bound, snapshot.resolveTextDefault().modelCode());
         }
         return snapshot.resolveTextDefault();
     }

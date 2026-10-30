@@ -200,7 +200,7 @@ class AdminAiSceneServiceTest {
     }
 
     @Test
-    void 视觉场景可以保存参数但模型编码标记为不生效() {
+    void 视觉场景可以保存模型编码且标记为生效() {
         when(mapper.selectOne(any())).thenReturn(null);
         when(runtimeConfig.specByModelCode("flash")).thenReturn(spec("flash", "db"));
         when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "db"));
@@ -209,8 +209,8 @@ class AdminAiSceneServiceTest {
 
         AdminAiSceneDtos.SceneRow saved = service.save("chat-image", request);
 
-        // 允许保存（P2 会用上），但必须如实告诉前端"这个字段现在不生效"
-        assertFalse(saved.getModelCodeApplies());
+        // 批次 2 起视觉场景也认绑定，所以这个字段对视觉场景同样生效
+        assertTrue(saved.getModelCodeApplies());
         assertTrue(saved.getHint().contains("视觉"));
         assertEquals("qwen-vl", saved.getEffectiveModelCode());
     }
@@ -258,6 +258,6 @@ class AdminAiSceneServiceTest {
         AdminAiSceneDtos.SceneRow meal = list.getRecords().stream()
                 .filter(row -> "MEAL_ANALYSIS".equals(row.getSceneCode())).findFirst().orElseThrow();
         assertEquals("qwen-vl", meal.getEffectiveModelCode(), "视觉场景的生效模型必须来自视觉通道");
-        assertFalse(meal.getModelCodeApplies());
+        assertTrue(meal.getModelCodeApplies(), "批次 2 起视觉场景的绑定也生效");
     }
 }

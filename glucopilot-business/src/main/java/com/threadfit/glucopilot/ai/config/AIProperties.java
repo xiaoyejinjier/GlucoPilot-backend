@@ -40,17 +40,9 @@ public class AIProperties {
 
     private VisionProperties vision = new VisionProperties();
 
-    private MealProperties meal = new MealProperties();
-
     private PromptProperties prompt = new PromptProperties();
 
     private ChatProperties chat = new ChatProperties();
-
-    @Data
-    public static class MealProperties {
-        private String model = "qwen3-vl-plus";
-        private int maxTokens = 2048;
-    }
 
     /**
      * 会话生命周期参数（接口 5.3 列表 / 5.4 删除 / 2.23 新建）。
@@ -113,10 +105,9 @@ public class AIProperties {
         /** 模板变量名清单：启动时按此清单试渲染一次，提前暴露模板里的花括号错误。 */
         private List<String> variables = new ArrayList<>();
 
-        /** 模型编码；留空继承 spring.ai.deepseek.chat.model */
-        private String modelCode;
-
-        /** 采样温度；留空继承全局配置 */
+        /**
+         * 采样温度；留空继承全局配置
+         */
         private Double temperature;
 
         /** 最大输出 token；留空继承全局配置 */

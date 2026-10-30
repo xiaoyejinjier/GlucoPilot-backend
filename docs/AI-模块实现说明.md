@@ -676,16 +676,25 @@ Snapshot load() {
 - **`capability` 决定候选池**（V48，替代 V45 的 `model_type`）：含 `vision` 的模型只参与视觉默认判定、其余只参与文本默认判定，互不抢占；历史行 `NULL` 视为 `text`。默认标记也是按池各一个（`clearOtherDefaults` 带池条件）。路由链上的「这个模型能不能干这件事」用 `AiModelCapability.matches(required)` 判定（模型能力必须是场景要求的超集）。
 - **版本号 = 内容指纹**，不是时间戳：`setVersion(hash)`。TTL 到期重载但配置没变 → 版本不变 → 上层不重建 model。
 - **`catch (RuntimeException)` 保留旧快照**：DB 挂了就用上一份；首次就失败则退化成「纯 yaml」。
-- **`textSpec(scene)` 的回落逻辑**：yaml 里写的 `model-code` 必须能在 `byCode` 里查到才用，查不到 WARN 后回落到默认模型。注释点明原因：**不能回「改了模型名的 yaml 规格」**，否则会用 A 的 API key 去调 B。
+- **`textSpec(scene)` 只做「按用途取默认」**（C2 起）：不再读 yaml 的 `ai.scenes.<scene>.model-code`——那个键曾经排在「后台默认模型」之上，导致运营在后台把默认模型换成 B 之后，场景仍然按 yaml 写的 A 去调（「记录写 A、实际调 B」的典型来源）。现在值来源只有一处：`ai_scene_config.model_code`（见 `SceneModelResolver.modelCode`）。老配置里残留的该键会在启动时被 `warnAboutDeprecatedSceneModelCode()` 点成 WARN。
 
 ### 9.3 `SceneModelResolver`：场景 → 模型 + 参数
 
 ```java
 public AiModelSpec modelCode(SceneCode scene) {
-    if (scene.isRequiresVision()) { return runtimeConfig.visionSpec().modelCode(); }
-    String bound = bindingService.modelCode(scene);               // ai_scene_config
-    if (bound != null && runtimeConfig.specByModelCode(bound) != null) { return bound; }
-    return runtimeConfig.textSpec(scene).modelCode();            // 未绑定 → 默认模型
+    SceneBinding binding = sceneBindings.binding(scene);          // 永不 null
+    if (scene.isRequiresVision()) {
+        if (binding.hasModel()) {                                  // 视觉绑定也要生效
+            AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
+            if (bound != null && bound.vision()) { return bound.modelCode(); }
+        }
+        return runtimeConfig.visionSpec().modelCode();             // 视觉绝不回落文本模型
+    }
+    if (binding.hasModel()) {
+        AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
+        if (bound != null && bound.capability().contains(AiModelCapability.TEXT)) { return bound.modelCode(); }
+    }
+    return runtimeConfig.textSpec(scene).modelCode();              // 未绑定 → 用途默认
 }
 
 public ChatOptions.Builder<?> optionsBuilder(SceneCode scene) {
@@ -699,8 +708,8 @@ public ChatOptions.Builder<?> optionsBuilder(SceneCode scene) {
 
 | 方法 | 场景 | 参数来源 |
 | --- | --- | --- |
-| `optionsBuilder` | 文本场景 | 绑定 > `ai.scenes.<scene>.*` |
-| `visionOptionsBuilder` | 视觉场景 | `MEAL_ANALYSIS` 用 `ai.meal.*` + `temperature 0.1`；其余无绑定参数时返回 null（继承模型默认） |
+| `optionsBuilder` | 文本场景 | 绑定 > `ai.scenes.<scene>.*`（yaml 只给参数，不给模型） |
+| `visionOptionsBuilder` | 视觉场景 | 绑定（含 model 端点）> `ai.scenes.<scene>.*`；三者全空返回 null（继承模型默认） |
 | `memoryOptionsBuilder` | MEMORY | `disableThinking()` + `ai.memory.memory-extract-max-tokens` |
 | `summaryOptionsBuilder` | SUMMARY | `disableThinking()` + `ai.memory.summary-max-tokens` |
 

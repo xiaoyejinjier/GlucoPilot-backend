@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.core;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AIProperties.SceneProperties;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
@@ -45,12 +47,14 @@ import com.threadfit.glucopilot.ai.model.runtime.DynamicChatModel;
 public class SceneModelResolver {
 
     /**
-     * 饮食分析在迁移前写死的温度。
+     * 已经废弃的场景级模型钉死键（yaml {@code ai.scenes.<key>.model-code}）。
      * <p>
-     * 它已挪进 {@code ai_scene_config}（V19 种子 0.10），这里只作为"整行被删掉"时的兜底，
-     * 保留原值以免行为在没人察觉的情况下变化。
+     * 为什么要废弃：这条链的优先级曾排在「后台用途默认」之上，于是运营在后台把默认模型
+     * 换成 B 之后，场景仍然按 yaml 写的 A 去调——「记录写 A、实际调 B」的典型来源。
+     * 现在模型只由「场景绑定（DB）→ 通道默认（DB）→ 通道兜底（yaml，仅通道级）」决定，
+     * 场景 yaml 只剩参数（温度/上限/提示词），不再参与选模型。
      */
-    private static final double MEAL_DEFAULT_TEMPERATURE = 0.1;
+    private static final String DEPRECATED_SCENE_MODEL_CODE_SUFFIX = ".model-code";
 
     private final AIProperties aiProperties;
 
@@ -59,12 +63,17 @@ public class SceneModelResolver {
     /** 场景绑定（{@code ai_scene_config}）：DB 非空字段优先于 yaml。 */
     private final AiSceneBindingService sceneBindings;
 
+    /** 只用于启动时检查老配置里是否还残留着 {@code ai.scenes.<key>.model-code}。 */
+    private final Environment environment;
+
     public SceneModelResolver(AIProperties aiProperties,
                               AiRuntimeConfigService runtimeConfig,
-                              AiSceneBindingService sceneBindings) {
+                              AiSceneBindingService sceneBindings,
+                              Environment environment) {
         this.aiProperties = aiProperties;
         this.runtimeConfig = runtimeConfig;
         this.sceneBindings = sceneBindings;
+        this.environment = environment;
     }
 
     /**
@@ -94,30 +103,50 @@ public class SceneModelResolver {
     }
 
     /**
+     * 启动时点出「场景还在 yaml 里钉死模型」这种已废弃配置。
+     * <p>
+     * 这个键本身已经不再参与解析（场景 yaml 只保留参数），但老部署里可能存在：
+     * 既然它已经不生效，就必须在启动日志里说清楚，否则运维会以为改了 yaml 仍然有效。
+     * 刻意只 WARN：一个已废弃键不该阻断发版。
+     */
+    @PostConstruct
+    void warnAboutDeprecatedSceneModelCode() {
+        for (SceneCode scene : SceneCode.values()) {
+            String key = "ai.scenes." + scene.getConfigKey() + DEPRECATED_SCENE_MODEL_CODE_SUFFIX;
+            String legacy = environment.getProperty(key);
+            if (StringUtils.hasText(legacy)) {
+                log.warn("{}={} 已废弃且不再生效：场景不再从 yaml 选模型，"
+                                + "请在后台「场景配置」给 {} 绑定模型，或在「模型配置」里设置通道默认模型",
+                        key, legacy, scene.getCode());
+            }
+        }
+    }
+
+    /**
      * 场景实际使用的模型编码。
      * <p>
      * 视觉场景返回的是视觉模型（阶段 1 真正调用的那个），而不是回落成 DeepSeek 的名字——
      * 否则落库的 {@code chat_message.model_code} 会与事实不符，用于成本核算时会算错账。
      * <p>
-     * 文本场景返回 {@link AiRuntimeConfigService#textSpec} 的结果：场景绑定 → 后台默认 → yaml，
-     * 与 {@code DynamicChatModel} 真正拿去发请求的那一份同源。
+     * 文本场景返回 {@link AiRuntimeConfigService#textSpec} 的结果：场景绑定 → 后台默认 → yaml 通道兜底，
+     * 与 {@code DynamicChatModel} 真正拿去发请求的那一份同源。注意 yaml 的
+     * {@code ai.scenes.<scene>.model-code} 已<b>不再参与</b>（见 {@link #warnAboutDeprecatedSceneModelCode()}）。
      * <p>
-     * 场景绑定（{@code ai_scene_config.model_code}）优先于 yaml 的 {@code ai.scenes.<scene>.model-code}，
-     * 但**只有在该编码仍然可解析时才采用**：后台禁用/删掉一个模型后，若还按它落库，
-     * 就会出现"记录里写 A、实际调 B"的老问题（2026-10-13 的反馈）。
+     * 场景绑定（{@code ai_scene_config.model_code}）**只有在该编码仍然可解析、且能力满足场景要求时才采用**：
+     * 后台禁用/删掉一个模型后若还按它落库，就会出现"记录里写 A、实际调 B"的老问题（2026-10-13 的反馈）。
      */
     public String modelCode(SceneCode scene) {
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         if (scene.isRequiresVision()) {
             // 视觉场景也认后台绑定（批次 2 之前这里是硬编码 visionSpec()，绑定"存了不用"）：
-            // 只有解析到「用途=视觉」的规格才采纳，否则宁可回落通道视觉模型——
-            // 把一个文本模型塞进视觉请求，结果一定是 400/404，而且错误信息与"绑定没生效"长得一样。
+            // 只有解析到「具备视觉能力」的规格才采纳，否则宁可回落通道视觉模型——
+            // 把一个纯文本模型塞进视觉请求，结果一定是 400/404，而且错误信息与"绑定没生效"长得一样。
             if (binding.hasModel()) {
                 AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
                 if (bound != null && bound.vision()) {
                     return bound.modelCode();
                 }
-                log.warn("视觉场景 {} 绑定的模型编码 {} 不可用（未登记、已停用，或用途不是 VISION），"
+                log.warn("视觉场景 {} 绑定的模型编码 {} 不可用（未登记、已停用，或能力不含 vision），"
                                 + "回落通道视觉模型",
                         scene.getCode(), binding.modelCode());
             }
@@ -125,11 +154,11 @@ public class SceneModelResolver {
         }
         if (binding.hasModel()) {
             AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
-            if (bound != null) {
+            if (bound != null && bound.capability().contains(AiModelCapability.TEXT)) {
                 return bound.modelCode();
             }
-            log.warn("场景 {} 在后台绑定的模型编码 {} 不在运行时配置里（不存在或已停用），"
-                            + "回落 yaml/后台默认模型",
+            log.warn("场景 {} 在后台绑定的模型编码 {} 不可用（不存在、已停用，或能力不含 text），"
+                            + "回落通道默认模型",
                     scene.getCode(), binding.modelCode());
         }
         return runtimeConfig.textSpec(scene).modelCode();
@@ -144,17 +173,18 @@ public class SceneModelResolver {
      */
     public boolean hasOverrides(SceneCode scene) {
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        SceneProperties config = aiProperties.scene(scene);
         if (scene.isRequiresVision()) {
-            // 饮食分析的 model/max-tokens 来自 ai.meal.*（yaml），恒有请求级参数；
-            // 其余视觉场景只有在绑定给了参数、或绑定指定了模型（要写 model 去覆盖通道模型）时才有覆盖
-            return scene == SceneCode.MEAL_ANALYSIS || binding.hasParams() || binding.hasModel();
+            // 视觉场景的请求级参数只有三个字段（model / max-completion-tokens / temperature）：
+            // 任一来源（后台绑定、yaml 场景参数）能给出其中一个，就值得构造 options；
+            // 都给不出时返回 false，让请求直接继承视觉模型自身的参数。
+            return binding.hasModel() || binding.temperature() != null || binding.maxTokens() != null
+                    || config.getTemperature() != null || config.getMaxTokens() != null;
         }
         if (binding.hasModel() || binding.hasParams()) {
             return true;
         }
-        SceneProperties config = aiProperties.scene(scene);
-        return StringUtils.hasText(config.getModelCode())
-                || config.getTemperature() != null
+        return config.getTemperature() != null
                 || config.getMaxTokens() != null
                 || config.getThinking() != null;
     }
@@ -185,7 +215,7 @@ public class SceneModelResolver {
         }
         SceneProperties config = aiProperties.scene(scene);
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
-        String modelCode = binding.hasModel() ? binding.modelCode() : config.getModelCode();
+        String modelCode = binding.hasModel() ? binding.modelCode() : null;
         Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
         Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : config.getMaxTokens();
         Boolean thinking = binding.thinking() != null ? binding.thinking() : config.getThinking();
@@ -233,35 +263,24 @@ public class SceneModelResolver {
                     + " 不是视觉场景，参数请走 optionsBuilder(...)（DeepSeek 协议）");
         }
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        SceneProperties config = aiProperties.scene(scene);
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
         // 后台绑定指定了视觉模型时优先用它：没有这条，视觉场景的绑定只对参数有效、对模型永远无效
         String boundEndpoint = boundVisionEndpoint(binding);
-        if (scene == SceneCode.MEAL_ANALYSIS) {
-            // 迁移前的行为原样保留：饮食分析用 ai.meal.* 的模型与大输出上限、温度 0.1
-            AIProperties.MealProperties meal = aiProperties.getMeal();
-            String model = boundEndpoint != null ? boundEndpoint : meal.getModel();
-            if (StringUtils.hasText(model)) {
-                builder.model(model);
-            }
-            Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : meal.getMaxTokens();
-            if (maxTokens != null) {
-                builder.maxCompletionTokens(maxTokens);
-            }
-            builder.temperature(binding.temperature() != null ? binding.temperature() : MEAL_DEFAULT_TEMPERATURE);
-            return builder;
-        }
         if (boundEndpoint != null) {
             builder.model(boundEndpoint);
         }
-        if (binding.temperature() == null && binding.maxTokens() == null && boundEndpoint == null) {
-            // 其余视觉场景（看图描述、血糖识别）：默认继承视觉模型自身的参数，不额外发请求级 options
+        Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
+        Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : config.getMaxTokens();
+        if (temperature != null) {
+            builder.temperature(temperature);
+        }
+        if (maxTokens != null) {
+            builder.maxCompletionTokens(maxTokens);
+        }
+        if (boundEndpoint == null && temperature == null && maxTokens == null) {
+            // 三个字段都给不出时：继承视觉模型自身的参数，不额外发请求级 options
             return null;
-        }
-        if (binding.temperature() != null) {
-            builder.temperature(binding.temperature());
-        }
-        if (binding.maxTokens() != null) {
-            builder.maxCompletionTokens(binding.maxTokens());
         }
         return builder;
     }

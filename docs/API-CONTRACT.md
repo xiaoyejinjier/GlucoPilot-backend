@@ -476,7 +476,7 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 
 确认照片后上传为 `MEAL(3)`，调用 `POST /api/v1/meal-analysis`，请求 `{ mediaId, nodeCode, foodText? }`。需要用户登录，校验照片归属和餐点节点，补充文字最多200字；携带稳定 `X-Idempotency-Key`，客户端超时90秒。取消/离开页面不写入饮食记录。
 
-餐食场景复用千问视觉凭据，独立使用 `ai.meal.model`（`AI_MEAL_MODEL`，默认 `qwen3-vl-plus`），不改变血糖 OCR 模型。响应含 `model`、`items`、`carbsG`、`caloriesKcal`、`matchedCount`、`newFoodsCount`、`warnings`。明细含食物名、`foodId`（仅上架食品）、`libraryFoodId`、分类码、估算重量、每100g营养、按份量计算的营养、GI（库中已有时）、`nutritionSource`、`libraryStatus`、置信度。无法确定的数值返回空，客户端要求补充或重新识别，不得替换为示例值。
+餐食场景复用视觉通道凭据（`ai.vision.*`），模型由场景解析给出（`ai_scene_config.model_code` → 视觉默认），不再有独立的 `ai.meal.model`；响应里的 `model` 与真正调用的模型同源，不改变血糖 OCR 模型。响应含 `model`、`items`、`carbsG`、`caloriesKcal`、`matchedCount`、`newFoodsCount`、`warnings`。明细含食物名、`foodId`（仅上架食品）、`libraryFoodId`、分类码、估算重量、每100g营养、按份量计算的营养、GI（库中已有时）、`nutritionSource`、`libraryStatus`、置信度。无法确定的数值返回空，客户端要求补充或重新识别，不得替换为示例值。
 
 规范化食品名后精确匹配 `food_nutrition`，已有食品必须使用库中营养，严禁模型覆盖。可信的新食品自动入库为待审核条目（`shelf_status=0`、`nutrition_source=AI_ESTIMATE`），保留来源模型；使用现有唯一键防止重复登记。模型估算明确标记，运营核对营养后可编辑上架。待审核 ID 不作为上架 `foodId` 提交，饮食记录保存食物名和营养快照。迁移 `V15__add_food_nutrition_source.sql` 保存来源。
 

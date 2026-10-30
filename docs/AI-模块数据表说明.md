@@ -208,6 +208,8 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 16 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
 
 > 参数优先级：`ai_scene_config` 非空字段 > yaml `ai.scenes.<scene>.*` > `ai_model_config` 本身。
+>
+> **C2 起 yaml 不再参与选模型**：`ai.scenes.<scene>.model-code` 已废弃（启动时 WARN），场景级的模型来源只剩本表 `model_code` 一列；参数仍可来自 `ai.scenes.*`。
 
 **当前开发库的 4 行**（`model_code` 全为 NULL = 都用通道默认；只有视觉与饮食两个场景调了参数）：
 
@@ -215,10 +217,10 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | --- | --- | --- | --- | --- | --- |
 | `CHAT` | NULL | NULL | NULL | NULL | 25（改过很多次） |
 | `CHAT_IMAGE` | NULL | 0.20 | 512 | NULL | 1 |
-| `MEAL_ANALYSIS` | NULL | 0.10 | NULL | NULL | 1 |
+| `MEAL_ANALYSIS` | NULL | 0.10 | 2048（V49 从 `ai.meal.max-tokens` 搬入） | NULL | 1 |
 | `OCR_GLUCOSE` | NULL | NULL | NULL | NULL | 1 |
 
-> 注意 `CHAT_IMAGE` 的 `max_tokens=512` 是**有意压低**的：阶段 1 只要一段图片描述，不需要长回答；`MEAL_ANALYSIS` 的 0.10 温度也是同一个理由（要稳定的结构化输出，不要发挥）。
+> 注意 `CHAT_IMAGE` 的 `max_tokens=512` 是**有意压低**的：阶段 1 只要一段图片描述，不需要长回答；`MEAL_ANALYSIS` 的 0.10 温度也是同一个理由（要稳定的结构化输出，不要发挥）；它的 2048 上限原本写在 yaml `ai.meal.max-tokens` 里，V49 迁到本表，行为等价。
 
 ---
 

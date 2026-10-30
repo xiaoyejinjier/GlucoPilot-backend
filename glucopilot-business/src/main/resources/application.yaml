@@ -261,9 +261,10 @@ ai:
     max-image-bytes: 5242880
     timeout-seconds: 60
 
-  meal:
-    model: ${AI_MEAL_MODEL:qwen3-vl-plus}
-    max-tokens: 2048
+  # 视觉通道的「模型」不再在这里单独配一个 ai.meal.model：饮食分析与其它视觉场景共用
+  # 同一个视觉通道模型（后端可在「模型配置」里给视觉模型标默认，或在「场景配置」里给
+  # 某个场景绑定别的视觉模型）。原 ai.meal.model 与 ai.vision.model 是同一份东西写了两遍，
+  # 改一个忘一个就会出现「配置说 A、实际调 B」。
 
   # 通道级配置的统一视图：业务代码只读这一份（AiChannelProperties），两个通道形状完全相同。
   # 刻意「不改前缀、只加视图」：spring.ai.deepseek.* 仍由 starter 消费、ai.vision.* 仍由

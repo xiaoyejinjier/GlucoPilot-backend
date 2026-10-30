@@ -443,6 +443,7 @@ classDiagram
     SceneModelResolver --> AiSceneBindingService
     SceneModelResolver --> AiRuntimeConfigService
     SceneModelResolver --> AIProperties
+    SceneModelResolver --> Environment
     AiSceneBindingService <|.. AiSceneBindingServiceImpl
     AiSceneBindingService ..> SceneBinding
     AiSceneBindingServiceImpl ..> AiSceneConfigMapper
@@ -457,7 +458,7 @@ classDiagram
 
 | 解析链 | 入口 | 优先级 |
 | --- | --- | --- |
-| 模型 | `SceneModelResolver.modelCode()` | 场景绑定 → yaml `ai.scenes.*.model-code` → 通道默认（文本/视觉各一套） |
+| 模型 | `SceneModelResolver.modelCode()` | 场景绑定（DB，视觉还要求能力含 vision） → 通道默认（DB） → yaml 通道兜底；yaml `ai.scenes.*.model-code` 自 C2 起已废弃 |
 | 参数 | `SceneModelResolver.optionsBuilder()` / `visionOptionsBuilder()` | 绑定非空字段 → yaml `ai.scenes.*` → 模型自身 options |
 | 提示词 | `AiPromptTemplateService.systemPrompt(scene)` | `ai_prompt_template` 启用版本 → classpath `prompts/<key>/system.md` |
 

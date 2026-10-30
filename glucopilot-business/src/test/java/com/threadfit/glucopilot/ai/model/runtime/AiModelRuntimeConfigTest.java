@@ -1,6 +1,5 @@
 package com.threadfit.glucopilot.ai.model.runtime;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiChannelProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import org.junit.jupiter.api.Test;
@@ -435,7 +434,7 @@ class AiModelRuntimeConfigTest {
 
     private AiRuntimeConfigService service(AiModelConfigMapper mapper, AiModelCipher cipher,
                                            AiChannelProperties channels) {
-        return new AiRuntimeConfigServiceImpl(mapper, cipher, new AIProperties(), channels);
+        return new AiRuntimeConfigServiceImpl(mapper, cipher, channels);
     }
 
     /** 两个通道的 yaml 侧取值：与 application.yaml 里的 ai.channels.* 同形。 */

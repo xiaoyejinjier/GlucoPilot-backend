@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.business.meal.service.impl;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.core.SceneModelResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
@@ -31,13 +31,15 @@ class MealAnalysisServiceTest {
     @Mock private MediaFileService media;
     @Mock private VisionAnalyzer vision;
     @Mock private MealFoodCatalogService catalog;
+    @Mock private SceneModelResolver sceneModelResolver;
     @Mock private IdempotencyStore idempotency;
     private JsonUtils json;
     private MealAnalysisServiceImpl service;
 
     @BeforeEach void setup() {
         json = new JsonUtils(JsonMapper.builder().build());
-        service = new MealAnalysisServiceImpl(media, vision, catalog, new AIProperties(), json, idempotency);
+        lenient().when(sceneModelResolver.modelCode(any())).thenReturn("qwen3-vl-plus");
+        service = new MealAnalysisServiceImpl(media, vision, catalog, sceneModelResolver, json, idempotency);
     }
     @AfterEach void cleanup() { RequestContext.clear(); }
 

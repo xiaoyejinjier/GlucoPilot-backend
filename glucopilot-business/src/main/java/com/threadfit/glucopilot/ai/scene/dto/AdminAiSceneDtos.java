@@ -83,7 +83,7 @@ public class AdminAiSceneDtos {
 
         private Boolean yamlThinking;
 
-        /** model_code 是否对该场景生效：视觉场景为 false（模型由视觉通道统一解析，P2 才支持逐场景选）。 */
+        /** model_code 是否对该场景生效：文本与视觉场景都为 true（视觉场景要求绑定的模型能力含 vision，否则回落通道视觉模型）。 */
         private Boolean modelCodeApplies;
 
         /** 给前端的一句说明（例如视觉场景为什么没有模型下拉）。 */

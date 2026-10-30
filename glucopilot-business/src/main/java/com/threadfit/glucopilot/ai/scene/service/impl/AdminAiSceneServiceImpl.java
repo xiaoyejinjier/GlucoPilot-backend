@@ -201,24 +201,25 @@ public class AdminAiSceneServiceImpl implements AdminAiSceneService {
                 .configured(entity != null)
                 .effectiveModelCode(effectiveModelCode)
                 .effectiveModelSource(effectiveModelSource)
-                .yamlModelCode(yaml.getModelCode())
+                // yaml 不再参与选模型（C2 起只保留参数），该字段恒为 null，仅为前端兼容保留
+                .yamlModelCode(null)
                 .yamlTemperature(toBigDecimal(yaml.getTemperature()))
                 .yamlMaxTokens(yaml.getMaxTokens())
                 .yamlThinking(yaml.getThinking())
-                .modelCodeApplies(!scene.isRequiresVision())
+                .modelCodeApplies(true)
                 .hint(hint(scene))
                 .build();
     }
 
     private static String hint(SceneCode scene) {
         if (scene.isRequiresVision()) {
-            return "视觉场景：模型由视觉通道统一解析（模型配置里 provider=2 的那一行），"
-                    + "本页的温度/输出上限会作为请求参数生效；model_code 暂不生效。";
+            return "视觉场景：模型来自「模型配置」里能力含 vision 的模型（默认标记优先，其次唯一启用者），"
+                    + "也可以在这里绑定某个视觉模型；本页的温度/输出上限会作为请求参数生效。";
         }
         if (scene == SceneCode.CHAT) {
-            return "文本场景：模型编码、温度、输出上限、思维链都会生效；留空则继承 yaml / 通道默认。";
+            return "文本场景：模型编码、温度、输出上限、思维链都会生效；留空则用「模型配置」里的文本默认模型。";
         }
-        return "留空则继承 yaml / 通道默认。";
+        return "留空则用「模型配置」里的文本默认模型；参数留空则继承 yaml ai.scenes 或模型自身。";
     }
 
     private static BigDecimal toBigDecimal(Double value) {

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.mock.env.MockEnvironment;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -50,11 +51,9 @@ class SceneModelResolverTest {
             config.setPrompt("prompts/chat/system.md");
             properties.getScenes().put(scene.getConfigKey(), config);
         }
-        properties.getMeal().setModel("qwen3-vl-plus");
-        properties.getMeal().setMaxTokens(2048);
         runtimeConfig = mock(AiRuntimeConfigService.class);
         sceneBindings = mock(AiSceneBindingService.class);
-        resolver = new SceneModelResolver(properties, runtimeConfig, sceneBindings);
+        resolver = new SceneModelResolver(properties, runtimeConfig, sceneBindings, new MockEnvironment());
     }
 
     private static AiModelSpec spec(String code, String endpoint) {
@@ -120,8 +119,7 @@ class SceneModelResolverTest {
     }
 
     @Test
-    void 后台绑定模型优先于yaml且写入的是端点名() {
-        properties.scene(SceneCode.CHAT).setModelCode("yaml-bound");
+    void 后台绑定模型时写入的是端点名() {
         when(sceneBindings.binding(SceneCode.CHAT)).thenReturn(binding("pro", null, null, null));
         // 绑定的编码必须能解析出端点：编码是业务起的名字，发给厂商的必须是端点名
         when(runtimeConfig.specByModelCode("pro")).thenReturn(spec("pro", "deepseek-v4-pro"));
@@ -220,26 +218,24 @@ class SceneModelResolverTest {
     }
 
     @Test
-    void 饮食分析保留迁移前的模型与写死温度() {
-        // 迁移前：模型与输出上限来自 ai.meal.*，温度写死 0.1；后台没有覆盖时必须原样保留
-        when(sceneBindings.binding(SceneCode.MEAL_ANALYSIS)).thenReturn(inherit());
+    void 饮食分析的参数来自场景绑定() {
+        // C2 之后 ai.meal.* 已删除：模型与参数一律走场景绑定 / ai.scenes.*
+        when(sceneBindings.binding(SceneCode.MEAL_ANALYSIS)).thenReturn(binding(null, 0.1, 2048, null));
 
         OpenAiChatOptions options = (OpenAiChatOptions) resolver.visionOptionsBuilder(SceneCode.MEAL_ANALYSIS).build();
 
-        assertEquals("qwen3-vl-plus", options.getModel());
-        assertEquals(2048, options.getMaxCompletionTokens());
         assertEquals(0.1, options.getTemperature());
-        assertTrue(resolver.hasOverrides(SceneCode.MEAL_ANALYSIS), "饮食分析恒有请求级参数");
+        assertEquals(2048, options.getMaxCompletionTokens());
+        assertTrue(resolver.hasOverrides(SceneCode.MEAL_ANALYSIS));
     }
 
     @Test
-    void 饮食分析的后台温度可以覆盖写死值() {
-        when(sceneBindings.binding(SceneCode.MEAL_ANALYSIS)).thenReturn(binding(null, 0.0, null, null));
+    void 饮食分析没有参数时继承视觉模型自身参数() {
+        when(sceneBindings.binding(SceneCode.MEAL_ANALYSIS)).thenReturn(inherit());
 
-        OpenAiChatOptions options = (OpenAiChatOptions) resolver.visionOptionsBuilder(SceneCode.MEAL_ANALYSIS).build();
-
-        assertEquals(0.0, options.getTemperature());
-        assertEquals("qwen3-vl-plus", options.getModel(), "模型不受温度覆盖影响");
+        assertNull(resolver.visionOptionsBuilder(SceneCode.MEAL_ANALYSIS),
+                "三个字段都给不出时不应构造请求级 options");
+        assertFalse(resolver.hasOverrides(SceneCode.MEAL_ANALYSIS));
     }
 
     @Test

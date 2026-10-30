@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.business.meal.service.impl;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.core.SceneModelResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.constant.GlucoseNodes;
@@ -33,7 +33,8 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
     private final MediaFileService mediaFiles;
     private final VisionAnalyzer vision;
     private final MealFoodCatalogService catalog;
-    private final AIProperties properties;
+    /** 回显 / 溯源用的模型编码：必须走场景解析，否则记录里写的是 yaml 的模型、实际调的是后台绑定的模型。 */
+    private final SceneModelResolver sceneModelResolver;
     private final JsonUtils json;
     private final IdempotencyStore idempotency;
 
@@ -58,7 +59,9 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
             }
         }
         try {
-            String model = properties.getMeal().getModel();
+            // 回显/溯源用的模型编码取自场景解析（场景绑定 → 视觉默认 → yaml 通道兜底），
+            // 与下面 vision.analyze(...) 真正走的模型同源；读 yaml 的 ai.meal.model 会写错。
+            String model = sceneModelResolver.modelCode(SceneCode.MEAL_ANALYSIS);
             String raw;
             try {
                 raw = vision.analyze(media, SceneCode.MEAL_ANALYSIS,

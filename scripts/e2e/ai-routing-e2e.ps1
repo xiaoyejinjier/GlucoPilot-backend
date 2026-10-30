@@ -107,4 +107,46 @@ Check "清空后没有残留绑定编码" ($null -eq $imageBack.boundModelCode) 
 
 Write-Host ""
 Write-Host "---- 结果 ----" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "F) 保存前连通性校验（P1）" -ForegroundColor Cyan
+$badModel = @{
+    modelCode       = "e2e-bad-endpoint"
+    modelName       = "E2E 故意写错的模型"
+    providerCode    = 2
+    capability      = "text"
+    apiBaseUrl      = "http://127.0.0.1:9/v1"
+    modelEndpoint   = "definitely-not-a-model"
+    isEnabled       = 1
+    isDefault       = 0
+    timeoutMs       = 5000
+}
+Save-Json "$outDir\routing-bad-model.json" $badModel
+$badCreate = & curl.exe -s -X POST "$admin/ai/models" @ah --data-binary "@$outDir\routing-bad-model.json" | ConvertFrom-Json
+Check "连不通的模型保存被拒绝" ($badCreate.code -ne 0) "code=$($badCreate.code) msg=$($badCreate.message)"
+Check "错误信息说明是连通性校验" ($badCreate.message -match "连通性") "msg=$($badCreate.message)"
+$listAfterBad = (& curl.exe -s "$admin/ai/models" @ah) | ConvertFrom-Json
+$stillThere = @($listAfterBad.data.records | Where-Object { $_.modelCode -eq "e2e-bad-endpoint" })
+Check "被拒绝的模型没有落库" ($stillThere.Count -eq 0) "count=$($stillThere.Count)"
+
+$skipNoReason = $badModel.Clone()
+$skipNoReason.skipVerify = $true
+Save-Json "$outDir\routing-skip-no-reason.json" $skipNoReason
+$skipBad = & curl.exe -s -X POST "$admin/ai/models" @ah --data-binary "@$outDir\routing-skip-no-reason.json" | ConvertFrom-Json
+Check "跳过校验但没填原因被拒绝" ($skipBad.code -ne 0) "code=$($skipBad.code) msg=$($skipBad.message)"
+Check "错误信息要求填原因" ($skipBad.message -match "原因") "msg=$($skipBad.message)"
+
+$skipOk = $badModel.Clone()
+$skipOk.skipVerify = $true
+$skipOk.verifySkipReason = "E2E：本地无外网，验跳过留痕"
+Save-Json "$outDir\routing-skip-ok.json" $skipOk
+$skipCreate = & curl.exe -s -X POST "$admin/ai/models" @ah --data-binary "@$outDir\routing-skip-ok.json" | ConvertFrom-Json
+Check "填了原因可以跳过保存" ($skipCreate.code -eq 0) "code=$($skipCreate.code) msg=$($skipCreate.message)"
+$listAfterSkip = (& curl.exe -s "$admin/ai/models" @ah) | ConvertFrom-Json
+$skippedRow = @($listAfterSkip.data.records | Where-Object { $_.modelCode -eq "e2e-bad-endpoint" })[0]
+Check "跳过原因随行回显" ($null -ne $skippedRow -and $skippedRow.verifySkippedReason -match "E2E") "reason=$($skippedRow.verifySkippedReason)"
+# 收尾：把这条 E2E 造出来的行停用（没有删除接口），避免它参与后续的默认模型候选
+if ($null -ne $skippedRow) {
+    Save-Json "$outDir\routing-disable-bad.json" @{ enabled = 0 }
+    & curl.exe -s -X POST "$admin/ai/models/$($skippedRow.id)/enabled" @ah --data-binary "@$outDir\routing-disable-bad.json" | Out-Null
+}
 Write-Host ("PASS={0} FAIL={1}" -f $script:pass, $script:fail) -ForegroundColor $(if ($script:fail -eq 0) { "Green" } else { "Red" })

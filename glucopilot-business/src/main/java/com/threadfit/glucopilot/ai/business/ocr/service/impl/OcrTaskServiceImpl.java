@@ -28,7 +28,6 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.Optional;
 import java.util.concurrent.Executor;
 import com.threadfit.glucopilot.ai.business.ocr.service.OcrTaskService;
 
@@ -74,28 +73,39 @@ public class OcrTaskServiceImpl implements OcrTaskService {
         }
 
         String idempotencyKey = RequestContext.getIdempotencyKey();
-        String snapshotKey = null;
-        if (StringUtils.hasText(idempotencyKey)) {
-            snapshotKey = IdempotencyStore.key("ocr:create", userId, idempotencyKey);
-            Optional<String> snapshot = idempotencyStore.find(snapshotKey);
-            if (snapshot.isPresent()) {
-                return jsonUtils.fromJson(snapshot.get(), TaskView.class);
+        String snapshotKey = StringUtils.hasText(idempotencyKey)
+                ? IdempotencyStore.key("ocr:create", userId, idempotencyKey)
+                : null;
+        if (snapshotKey != null) {
+            IdempotencyStore.Claim claim = idempotencyStore.claim(snapshotKey);
+            if (claim instanceof IdempotencyStore.Claim.Replay replay) {
+                return jsonUtils.fromJson(replay.json(), TaskView.class);
+            }
+            if (claim instanceof IdempotencyStore.Claim.InFlight) {
+                throw new BizException(ErrorCode.CONFLICT, "相同请求处理中，请稍后重试");
             }
         }
 
-        OcrTask task = new OcrTask();
-        task.setUserId(userId);
-        task.setMediaId(media.getId());
-        task.setBizType(bizType.getCode());
-        task.setTaskStatus(TaskStatus.PENDING.getCode());
-        taskMapper.insert(task);
+        try {
+            OcrTask task = new OcrTask();
+            task.setUserId(userId);
+            task.setMediaId(media.getId());
+            task.setBizType(bizType.getCode());
+            task.setTaskStatus(TaskStatus.PENDING.getCode());
+            taskMapper.insert(task);
 
-        TaskView created = toView(task);
-        if (snapshotKey != null) {
-            idempotencyStore.saveIfAbsent(snapshotKey, created);
+            TaskView created = toView(task);
+            if (snapshotKey != null) {
+                idempotencyStore.complete(snapshotKey, created);
+            }
+            taskExecutor.execute(() -> recognize(task.getId(), userId, media));
+            return created;
+        } catch (RuntimeException ex) {
+            if (snapshotKey != null) {
+                idempotencyStore.release(snapshotKey);
+            }
+            throw ex;
         }
-        taskExecutor.execute(() -> recognize(task.getId(), userId, media));
-        return created;
     }
 
     public TaskView detail(Long id, Long userId) {

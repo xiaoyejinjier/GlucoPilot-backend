@@ -14,6 +14,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -83,7 +84,11 @@ public class HealthConnectAdapter implements DevicePayloadAdapter {
         if (!StringUtils.hasText(text)) {
             return LocalDateTime.now(ZONE);
         }
-        return OffsetDateTime.parse(text).atZoneSameInstant(ZONE).toLocalDateTime();
+        try {
+            return OffsetDateTime.parse(text).atZoneSameInstant(ZONE).toLocalDateTime();
+        } catch (DateTimeParseException ex) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "非法日期: " + text);
+        }
     }
 
     private static String firstText(JsonNode row, String... fields) {

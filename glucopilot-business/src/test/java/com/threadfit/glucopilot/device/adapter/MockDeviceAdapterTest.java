@@ -54,4 +54,17 @@ class MockDeviceAdapterTest {
         BizException error = assertThrows(BizException.class, () -> adapter.adapt(mapper.createObjectNode()));
         assertEquals(ErrorCode.BAD_REQUEST, error.getErrorCode());
     }
+
+    @Test
+    void illegalRecordDateReturnsBadRequest() {
+        ObjectNode root = mapper.createObjectNode();
+        ObjectNode row = root.putArray("readings").addObject();
+        row.put("recordDate", "not-a-date");
+        row.put("nodeCode", "before_breakfast");
+        row.put("value", 5.6);
+
+        BizException error = assertThrows(BizException.class, () -> adapter.adapt(root));
+        assertEquals(ErrorCode.BAD_REQUEST, error.getErrorCode());
+        assertEquals("非法日期: not-a-date", error.getMessage());
+    }
 }

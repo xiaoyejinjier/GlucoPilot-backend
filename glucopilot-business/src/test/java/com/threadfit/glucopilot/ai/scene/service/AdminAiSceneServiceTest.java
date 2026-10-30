@@ -99,6 +99,11 @@ class AdminAiSceneServiceTest {
                 null, null, null, null, null, source, AiModelCapability.text());
     }
 
+    private static AiModelSpec visionSpec(String code) {
+        return new AiModelSpec(code, code, 2, null, null, "qwen-vl-max",
+                null, null, null, null, null, "db", AiModelCapability.visionDefaults());
+    }
+
     @Test
     void 首次保存会插入一行且带乐观锁版本1() {
         // 第一次读：还没有配置行；保存后的回读：拿到刚插入的行（真实库里 insert 会回填自增 id）
@@ -200,12 +205,12 @@ class AdminAiSceneServiceTest {
     }
 
     @Test
-    void 视觉场景可以保存模型编码且标记为生效() {
+    void 视觉场景可以绑定视觉模型且标记为生效() {
         when(mapper.selectOne(any())).thenReturn(null);
-        when(runtimeConfig.specByModelCode("flash")).thenReturn(spec("flash", "db"));
-        when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "db"));
+        when(runtimeConfig.specByModelCode("qwen-vl")).thenReturn(visionSpec("qwen-vl"));
+        when(runtimeConfig.visionSpec()).thenReturn(visionSpec("qwen-vl"));
         AdminAiSceneDtos.SaveRequest request = request();
-        request.setModelCode("flash");
+        request.setModelCode("qwen-vl");
 
         AdminAiSceneDtos.SceneRow saved = service.save("chat-image", request);
 
@@ -213,6 +218,35 @@ class AdminAiSceneServiceTest {
         assertTrue(saved.getModelCodeApplies());
         assertTrue(saved.getHint().contains("视觉"));
         assertEquals("qwen-vl", saved.getEffectiveModelCode());
+    }
+
+    @Test
+    void 视觉场景绑定文本模型应直接400且不落库() {
+        when(mapper.selectOne(any())).thenReturn(null);
+        when(runtimeConfig.specByModelCode("flash")).thenReturn(spec("flash", "db"));
+        AdminAiSceneDtos.SaveRequest request = request();
+        request.setModelCode("flash");
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.save("chat-image", request));
+
+        assertEquals(ErrorCode.BAD_REQUEST, error.getErrorCode());
+        assertTrue(error.getMessage().contains("只能绑定能力含 vision"));
+        verify(mapper, never()).insert(any(AiSceneConfigEntity.class));
+    }
+
+    @Test
+    void 文本场景绑定纯视觉模型应直接400() {
+        when(mapper.selectOne(any())).thenReturn(null);
+        when(runtimeConfig.specByModelCode("qwen-vl")).thenReturn(visionSpec("qwen-vl"));
+        AdminAiSceneDtos.SaveRequest request = request();
+        request.setModelCode("qwen-vl");
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.save("CHAT", request));
+
+        assertEquals(ErrorCode.BAD_REQUEST, error.getErrorCode());
+        assertTrue(error.getMessage().contains("只能绑定能力含 text"));
     }
 
     @Test

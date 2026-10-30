@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.scene.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.model.entity.AiModelConfigEntity;
 import com.threadfit.glucopilot.ai.model.mapper.AiModelConfigMapper;
@@ -109,16 +110,22 @@ public class AdminAiSceneServiceImpl implements AdminAiSceneService {
         }
         boolean clear = Boolean.TRUE.equals(request.getClear());
         if (!clear && request.getModelCode() != null && StringUtils.hasText(request.getModelCode())) {
-            // 绑定的编码必须存在且启用：否则运行时会 WARN 并回落，运营却以为已经绑上了
+            // 绑定的编码必须存在、启用，且能力要覆盖场景要求：
+            // 否则运行时会 WARN 并回落，运营却以为已经绑上了（"记录写 A、实际调 B"的同一类问题）
             AiModelSpec spec = runtimeConfig.specByModelCode(request.getModelCode().trim());
             if (spec == null) {
                 throw new BizException(ErrorCode.BAD_REQUEST,
                         "模型编码不存在或已停用：" + request.getModelCode() + "（请先在「模型配置」里启用它）");
             }
-            if (scene.isRequiresVision()) {
-                log.warn("后台为视觉场景 {} 绑定了 model_code={}：该字段对视觉场景不生效"
-                                + "（视觉模型由通道统一解析），本次仍照常保存供 P2 使用",
-                        scene.getCode(), request.getModelCode());
+            if (scene.isRequiresVision() && !spec.vision()) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "视觉场景只能绑定能力含 vision 的模型：" + spec.modelCode()
+                                + " 的能力是「" + spec.capability().displayText() + "」");
+            }
+            if (!scene.isRequiresVision() && !spec.capability().contains(AiModelCapability.TEXT)) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "文本场景只能绑定能力含 text 的模型：" + spec.modelCode()
+                                + " 的能力是「" + spec.capability().displayText() + "」");
             }
         }
 

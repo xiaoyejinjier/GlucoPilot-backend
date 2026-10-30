@@ -759,6 +759,27 @@ public static String mask(String secret)         // 列表页展示 sk-****abcd
 public int currentKeyVersion()                   // 密文带版本号，支持主密钥轮换
 ```
 
+### 9.6 `AiRuntimeStatusServiceImpl`：把「为什么是这个模型」做成接口
+
+C2 之前，这个问题只能靠翻启动日志（而且快照日志只在**首次加载**时打一次）或读代码推断。现在：
+
+```java
+GET /admin/v1/ai/runtime/status        // 权限 ai:model:query，只读
+public AiRuntimeStatusDtos.Status status();   // 快照 + 场景绑定 → 现状 + issues
+```
+
+每个场景的 `source` 只有三种取值，正好对应代码里的三条链：
+
+| source | 含义 | 代码里的位置 |
+| --- | --- | --- |
+| `binding` | 后台 `ai_scene_config.model_code` 生效（能解析且能力匹配） | `SceneModelResolver.modelCode` 的绑定分支 |
+| `default` | 没绑定或绑定不可用，走通道默认（DB 的默认标记/唯一启用者） | `Snapshot.resolveTextDefault` / `resolveVisionDefault` |
+| `fallback` | DB 里连默认都没有，落 yaml 通道兜底 | `AiModelSpec.source() == "yaml"` |
+
+`issues` 收集的是「大概率不符合预期」但不报错的配置：绑定指向不存在的模型、视觉场景绑了文本模型、某通道没有 DB 默认、有模型行因密钥解不开被跳过。
+
+实现上刻意**不复用** `SceneModelResolver.modelCode`：那个方法每次判定失败都会 WARN，而诊断接口会被后台反复刷新；这边只做同样的判定、不打日志。代价是判定条件写了两份，所以 `AiRuntimeStatusServiceTest` 里有专门的用例守「绑定不可用时必须如实标成 default 并给出 issue」——否则这个接口就会开始说谎。
+
 ---
 
 ## 10. 记忆与摘要

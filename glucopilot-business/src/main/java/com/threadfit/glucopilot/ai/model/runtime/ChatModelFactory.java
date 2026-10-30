@@ -4,7 +4,10 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.deepseek.api.DeepSeekApi;
@@ -12,11 +15,15 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.retry.RetryTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.util.MimeTypeUtils;
 import org.springframework.util.StringUtils;
 
 import java.time.Duration;
+import java.util.Base64;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -143,16 +150,18 @@ public class ChatModelFactory {
     /**
      * 连通性测试：用该配置发一次最小请求。
      * <p>
-     * 这是后台"测试"按钮的实现。它的价值来自真实教训：视觉模型名写成账号下不存在的
-     * {@code qwen3-vl-flash} 时，只能在用户发图后才看到 {@code 404 Model not exist}；
-     * 有了这个方法，"配置对不对"在后台点一下就知道，并且能把错误归到具体类别。
+     * 这是后台"测试"按钮的实现，也是<b>保存前校验</b>的实现（{@code AdminAiModelServiceImpl} 保存时调它）。
+     * 它的价值来自真实教训：视觉模型名写成账号下不存在的 {@code qwen3-vl-flash} 时，只能在用户发图后才看到
+     * {@code 404 Model not exist}；有了这个方法，"配置对不对"在后台点一下就知道，并且能把错误归到具体类别。
+     * <p>
+     * <b>探针要按能力选</b>：视觉模型只吃文本 prompt 会被厂商拒（"image required"这类 400），
+     * 于是"配置正确"的视觉模型反而测不过。所以视觉走一张 1×1 PNG 的看图请求，文本走 {@code ping}。
      */
     public ConnectivityResult test(AiModelSpec spec, Duration timeout) {
         ChatModel model = build(spec);
         long start = System.nanoTime();
         try {
-            var response = model.call(new org.springframework.ai.chat.prompt.Prompt(
-                    "ping" + (timeout == null ? "" : "")));
+            var response = model.call(spec.vision() ? visionProbe() : textProbe());
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             String text = response == null || response.getResult() == null
                     ? "" : Optional.ofNullable(response.getResult().getOutput()).map(m -> m.getText()).orElse("");
@@ -163,6 +172,25 @@ public class ChatModelFactory {
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             return ConnectivityResult.fail(classify(e), elapsedMs, rootMessage(e));
         }
+    }
+
+    /** 文本探针：一个词就够，尽量少花 token。 */
+    private static Prompt textProbe() {
+        return new Prompt("ping");
+    }
+
+    /**
+     * 视觉探针：1×1 透明 PNG。用真实图片而不是伪造的字节，这样厂商侧的解码/尺寸校验也一并被验证到；
+     * prompt 刻意要求"一个词"，避免测试本身产生可观的输出费用。
+     */
+    private static Prompt visionProbe() {
+        byte[] png = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+        UserMessage message = UserMessage.builder()
+                .text("这张图是什么颜色？只回答一个词。")
+                .media(List.of(new Media(MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(png))))
+                .build();
+        return new Prompt(List.of(message));
     }
 
     /**

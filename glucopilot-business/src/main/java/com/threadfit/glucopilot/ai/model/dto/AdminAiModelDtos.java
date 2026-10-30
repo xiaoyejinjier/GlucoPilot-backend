@@ -94,6 +94,13 @@ public final class AdminAiModelDtos {
 
         private String lastTestMessage;
 
+        /**
+         * 保存时跳过了连通性校验的原因（V51）。null = 保存时校验过（或历史行早于该校验）。
+         * <p>
+         * 单独一列而不是塞进 {@code remark}：remark 是运营填的业务备注，混进系统话术会把它覆盖掉。
+         */
+        private String verifySkippedReason;
+
         private String remark;
 
         private LocalDateTime updatedAt;
@@ -182,6 +189,19 @@ public final class AdminAiModelDtos {
 
         @Size(max = 255, message = "备注过长")
         private String remark;
+
+        /**
+         * 跳过保存前的连通性校验。
+         * <p>
+         * 默认不跳过（服务端会真发一次探针请求）。跳过的场景：新厂商暂时连不通但想先把配置录进来、
+         * 或者调试时反复改参数不想每次都等一次往返。<b>跳过必须给原因</b>，原因落
+         * {@code ai_model_config.verify_skipped_reason}，列表里能看到——否则事后没人知道这行为什么没测过。
+         */
+        private Boolean skipVerify;
+
+        /** 跳过校验的原因（{@code skipVerify=true} 时必填，≤255 字）。 */
+        @Size(max = 255, message = "跳过校验的原因过长")
+        private String verifySkipReason;
 
         /** 修改时必填（乐观锁）。 */
         private Integer configVersion;

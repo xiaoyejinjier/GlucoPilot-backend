@@ -44,6 +44,28 @@ public class AIProperties {
 
     private ChatProperties chat = new ChatProperties();
 
+    private ModelProperties model = new ModelProperties();
+
+    /**
+     * 模型配置的写入门槛。
+     * <p>
+     * 做"保存前连通性校验"是因为一类事故只有真实调用才暴露：模型名写错、密钥属于别的账号、
+     * baseUrl 少写 {@code /v1}——这些在后台看起来完全正常，直到用户提问才 404/401。
+     * 校验失败必须让保存失败，否则"填错了也能存"等于没有校验。
+     */
+    @Data
+    public static class ModelProperties {
+
+        /**
+         * 保存模型配置前是否强制发一次探针请求。
+         * <p>
+         * 默认开启。关闭只应出现在两种场合：CI/本地没有外网，或者新接入的厂商暂时连不通但需要先把
+         * 配置录进来。关闭时每行的 {@code verify_skipped_reason} 会写明"服务端关闭了校验"，
+         * 不至于事后无从追查。
+         */
+        private boolean verifyOnSave = true;
+    }
+
     /**
      * 会话生命周期参数（接口 5.3 列表 / 5.4 删除 / 2.23 新建）。
      */

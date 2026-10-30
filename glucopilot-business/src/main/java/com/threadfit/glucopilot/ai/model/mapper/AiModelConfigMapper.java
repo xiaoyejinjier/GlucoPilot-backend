@@ -33,7 +33,7 @@ public interface AiModelConfigMapper extends BaseMapper<AiModelConfigEntity> {
             + "model_endpoint = #{e.modelEndpoint}, temperature = #{e.temperature}, top_p = #{e.topP}, "
             + "max_tokens = #{e.maxTokens}, thinking = #{e.thinking}, timeout_ms = #{e.timeoutMs}, "
             + "extra_params = #{e.extraParams}, is_enabled = #{e.isEnabled}, is_default = #{e.isDefault}, "
-            + "remark = #{e.remark}, "
+            + "remark = #{e.remark}, verify_skipped_reason = #{e.verifySkippedReason}, "
             + "api_key_cipher = COALESCE(#{cipher}, api_key_cipher), "
             + "cipher_algo = COALESCE(#{cipherAlgo}, cipher_algo), "
             + "key_version = COALESCE(#{keyVersion}, key_version), "

@@ -780,6 +780,28 @@ public AiRuntimeStatusDtos.Status status();   // 快照 + 场景绑定 → 现�
 
 实现上刻意**不复用** `SceneModelResolver.modelCode`：那个方法每次判定失败都会 WARN，而诊断接口会被后台反复刷新；这边只做同样的判定、不打日志。代价是判定条件写了两份，所以 `AiRuntimeStatusServiceTest` 里有专门的用例守「绑定不可用时必须如实标成 default 并给出 issue」——否则这个接口就会开始说谎。
 
+### 9.7 保存前连通性校验：把「配错了」提前到保存那一刻
+
+P1 之前，后台保存模型配置只做**格式**校验：编码非空、能力合法、编码不重复。至于「这个 endpoint 厂商认不认」「这把 key 属于这个账号吗」「baseUrl 少没少 `/v1`」，都要等到管理员自己点「测试连通性」，或者更糟——等线上第一条用户提问失败。
+
+现在 `AdminAiModelServiceImpl.verifyBeforeSave` 在**新增/编辑保存**时真发一次探针：
+
+| 模型能力 | 探针 | 为什么 |
+| --- | --- | --- |
+| 文本（不含 `vision`） | `new Prompt("ping")` | 最便宜的一次真实补全 |
+| 视觉（含 `vision`） | 1×1 透明 PNG + 「这张图是什么颜色？只回答一个词。」 | 视觉模型只吃文本 prompt 会被厂商拒，导致**配置正确反而测不过** |
+
+三种放行方式都会留痕（`ai_model_config.verify_skipped_reason`，V51）：
+
+1. 校验通过 → 列清空；
+2. 管理员勾选「跳过」并填原因 → 原因落库，列表里那一行显示「未校验」+ 悬浮原因；
+3. 服务端整体关闭（`ai.model.verify-on-save=false`）→ 落一句固定说明。
+
+失败时抛 `BizException(BAD_REQUEST, "连通性校验未通过：" + advice + "（" + category + "：" + message + "）")`：`category` 来自 `ChatModelFactory.classify`（`AUTH` / `MODEL_NOT_FOUND` / `RATE_LIMIT` / `TIMEOUT` / `NETWORK` / `UNKNOWN`），`advice` 是给管理员看的「该改哪个字段」。**没通过就不落库**——否则后台会攒出一堆"看起来正常、一用就 401"的行。
+
+两个实现细节：探针在事务内执行，最长占用一个连接 30s（保存是低频人工操作，这个代价换"填错了存不进去"是划算的）；`update` 时探针用的凭据是「新密钥 > 库里旧密文 > 清空即无」，不能用 yaml 的 key 去代表这一行——否则会出现"测着成功、线上 401"。
+
+
 ---
 
 ## 10. 记忆与摘要

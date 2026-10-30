@@ -1,5 +1,6 @@
 package com.threadfit.glucopilot.ai.model.service;
 
+import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.dto.AdminAiModelDtos;
 import com.threadfit.glucopilot.ai.model.entity.AiModelConfigEntity;
@@ -23,10 +24,13 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -49,6 +53,10 @@ class AdminAiModelServiceTest {
 
     private AiRuntimeConfigService runtimeConfig;
 
+    private ChatModelFactory chatModelFactory;
+
+    private AIProperties aiProperties;
+
     private AdminAiModelServiceImpl service;
 
     @BeforeEach
@@ -56,8 +64,13 @@ class AdminAiModelServiceTest {
         mapper = mock(AiModelConfigMapper.class);
         runtimeConfig = mock(AiRuntimeConfigService.class);
         when(runtimeConfig.snapshot()).thenReturn(snapshot());
+        chatModelFactory = mock(ChatModelFactory.class);
+        // 默认让探针通过：绝大多数用例关心的是能力/默认池，不想每次都摆一遍连通性
+        when(chatModelFactory.test(any(), any())).thenReturn(
+                new ChatModelFactory.ConnectivityResult(true, "OK", 12, "qwen-vl-max", "蓝"));
+        aiProperties = new AIProperties();
         service = new AdminAiModelServiceImpl(mapper, new AiModelCipher(MASTER_KEY),
-                runtimeConfig, mock(ChatModelFactory.class));
+                runtimeConfig, chatModelFactory, aiProperties);
     }
 
     @Test
@@ -173,6 +186,85 @@ class AdminAiModelServiceTest {
                 org.mockito.ArgumentMatchers.eq(3L),
                 org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
                 org.mockito.ArgumentMatchers.isNull());
+    }
+
+    // ---------------------------------------------------------------- 保存前连通性校验
+
+    @Test
+    void 连通性校验失败时应拒绝保存且不落库() {
+        when(chatModelFactory.test(any(), any())).thenReturn(
+                new ChatModelFactory.ConnectivityResult(false, "AUTH", 30, null, "401 Unauthorized"));
+        when(mapper.selectCount(any())).thenReturn(0L);
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.create(request("vision,stream", false)));
+
+        assertEquals(ErrorCode.BAD_REQUEST, error.getErrorCode());
+        assertTrue(error.getMessage().contains("连通性"), error.getMessage());
+        assertTrue(error.getMessage().contains("AUTH"), "要把分类带给前端，管理员才知道改哪个字段：" + error.getMessage());
+        // 关键：没校验通过就绝不能落库，否则后台会出现一行"看起来正常、一用就 401"的配置
+        verify(mapper, never()).insert(any(AiModelConfigEntity.class));
+    }
+
+    @Test
+    void 勾选跳过校验但没填原因应直接拒绝() {
+        AdminAiModelDtos.SaveRequest request = request("vision,stream", false);
+        request.setSkipVerify(true);
+        when(mapper.selectCount(any())).thenReturn(0L);
+
+        BizException error = assertThrows(BizException.class, () -> service.create(request));
+
+        assertEquals(ErrorCode.BAD_REQUEST, error.getErrorCode());
+        assertTrue(error.getMessage().contains("原因"), error.getMessage());
+        verify(chatModelFactory, never()).test(any(), any());
+        verify(mapper, never()).insert(any(AiModelConfigEntity.class));
+    }
+
+    @Test
+    void 勾选跳过并填原因应落库且留下痕迹() {
+        AdminAiModelDtos.SaveRequest request = request("vision,stream", false);
+        request.setSkipVerify(true);
+        request.setVerifySkipReason("  厂商还没开通，先录配置  ");
+        when(mapper.selectCount(any())).thenReturn(0L);
+        stubInsert(7L);
+
+        service.create(request);
+
+        ArgumentCaptor<AiModelConfigEntity> captor = ArgumentCaptor.forClass(AiModelConfigEntity.class);
+        verify(mapper).insert(captor.capture());
+        assertEquals("厂商还没开通，先录配置", captor.getValue().getVerifySkippedReason(),
+                "原因要落库（去空白），否则事后没人知道这行为什么没测过");
+        // 既然明确跳过了，就不该再发探针——否则"跳过"等于没跳过
+        verify(chatModelFactory, never()).test(any(), any());
+    }
+
+    @Test
+    void 校验通过时不应留下跳过原因() {
+        when(mapper.selectCount(any())).thenReturn(0L);
+        stubInsert(7L);
+
+        service.create(request("vision,stream", false));
+
+        ArgumentCaptor<AiModelConfigEntity> captor = ArgumentCaptor.forClass(AiModelConfigEntity.class);
+        verify(mapper).insert(captor.capture());
+        assertNull(captor.getValue().getVerifySkippedReason());
+        verify(chatModelFactory).test(any(), any());
+    }
+
+    @Test
+    void 服务端关闭校验时不发探针但说明原因() {
+        aiProperties.getModel().setVerifyOnSave(false);
+        when(mapper.selectCount(any())).thenReturn(0L);
+        stubInsert(7L);
+
+        service.create(request("vision,stream", false));
+
+        ArgumentCaptor<AiModelConfigEntity> captor = ArgumentCaptor.forClass(AiModelConfigEntity.class);
+        verify(mapper).insert(captor.capture());
+        assertNotNull(captor.getValue().getVerifySkippedReason());
+        assertTrue(captor.getValue().getVerifySkippedReason().contains("verify-on-save"),
+                "要写明是服务端关掉的，不然会被误读成有人手工跳过");
+        verify(chatModelFactory, never()).test(any(), any());
     }
 
     // ---------------------------------------------------------------- 构造

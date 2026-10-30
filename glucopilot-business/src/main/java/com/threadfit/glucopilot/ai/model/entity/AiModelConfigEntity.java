@@ -78,6 +78,14 @@ public class AiModelConfigEntity {
 
     private String lastTestMessage;
 
+    /**
+     * 保存时跳过连通性校验的原因（V51）。null = 保存时校验过。
+     * <p>
+     * 不做成 {@code remark} 的一部分：remark 是运营填的业务备注，"系统为什么没测"是审计信息，
+     * 两者混在一起会互相覆盖。
+     */
+    private String verifySkippedReason;
+
     private String remark;
 
     private Long createdBy;

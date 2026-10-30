@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.dto.AdminAiModelDtos;
 import com.threadfit.glucopilot.ai.model.entity.AiModelConfigEntity;
@@ -55,6 +56,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
     private final AiModelCipher cipher;
     private final AiRuntimeConfigService runtimeConfig;
     private final ChatModelFactory chatModelFactory;
+    private final AIProperties aiProperties;
 
     // ------------------------------------------------------------------ 查询
 
@@ -97,6 +99,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
         applyRequest(entity, request);
         // 新增时密钥可留空（表示"沿用 yaml"），这与"修改时留空=不改"语义一致，不需要区分
         writeKey(entity, request);
+        verifyBeforeSave(entity, request);
         entity.setConfigVersion(1L);
         mapper.insert(entity);
         if (isYes(request.getIsDefault())) {
@@ -132,6 +135,18 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
             cipherAlgo = AiModelCipher.ALGO_AES_GCM;
             keyVersion = cipher.currentKeyVersion();
         }
+
+        // 探针要用"这次保存之后这一行实际生效的凭据"：传了新密钥就用新的，没传就沿用库里那份
+        // （否则会拿 yaml 的 key 去测，出现"测着成功、线上 401"——cipher-e2e 就是这么暴露的）；
+        // 显式清空密钥则按"无密钥"测，此时真正生效的是 yaml 兜底，测的也正是那条路。
+        if (cipherText != null) {
+            entity.setApiKeyCipher(cipherText);
+            entity.setCipherAlgo(cipherAlgo);
+        } else if (!Boolean.TRUE.equals(request.getClearApiKey())) {
+            entity.setApiKeyCipher(existing.getApiKeyCipher());
+            entity.setCipherAlgo(existing.getCipherAlgo());
+        }
+        verifyBeforeSave(entity, request);
 
         int updated = mapper.updateWithVersion(entity, request.getConfigVersion().longValue(),
                 cipherText, cipherAlgo, keyVersion);
@@ -219,6 +234,59 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
 
     // ------------------------------------------------------------------ 内部
 
+    /**
+     * 保存前的连通性校验。
+     * <p>
+     * 为什么把探针放在保存路径上：模型名写错、密钥属于别的账号、baseUrl 少写 {@code /v1}，
+     * 这些在后台表单里看起来都正常，只有真正发一次请求才暴露。之前的做法是"保存成功、点测试才发现"，
+     * 于是线上出现过"配置看着对、一用就 404"。
+     * <p>
+     * 三种放行方式，都会在库里留下痕迹：
+     * <ul>
+     *   <li>校验通过 → {@code verify_skipped_reason} 清空；</li>
+     *   <li>管理员勾选跳过并填原因 → 原样落库，列表里能看到"这行没测过以及为什么"；</li>
+     *   <li>服务端关闭校验（{@code ai.model.verify-on-save=false}）→ 落一句固定说明。</li>
+     * </ul>
+     * 注意：探针在事务内执行，会占住一个数据库连接（最长 {@link #TEST_TIMEOUT}）。这是有意的取舍——
+     * 保存是低频人工操作，换来的是"填错了根本存不进去"。
+     */
+    private void verifyBeforeSave(AiModelConfigEntity entity, AdminAiModelDtos.SaveRequest request) {
+        if (!aiProperties.getModel().isVerifyOnSave()) {
+            entity.setVerifySkippedReason("服务端已关闭保存前连通性校验（ai.model.verify-on-save=false）");
+            return;
+        }
+        if (Boolean.TRUE.equals(request.getSkipVerify())) {
+            String reason = blankToNull(request.getVerifySkipReason());
+            if (reason == null) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "跳过连通性校验必须填写原因（便于事后追溯这次为什么没测）");
+            }
+            entity.setVerifySkippedReason(truncate(reason, 255));
+            log.warn("跳过了保存前连通性校验 modelCode={} endpoint={} 原因={}",
+                    entity.getModelCode(), entity.getModelEndpoint(), reason);
+            return;
+        }
+        ChatModelFactory.ConnectivityResult result = chatModelFactory.test(toSpecForTest(entity), TEST_TIMEOUT);
+        if (!result.ok()) {
+            // 分类（AUTH / MODEL_NOT_FOUND / NETWORK / TIMEOUT …）原样带给前端：管理员据此知道该改哪个字段，
+            // 而不是对着一句"校验失败"重新试一遍全部参数。
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "连通性校验未通过：" + result.advice()
+                            + "（" + result.category() + "：" + truncate(result.message(), 200) + "）");
+        }
+        entity.setVerifySkippedReason(null);
+        log.info("保存前连通性校验通过 modelCode={} endpoint={} 耗时={}ms",
+                entity.getModelCode(), entity.getModelEndpoint(), result.elapsedMs());
+    }
+
+    /** 先按字符数截断，避免 MySQL 的 "Data too long" 把一次正常保存变成 500。 */
+    private static String truncate(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= max ? value : value.substring(0, max);
+    }
+
     private AiModelConfigEntity require(Long id) {
         AiModelConfigEntity entity = mapper.selectById(id);
         if (entity == null) {
@@ -294,6 +362,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
                 .lastTestAt(entity.getLastTestAt())
                 .lastTestOk(entity.getLastTestOk())
                 .lastTestMessage(entity.getLastTestMessage())
+                .verifySkippedReason(entity.getVerifySkippedReason())
                 .remark(entity.getRemark())
                 .updatedAt(entity.getGmtModified())
                 .build();

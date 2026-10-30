@@ -1,6 +1,6 @@
 # AI 模块数据表说明（逐列）
 
-> 依据：开发库 `sugar_health`（Flyway v50）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
+> 依据：开发库 `sugar_health`（Flyway v51）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
 > 与 `AI-模块实现说明.md` 配套：那份讲「类怎么协作」，这份讲「数据落在哪、每一列是什么意思」。
 
 - 实测导出方式：`information_schema.COLUMNS / STATISTICS / TABLES`（`TABLE_SCHEMA='sugar_health'`）
@@ -15,7 +15,7 @@
 
 | # | 表 | 中文说明 | 首次创建 | 后续改动 | 开发库行数 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`）、V48（`capability` 模型能力集合，取代 V45 的 `model_type`）、V50（逻辑删除 `default_chat` 占位行） | 3 |
+| 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`）、V48（`capability` 模型能力集合，取代 V45 的 `model_type`）、V50（逻辑删除 `default_chat` 占位行）、V51（`verify_skipped_reason`：保存时跳过连通性校验的原因） | 3 |
 | 2 | `ai_prompt_template` | AI 提示词模板表 | V1 | V18（管理面：`variables_json`/`change_note`/`config_version`）、V50（逻辑删除 3 条 legacy 行） | 8 |
 | 3 | `ai_scene_config` | 场景 → 模型与场景级参数 | V19 | V49（`MEAL_ANALYSIS` 的 `max_tokens` 从 `ai.meal.max-tokens` 搬入） | 4 |
 | 4 | `chat_session` | 聊天会话（含滚动摘要与窗口参数） | V1 | V11（`active_user_id` 生成列）、V21（生命周期） | 102 |
@@ -120,6 +120,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 28 | `last_test_at` | datetime(3) | YES | — | 最近一次连通性测试时间 |
 | 29 | `last_test_ok` | tinyint(1) | YES | — | 最近一次测试是否成功（NULL = 从没测过） |
 | 30 | `last_test_message` | varchar(512) | YES | — | 测试结果摘要（脱敏，不含密钥；`ChatModelFactory.classify` 的可读分类写这里） |
+| 31 | `verify_skipped_reason` | varchar(255) | YES | — | 保存时跳过了连通性校验的原因（V51）。NULL = 保存时校验过（或早于本列的历史行）；非 NULL = 那次保存没测，这里是人填的理由 |
 
 **当前开发库的 3 行**（V50 起 `default_chat` 占位模型已逻辑删除；`api_key_cipher` 全为 NULL：这个环境的密钥走 yaml/环境变量，不走库存密文）：
 

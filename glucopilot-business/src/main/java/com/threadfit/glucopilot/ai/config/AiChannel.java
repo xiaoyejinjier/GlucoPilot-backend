@@ -18,7 +18,7 @@ package com.threadfit.glucopilot.ai.config;
  * 场景决定参数**。三者正交，任何一处判断都先回答「我判的是哪一类」。
  *
  * <p><b>通道 ≠ 模型用途</b>：前者是「用哪套协议调」，后者是「这个模型能不能看图」。
- * 后台 {@code ai_model_config.model_type} 表达的是后者，不要和本枚举混用。
+ * 后台 {@code ai_model_config.capability} 表达的是后者，不要和本枚举混用。
  */
 public enum AiChannel {
 

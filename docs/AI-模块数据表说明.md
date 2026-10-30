@@ -15,7 +15,7 @@
 
 | # | 表 | 中文说明 | 首次创建 | 后续改动 | 开发库行数 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`）、V45（`model_type` 模型用途） | 4 |
+| 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`）、V48（`capability` 模型能力集合） | 4 |
 | 2 | `ai_prompt_template` | AI 提示词模板表 | V1 | V18（管理面：`variables_json`/`change_note`/`config_version`） | 11 |
 | 3 | `ai_scene_config` | 场景 → 模型与场景级参数 | V19 | — | 4 |
 | 4 | `chat_session` | 聊天会话（含滚动摘要与窗口参数） | V1 | V11（`active_user_id` 生成列）、V21（生命周期） | 102 |
@@ -94,7 +94,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 2 | `model_code` | varchar(64) | NO | — | 模型编码，业务唯一键；场景绑定/提示词绑定的都是它 |
 | 3 | `model_name` | varchar(64) | NO | — | 后台展示名称 |
 | 4 | `provider_code` | tinyint unsigned | NO | 1 | 厂商：1 自研、2 OpenAI 兼容、3 通义、4 文心、5 其他；`ChatModelFactory` 据此选构建器 |
-| 5 | `model_type` | varchar(16) | YES | — | **模型用途**（V45 新增）：`TEXT` 文本（对话/摘要/记忆抽取）、`VISION` 视觉（看图描述/识糖）。**NULL 视为 `TEXT`**（兼容 V45 之前的历史行）。与 `provider_code`（协议）正交：同一厂商可以既有文本又有视觉模型 |
+| 5 | `capability` | varchar(64) | YES | — | **模型能力集合**（V48 新增）：逗号分隔的 `text` / `vision` / `tool` / `stream`。**NULL 或空串视为只有 `text`**。判定规则：`AiModelCapability.pool()` 把「含 vision」的模型归视觉池、其余归文本池；`matches(required)` 要求模型能力是场景要求的超集。与 `provider_code`（协议）正交：同一厂商可以既有文本又有视觉模型 |
 | 6 | `api_base_url` | varchar(512) | YES | — | API Base URL；空则用 SDK 默认 |
 | 7 | `api_key_cipher` | varchar(512) | YES | — | API Key 密文（AES-256-GCM），**禁止明文**；`AiModelCipher.decryptOrNull` 解 |
 | 8 | `model_endpoint` | varchar(128) | YES | — | 真正发给厂商的模型名/部署名（如 `deepseek-chat`、`qwen3-vl-plus`） |
@@ -123,15 +123,16 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 **当前开发库的 4 行**（`api_key_cipher` 全为 NULL：这个环境的密钥走 yaml/环境变量，不走库存密文）：
 
-| model_code | provider | model_type | model_endpoint | temp | max_tokens | timeout | is_default | is_enabled |
+| model_code | provider | capability | model_endpoint | temp | max_tokens | timeout | is_default | is_enabled |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `default_chat` | 1 | TEXT | `glucopilot-chat-v1` | 0.70 | 2048 | 30000 | 0 | 0 |
-| `deepseek-v4-flash` | 1 | TEXT | `deepseek-v4-flash` | 0.70 | 2048 | 60000 | 0 | 0 |
-| `qwen3-vl-plus` | 2 | VISION | `qwen3-vl-plus` | 0.20 | 512 | 60000 | 0 | 1 |
-| `deepseek-v4-pro` | 1 | TEXT | `deepseek-v4-pro` | 0.70 | 2048 | 60000 | **1** | 1 |
+| `default_chat` | 1 | `text,tool,stream` | `glucopilot-chat-v1` | 0.70 | 2048 | 30000 | 0 | 0 |
+| `deepseek-v4-flash` | 1 | `text,tool,stream` | `deepseek-v4-flash` | 0.70 | 2048 | 60000 | 0 | 0 |
+| `qwen3-vl-plus` | 2 | `vision,stream` | `qwen3-vl-plus` | 0.20 | 512 | 60000 | 0 | 1 |
+| `deepseek-v4-pro` | 1 | `text,tool,stream` | `deepseek-v4-pro` | 0.70 | 2048 | 60000 | **1** | 1 |
 
-> 只有 `deepseek-v4-pro` 既是启用的文本行又是默认 → 它就是「文本通道默认」；`qwen3-vl-plus` 是唯一的视觉行，`resolveVision()` 因此直接选中它（V45 之前是按 `model_endpoint == ai.vision.model` 反查，端点不同就选不中；现在按 `model_type` 判定）。
-> 迁移回填规则（`V45__ai_model_type.sql`）：先按 `model_endpoint='qwen3-vl-plus'` 标 VISION（与 yaml `ai.vision.model` 的默认值一致），其余 NULL 一律 TEXT；改过视觉模型名的部署需手工修正那一行。
+> 只有 `deepseek-v4-pro` 既是启用的文本池行又是默认 → 它就是「文本通道默认」；`qwen3-vl-plus` 是唯一的视觉池行，`resolveVisionDefault()` 因此直接选中它（V48 之前是按 `model_endpoint == ai.vision.model` 反查，端点不同就选不中；更早的 V45 是按 `model_type` 二值判定）。
+> 迁移回填规则（`V48__ai_model_capability.sql`）：先按 `model_endpoint='qwen3-vl-plus'` 标 `vision,stream`（与 yaml `ai.vision.model` 的默认值一致），其余 NULL 一律 `text,tool,stream`；改过视觉模型名的部署需在后台把那一行能力改成 `vision,stream`。
+> **能力 ≠ 用途**：V45 的 `model_type` 是 TEXT/VISION 二选一，表达不了「多模态模型也能当文本模型用」和「这个模型支不支持工具调用」，所以在 V48 升级成能力集合（列名也从 `model_type` 变成 `capability`）。
 
 ---
 

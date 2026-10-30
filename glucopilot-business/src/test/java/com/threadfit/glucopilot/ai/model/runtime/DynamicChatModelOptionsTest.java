@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.model.runtime;
 
-import com.threadfit.glucopilot.ai.config.AiModelType;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -74,12 +74,12 @@ class DynamicChatModelOptionsTest {
     private static AiModelSpec yamlTextSpec() {
         return new AiModelSpec("deepseek-v4-pro", "DeepSeek 文本模型（yaml）", 1,
                 "https://api.deepseek.com", "sk-yaml", "deepseek-v4-pro",
-                0.7, null, 2048, null, Duration.ofSeconds(60), "yaml", AiModelType.TEXT);
+                0.7, null, 2048, null, Duration.ofSeconds(60), "yaml", AiModelCapability.text());
     }
 
     private static AiModelSpec dbSpec(String code, String endpoint) {
         return new AiModelSpec(code, code, 1, "https://api.deepseek.com", "sk-db", endpoint,
-                0.2, null, 1024, Boolean.FALSE, Duration.ofSeconds(30), "db", AiModelType.TEXT);
+                0.2, null, 1024, Boolean.FALSE, Duration.ofSeconds(30), "db", AiModelCapability.text());
     }
 
     /** yaml 兜底通道：快照里只有 yaml 规格，因此必然复用容器里那份模型。 */
@@ -97,7 +97,7 @@ class DynamicChatModelOptionsTest {
                                                                AiModelSpec textDefault) {
         AiModelSpec yamlVision = new AiModelSpec("qwen3-vl-plus", "视觉模型（yaml）", 2,
                 "https://dashscope.aliyuncs.com/compatible-mode/v1", "sk-vision", "qwen3-vl-plus",
-                0.2, null, 512, null, Duration.ofSeconds(60), "yaml", AiModelType.VISION);
+                0.2, null, 512, null, Duration.ofSeconds(60), "yaml", AiModelCapability.visionDefaults());
         return new AiRuntimeConfigService.Snapshot(1L, byCode, new HashMap<>(),
                 yamlText, yamlVision, textDefault, "yaml 兜底", null, "yaml 兜底", 0);
     }

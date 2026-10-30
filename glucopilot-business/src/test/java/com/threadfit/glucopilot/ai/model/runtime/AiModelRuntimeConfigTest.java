@@ -2,7 +2,7 @@ package com.threadfit.glucopilot.ai.model.runtime;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiChannelProperties;
-import com.threadfit.glucopilot.ai.config.AiModelType;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -481,7 +481,7 @@ class AiModelRuntimeConfigTest {
 
     private static AiModelConfigEntity visionRow(String modelCode, String cipherText) {
         AiModelConfigEntity entity = row(modelCode, 2, cipherText);
-        entity.setModelType(AiModelType.VISION.name());
+        entity.setCapability(AiModelCapability.visionDefaults().value());
         return entity;
     }
 
@@ -493,12 +493,12 @@ class AiModelRuntimeConfigTest {
 
     private static AiModelSpec spec(String code, String endpoint, String key, String source) {
         return new AiModelSpec(code, code, 1, "https://api.deepseek.com", key, endpoint,
-                0.7, null, 2048, null, Duration.ofSeconds(60), source, AiModelType.TEXT);
+                0.7, null, 2048, null, Duration.ofSeconds(60), source, AiModelCapability.text());
     }
 
     private static AiModelSpec visionSpec(String code, String endpoint, String key, String source) {
         return new AiModelSpec(code, code, 2, "https://dashscope.aliyuncs.com/compatible-mode/v1", key, endpoint,
-                0.2, null, 512, null, Duration.ofSeconds(60), source, AiModelType.VISION);
+                0.2, null, 512, null, Duration.ofSeconds(60), source, AiModelCapability.visionDefaults());
     }
 
     private static AiRuntimeConfigService.Snapshot snapshotOf(AiModelSpec... specs) {

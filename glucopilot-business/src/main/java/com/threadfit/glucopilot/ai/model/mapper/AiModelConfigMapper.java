@@ -28,7 +28,7 @@ public interface AiModelConfigMapper extends BaseMapper<AiModelConfigEntity> {
      * 并发保护；显式写在 SQL 里，行为一眼可见：{@code config_version} 不匹配时返回 0 行，调用方据此报冲突。
      */
     @Update("UPDATE ai_model_config SET "
-            + "model_name = #{e.modelName}, provider_code = #{e.providerCode}, model_type = #{e.modelType}, "
+            + "model_name = #{e.modelName}, provider_code = #{e.providerCode}, capability = #{e.capability}, "
             + "api_base_url = #{e.apiBaseUrl}, "
             + "model_endpoint = #{e.modelEndpoint}, temperature = #{e.temperature}, top_p = #{e.topP}, "
             + "max_tokens = #{e.maxTokens}, thinking = #{e.thinking}, timeout_ms = #{e.timeoutMs}, "
@@ -62,20 +62,20 @@ public interface AiModelConfigMapper extends BaseMapper<AiModelConfigEntity> {
     int clearApiKey(@Param("id") Long id, @Param("expectedVersion") Long expectedVersion);
 
     /**
-     * 清掉<b>同类型</b>的其它默认标记。
+     * 清掉<b>同一个默认池</b>的其它默认标记。
      * <p>
-     * 必须带类型：文本与视觉各有一个"默认"，不分类地清会把另一个通道的默认一起抹掉
+     * 必须带池：文本与视觉各有一个"默认"，不分类地清会把另一个池的默认一起抹掉
      * （批次 2 之前就是这个行为——新增视觉模型标默认会顺手清掉文本默认，对话直接失去默认模型）。
      * <p>
-     * 用 {@code <=>} 而不是 {@code =}：历史行的 {@code model_type} 可能为 NULL，
-     * {@code NULL = 'TEXT'} 恒不成立会让清理失效，而 {@code NULL <=> 'TEXT'} 为 0 也说明它不属于 TEXT——
-     * 为了兼容"NULL 视为 TEXT"的口径，调用方在写入时已把 NULL 归一到 'TEXT'，
-     * 这里同时兼容 NULL（视为文本）与显式值。
+     * 池 = 能力集合里是否含 {@code vision}（含即视觉池），与 {@code AiModelCapability#pool()} 同一口径。
+     * 用 {@code LIKE '%vision%'} 而不是等值比较：{@code capability} 是逗号分隔集合，
+     * token 只有 text/vision/tool/stream 四个小写词，不会出现"词里含 vision"的误判；
+     * NULL 行（历史数据）按文本池处理。
      */
     @Update("UPDATE ai_model_config SET is_default = 0, config_version = config_version + 1 "
             + "WHERE is_deleted = 0 AND is_default = 1 AND id <> #{id} "
-            + "AND (model_type <=> #{modelType} OR (model_type IS NULL AND #{modelType} = 'TEXT'))")
-    int clearOtherDefaults(@Param("id") Long id, @Param("modelType") String modelType);
+            + "AND (CASE WHEN capability LIKE '%vision%' THEN 'vision' ELSE 'text' END) = #{pool}")
+    int clearOtherDefaults(@Param("id") Long id, @Param("pool") String pool);
 
     /**
      * 清掉单行的默认标记。

@@ -13,7 +13,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import com.threadfit.glucopilot.ai.config.AiModelType;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.dto.AdminAiModelDtos;
 import com.threadfit.glucopilot.ai.model.entity.AiModelConfigEntity;
 import com.threadfit.glucopilot.ai.model.mapper.AiModelConfigMapper;
@@ -100,7 +100,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
         entity.setConfigVersion(1L);
         mapper.insert(entity);
         if (isYes(request.getIsDefault())) {
-            mapper.clearOtherDefaults(entity.getId(), entity.getModelType());
+            mapper.clearOtherDefaults(entity.getId(), poolOf(entity));
         }
         runtimeConfig.refreshNow();
         log.info("后台新增模型配置 modelCode={} provider={} endpoint={} 密钥来源={}",
@@ -120,9 +120,9 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
         // 模型编码是不可变引用键：被场景/代码引用后改名会让配置静默失效，因此忽略请求里的值
         entity.setModelCode(existing.getModelCode());
         applyRequest(entity, request);
-        if (!StringUtils.hasText(request.getModelType())) {
-            // 旧前端/外部脚本的 PUT 不带用途：保持原用途，别让一次与用途无关的编辑把视觉模型降级成文本
-            entity.setModelType(typeOf(existing).name());
+        if (!StringUtils.hasText(request.getCapability())) {
+            // 旧前端/外部脚本的 PUT 不带能力：保持原能力，别让一次与能力无关的编辑把视觉模型降级成文本
+            entity.setCapability(capabilityOf(existing).value());
         }
         String cipherText = null;
         String cipherAlgo = null;
@@ -149,7 +149,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
         }
         if (isYes(request.getIsDefault())) {
             mapper.markDefault(id);
-            mapper.clearOtherDefaults(id, entity.getModelType());
+            mapper.clearOtherDefaults(id, poolOf(entity));
         }
         runtimeConfig.refreshNow();
         log.info("后台修改模型配置 id={} modelCode={} endpoint={} 密钥{}",
@@ -182,7 +182,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
     public AdminAiModelDtos.ModelRow setDefault(Long id) {
         AiModelConfigEntity existing = require(id);
         mapper.markDefault(id);
-        mapper.clearOtherDefaults(id, AiModelType.of(existing.getModelType()).name());
+        mapper.clearOtherDefaults(id, poolOf(existing));
         runtimeConfig.refreshNow();
         log.info("后台把模型配置 id={} 设为默认", id);
         return toRow(require(id));
@@ -230,9 +230,9 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
     private void applyRequest(AiModelConfigEntity entity, AdminAiModelDtos.SaveRequest request) {
         entity.setModelName(request.getModelName().trim());
         entity.setProviderCode(request.getProviderCode());
-        // 用途是批次 2 新增的字段：留空按 TEXT（旧前端不传）；非法值走 400 而不是 500——
-        // DTO 上有 @Pattern 兜第一层，但 service 也可能被别的入口调用
-        entity.setModelType(requireType(request.getModelType()).name());
+        // 能力是 V46 新增的字段：留空按「只有 text」（旧前端不传）；非法值走 400 而不是 500——
+        // DTO 上只有长度约束，取值校验在这里做，才能给出"只能是 text/vision/tool/stream"的提示
+        entity.setCapability(requireCapability(request.getCapability()).value());
         entity.setApiBaseUrl(blankToNull(request.getApiBaseUrl()));
         entity.setModelEndpoint(request.getModelEndpoint().trim());
         entity.setTemperature(request.getTemperature());
@@ -275,8 +275,8 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
                 .modelName(entity.getModelName())
                 .providerCode(provider)
                 .providerText(PROVIDER_TEXT.getOrDefault(provider, "其他"))
-                .modelType(typeOf(entity).name())
-                .modelTypeText(typeOf(entity) == AiModelType.VISION ? "视觉" : "文本")
+                .capability(capabilityOf(entity).value())
+                .capabilityText(capabilityOf(entity).displayText())
                 .apiBaseUrl(entity.getApiBaseUrl())
                 .modelEndpoint(entity.getModelEndpoint())
                 .temperature(entity.getTemperature())
@@ -310,9 +310,9 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
         if (!isYes(entity.getIsEnabled())) {
             return null;
         }
-        // 按用途分流：视觉行只可能供视觉通道，文本行只可能供文本通道。
+        // 按能力分流：视觉行只可能供视觉池，其余行只可能供文本池。
         // 之前两个判断串在一起，一条视觉行若恰好被选成文本默认会同时显示两个角色。
-        if (typeOf(entity) == AiModelType.VISION) {
+        if (capabilityOf(entity).vision()) {
             AiModelSpec vision = snapshot.resolveVisionDefault();
             boolean used = snapshot.visionDefaultFromDb() && entity.getModelCode().equals(vision.modelCode());
             return used ? "vision" : null;
@@ -321,9 +321,14 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
                 ? "text-default" : null;
     }
 
-    /** DB 里的用途（null/空 → TEXT），集中一处以便与 V45 回填口径保持一致。 */
-    private static AiModelType typeOf(AiModelConfigEntity entity) {
-        return AiModelType.of(entity.getModelType());
+    /** DB 里的能力（null/空 → 只有 text），集中一处以便与 V46 回填口径保持一致。 */
+    private static AiModelCapability capabilityOf(AiModelConfigEntity entity) {
+        return AiModelCapability.parse(entity.getCapability());
+    }
+
+    /** 这一行属于哪个默认池（text / vision）——"设为默认"只清同池的旧默认。 */
+    private static String poolOf(AiModelConfigEntity entity) {
+        return capabilityOf(entity).pool();
     }
 
     /**
@@ -337,13 +342,13 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
      */
     private AiModelSpec toSpecForTest(AiModelConfigEntity entity) {
         AiRuntimeConfigService.Snapshot snapshot = runtimeConfig.snapshot();
-        AiModelType type = typeOf(entity);
+        AiModelCapability capability = capabilityOf(entity);
         String decrypted = cipher.decryptOrNull(entity.getApiKeyCipher());
         String ownKey = StringUtils.hasText(decrypted) ? decrypted : null;
         int provider = entity.getProviderCode() == null ? 1 : entity.getProviderCode();
-        // 兜底凭据按"用途"取通道：文本模型拿文本通道的 key/baseUrl，视觉模型拿视觉通道的。
+        // 兜底凭据按"能力所属通路"取通道：文本模型拿文本通道的 key/baseUrl，视觉模型拿视觉通道的。
         // 之前按 provider 猜，一条厂商填 2 的文本模型会拿到视觉通道的 key（测出来成功、线上 401）。
-        AiModelSpec fallback = type == AiModelType.VISION ? snapshot.yamlVision() : snapshot.yamlText();
+        AiModelSpec fallback = capability.vision() ? snapshot.yamlVision() : snapshot.yamlText();
         String effectiveKey = ownKey != null ? ownKey : fallback.apiKey();
         return new AiModelSpec(
                 entity.getModelCode(),
@@ -358,7 +363,7 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
                 entity.getThinking(),
                 Duration.ofMillis(entity.getTimeoutMs() == null ? 60_000L : entity.getTimeoutMs()),
                 "db",
-                type);
+                capability);
     }
 
     private static Double toDouble(BigDecimal value) {
@@ -373,10 +378,10 @@ public class AdminAiModelServiceImpl implements AdminAiModelService {
         return StringUtils.hasText(value) ? value.trim() : null;
     }
 
-    /** 用途解析：留空按 TEXT；非法值转成 400，别让它变成 500。 */
-    private static AiModelType requireType(String raw) {
+    /** 能力解析：留空按「只有 text」；非法值转成 400，别让它变成 500。 */
+    private static AiModelCapability requireCapability(String raw) {
         try {
-            return AiModelType.of(raw);
+            return AiModelCapability.parseStrict(raw);
         } catch (IllegalArgumentException e) {
             throw new BizException(ErrorCode.BAD_REQUEST, e.getMessage());
         }

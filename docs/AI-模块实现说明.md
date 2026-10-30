@@ -673,7 +673,7 @@ Snapshot load() {
 }
 ```
 
-- **`model_type` 决定候选池**（V45）：`TEXT` 行只参与文本默认判定、`VISION` 行只参与视觉默认判定，互不抢占；历史行 `NULL` 视为 `TEXT`。默认标记也是按用途各一个（`clearOtherDefaults` 带 `model_type` 条件）。
+- **`capability` 决定候选池**（V48，替代 V45 的 `model_type`）：含 `vision` 的模型只参与视觉默认判定、其余只参与文本默认判定，互不抢占；历史行 `NULL` 视为 `text`。默认标记也是按池各一个（`clearOtherDefaults` 带池条件）。路由链上的「这个模型能不能干这件事」用 `AiModelCapability.matches(required)` 判定（模型能力必须是场景要求的超集）。
 - **版本号 = 内容指纹**，不是时间戳：`setVersion(hash)`。TTL 到期重载但配置没变 → 版本不变 → 上层不重建 model。
 - **`catch (RuntimeException)` 保留旧快照**：DB 挂了就用上一份；首次就失败则退化成「纯 yaml」。
 - **`textSpec(scene)` 的回落逻辑**：yaml 里写的 `model-code` 必须能在 `byCode` 里查到才用，查不到 WARN 后回落到默认模型。注释点明原因：**不能回「改了模型名的 yaml 规格」**，否则会用 A 的 API key 去调 B。

@@ -101,7 +101,7 @@ public interface AiRuntimeConfigService {
         }
 
         /**
-         * 视觉通道解析：后台 {@code model_type='VISION'} 的默认行 → 唯一/最近启用的视觉行 → yaml。
+         * 视觉通道解析：后台能力含 {@code vision} 的默认行 → 唯一/最近启用的视觉行 → yaml。
          * <p>
          * 批次 2 之前这里按 {@code model_endpoint} 反查，等于"只有和 yaml 同名的那一个视觉模型能被后台接管"；
          * 现在按<b>用途</b>判定，后台新增的任意视觉模型都能成为视觉默认（这才是"自由配置视觉模型"）。

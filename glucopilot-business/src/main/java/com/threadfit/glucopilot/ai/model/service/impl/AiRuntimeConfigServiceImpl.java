@@ -3,7 +3,7 @@ package com.threadfit.glucopilot.ai.model.service.impl;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiChannel;
 import com.threadfit.glucopilot.ai.config.AiChannelProperties;
-import com.threadfit.glucopilot.ai.config.AiModelType;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -200,8 +200,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
                 }
                 byCode.put(spec.modelCode(), spec);
                 byName.put(spec.modelEndpoint(), spec);
-                candidates.add(new Candidate(spec, isYes(row.getIsDefault()), row.getGmtModified(), row.getId(),
-                        spec.type()));
+                candidates.add(new Candidate(spec, isYes(row.getIsDefault()), row.getGmtModified(), row.getId()));
             }
             // yaml 侧也进索引，但优先级低于 DB：同名时以 DB 为准（这正是"后台能覆盖 yaml"的落点）
             byCode.putIfAbsent(yamlText.modelCode(), yamlText);
@@ -212,9 +211,9 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
             byCode.putIfAbsent(yamlVision.modelCode(), yamlVision);
             byName.putIfAbsent(yamlVision.modelEndpoint(), yamlVision);
 
-            // 文本与视觉各判一次默认：两者按 model_type 分池，互不干扰
-            DefaultPick textPick = pickDefault(candidates, yamlText, AiModelType.TEXT);
-            DefaultPick visionPick = pickDefault(candidates, yamlVision, AiModelType.VISION);
+            // 文本与视觉各判一次默认：两者按能力池（capability 是否含 vision）分池，互不干扰
+            DefaultPick textPick = pickDefault(candidates, yamlText, AiModelCapability.TEXT);
+            DefaultPick visionPick = pickDefault(candidates, yamlVision, AiModelCapability.VISION);
 
             // 版本号按"内容"而不是时间：TTL 到期但配置没变时不换版本，模型缓存因此不会被无谓清空
             // （否则每 60 秒重建一次 HTTP 客户端，白白抖动连接池）
@@ -286,18 +285,20 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
      *   <li><b>yaml 兜底</b>：DB 里一个可用的同类型候选都没有时，才用 yaml/环境变量那套。</li>
      * </ol>
      *
-     * <p>候选按 {@link AiModelSpec#type()} 过滤：类型来自 V45 的 {@code model_type}。
+     * <p>候选按 {@link AiModelCapability#pool()} 过滤：含 {@code vision} 进视觉池，其余进文本池。
      * 之前用「endpoint 是否等于 yaml 视觉模型」猜视觉，漏掉后台新增的视觉模型，
      * 让它在文本通道里抢默认位（对话直接 404）。
      */
-    private DefaultPick pickDefault(List<Candidate> candidates, AiModelSpec fallback, AiModelType type) {
-        List<Candidate> sameType = candidates.stream().filter(c -> c.type() == type).toList();
+    private DefaultPick pickDefault(List<Candidate> candidates, AiModelSpec fallback, String pool) {
+        List<Candidate> sameType = candidates.stream()
+                .filter(c -> pool.equals(c.spec().capability().pool()))
+                .toList();
         for (Candidate candidate : sameType) {
             if (candidate.isDefault()) {
                 return new DefaultPick(candidate.spec(), DEFAULT_FLAG);
             }
         }
-        boolean vision = type == AiModelType.VISION;
+        boolean vision = AiModelCapability.VISION.equals(pool);
         if (sameType.size() == 1) {
             return new DefaultPick(sameType.get(0).spec(), vision ? VISION_ONLY_ENABLED : DEFAULT_ONLY_ENABLED);
         }
@@ -316,8 +317,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
     }
 
     /** 一条启用配置的候选信息：默认判定需要它，但不需要把整行带进快照。 */
-    private record Candidate(AiModelSpec spec, boolean isDefault, LocalDateTime modifiedAt, Long id,
-                             AiModelType type) {
+    private record Candidate(AiModelSpec spec, boolean isDefault, LocalDateTime modifiedAt, Long id) {
     }
 
     /** 默认值判定结果：规格 + 判据（判据必须能一路走到日志和后台列表）。 */
@@ -344,7 +344,8 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
 
     /** DB 行 → 规格；密钥解不开返回 null（由调用方计为"跳过"）。 */
     private AiModelSpec toSpec(AiModelConfigEntity row) {
-        AiModelType type = AiModelType.of(row.getModelType());
+        AiModelCapability capability = AiModelCapability.parse(row.getCapability());
+        AiChannel channel = channelOf(capability);
         String apiKey = "";
         if (StringUtils.hasText(row.getApiKeyCipher())) {
             String decrypted = cipher.decryptOrNull(row.getApiKeyCipher());
@@ -356,13 +357,13 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
             apiKey = decrypted;
         } else {
             // 留空 = 沿用 yaml/环境变量里的密钥：让"只改模型名"不必重新录一遍密钥
-            apiKey = yamlKeyFor(type);
+            apiKey = yamlKeyFor(channel);
         }
         return new AiModelSpec(
                 row.getModelCode(),
                 row.getModelName(),
                 row.getProviderCode() == null ? 1 : row.getProviderCode(),
-                StringUtils.hasText(row.getApiBaseUrl()) ? row.getApiBaseUrl() : defaultBaseUrl(type),
+                StringUtils.hasText(row.getApiBaseUrl()) ? row.getApiBaseUrl() : defaultBaseUrl(channel),
                 apiKey,
                 row.getModelEndpoint(),
                 toDouble(row.getTemperature()),
@@ -371,7 +372,7 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
                 row.getThinking(),
                 Duration.ofMillis(row.getTimeoutMs() == null ? 60_000L : row.getTimeoutMs()),
                 "db",
-                type);
+                capability);
     }
 
     /**
@@ -396,27 +397,27 @@ public class AiRuntimeConfigServiceImpl implements AiRuntimeConfigService {
                 null,
                 config.timeout(),
                 "yaml",
-                text ? AiModelType.TEXT : AiModelType.VISION);
+                text ? AiModelCapability.parse("text,tool,stream") : AiModelCapability.visionDefaults());
     }
 
     /**
-     * 未自带密钥时，按<b>用途</b>取 yaml 里对应通道的密钥。
+     * 未自带密钥时，按<b>能力所属的通道路由</b>取 yaml 里对应通道的密钥。
      * <p>
      * 批次 2 之前这里用 {@code provider_code} 推断通道，于是"厂商填 2（OpenAI 兼容）的文本模型"
      * 会拿到视觉通道的 key/base-url——串道了还查不出来（调用直接 401/404）。
-     * 类型是显式字段，按它取凭据才是确定性的。
+     * 能力是显式字段，按它取凭据才是确定性的。
      */
-    private String yamlKeyFor(AiModelType type) {
-        return channels.channel(channelOf(type)).getApiKey();
+    private String yamlKeyFor(AiChannel channel) {
+        return channels.channel(channel).getApiKey();
     }
 
-    private String defaultBaseUrl(AiModelType type) {
-        return channels.channel(channelOf(type)).getBaseUrl();
+    private String defaultBaseUrl(AiChannel channel) {
+        return channels.channel(channel).getBaseUrl();
     }
 
-    /** 用途 → 通道：文本模型用文本通道凭据，视觉模型用视觉通道凭据。 */
-    private static AiChannel channelOf(AiModelType type) {
-        return type == AiModelType.VISION ? AiChannel.VISION : AiChannel.TEXT;
+    /** 能力 → 通道路由：含 vision 用视觉通道凭据，其余用文本通道凭据。 */
+    private static AiChannel channelOf(AiModelCapability capability) {
+        return capability.vision() ? AiChannel.VISION : AiChannel.TEXT;
     }
 
     private static Double toDouble(BigDecimal value) {

@@ -43,11 +43,11 @@ public final class AdminAiModelDtos {
         /** 厂商展示文案，前端直接用，避免前端再维护一份映射。 */
         private String providerText;
 
-        /** 用途：{@code TEXT} / {@code VISION}。 */
-        private String modelType;
+        /** 能力集合，逗号分隔：{@code text} / {@code vision} / {@code tool} / {@code stream}。 */
+        private String capability;
 
-        /** 用途展示文案（文本 / 视觉），前端直接显示。 */
-        private String modelTypeText;
+        /** 能力展示文案（「文本 / 流式」），前端直接显示。 */
+        private String capabilityText;
 
         private String apiBaseUrl;
 
@@ -132,13 +132,16 @@ public final class AdminAiModelDtos {
         private Integer providerCode;
 
         /**
-         * 用途：{@code TEXT}（文本）或 {@code VISION}（视觉，多模态）。
+         * 能力集合：逗号分隔的 {@code text} / {@code vision} / {@code tool} / {@code stream}。
          * <p>
-         * 留空按 {@code TEXT} 处理，兼容尚未升级的前端；它决定这条配置参与哪个通道的"默认"判定，
+         * 留空按「只有 text」处理，兼容尚未升级的前端；它决定这条配置参与哪个默认池的判定，
          * 以及未自带密钥时沿用哪一套 yaml 凭据。
+         * <p>
+         * 这里只用长度约束，取值校验放在 service 里（{@code AiModelCapability.parseStrict}）：
+         * 需要给出"只能是 text/vision/tool/stream"这种带合法取值的提示，注解的 message 拼不出可变集合。
          */
-        @Pattern(regexp = "TEXT|VISION", message = "用途只能是 TEXT 或 VISION")
-        private String modelType;
+        @Size(max = 64, message = "能力取值过长")
+        private String capability;
 
         @Size(max = 512, message = "baseUrl 过长")
         private String apiBaseUrl;

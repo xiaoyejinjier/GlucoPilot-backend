@@ -341,14 +341,19 @@ classDiagram
         +modelCode
         +modelEndpoint
         +providerCode
-        +type AiModelType
+        +capability AiModelCapability
         +source
         +buildFingerprint()
+        +supports(required)
     }
-    class AiModelType {
-        <<enumeration>>
-        TEXT
-        VISION
+    class AiModelCapability {
+        +text()
+        +visionDefaults()
+        +parse(raw)
+        +parseStrict(raw)
+        +pool()
+        +matches(required)
+        +value()
     }
     class AiChannel {
         <<enumeration>>
@@ -367,7 +372,7 @@ classDiagram
     AiRuntimeConfigService <|.. AiRuntimeConfigServiceImpl
     AiRuntimeConfigServiceImpl --> Snapshot : AtomicReference
     Snapshot o-- AiModelSpec
-    AiModelSpec --> AiModelType
+    AiModelSpec --> AiModelCapability
     AiRuntimeConfigServiceImpl --> AiModelConfigMapper
     AiRuntimeConfigServiceImpl --> AiModelCipher
     AiRuntimeConfigServiceImpl --> AiChannelProperties

@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.model.runtime;
 
-import com.threadfit.glucopilot.ai.config.AiModelType;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 
 import java.time.Duration;
 
@@ -11,11 +11,11 @@ import java.time.Duration;
  * 需要一个与来源无关的输入。把它定成不可变 record，是为了让"一次请求内看到的配置是同一份"这件事
  * 由类型保证——不能出现流到一半换了模型或换了密钥。
  *
- * @param modelCode     引用键（等于 {@code ai_model_config.model_code}）
- * @param providerCode  厂商：1 自研(DeepSeek) / 2,3,4 OpenAI 兼容 / 5 其他
- * @param apiKey        解密后的密钥；为空串表示"沿用 yaml/环境变量里的密钥"
- * @param type          用途：文本 / 视觉。决定"能不能被文本通道选为默认、被视觉场景绑定"
- * @param source        来源标签，"db" 或 "yaml"，用于日志与后台展示
+ * @param modelCode   引用键（等于 {@code ai_model_config.model_code}）
+ * @param providerCode 厂商：1 自研(DeepSeek) / 2,3,4 OpenAI 兼容 / 5 其他
+ * @param apiKey      解密后的密钥；为空串表示"沿用 yaml/环境变量里的密钥"
+ * @param capability  能力集合（文本 / 视觉 / 工具 / 流式），决定能不能被某类场景选中与绑定
+ * @param source      来源标签，"db" 或 "yaml"，用于日志与后台展示
  */
 public record AiModelSpec(
         String modelCode,
@@ -30,12 +30,12 @@ public record AiModelSpec(
         Boolean thinking,
         Duration timeout,
         String source,
-        AiModelType type) {
+        AiModelCapability capability) {
 
-    /** 兼容老调用点的默认值：没有声明用途的一律按文本处理（与 V45 回填口径一致）。 */
+    /** 兼容老调用点的默认值：没有声明能力的一律按文本处理（与 V45/V46 回填口径一致）。 */
     public AiModelSpec {
-        if (type == null) {
-            type = AiModelType.TEXT;
+        if (capability == null) {
+            capability = AiModelCapability.text();
         }
     }
 
@@ -44,9 +44,14 @@ public record AiModelSpec(
         return providerCode == 1;
     }
 
-    /** 是否为视觉（多模态）模型。 */
+    /** 是否为视觉（多模态）模型——决定它落在哪个默认池。 */
     public boolean vision() {
-        return type.isVision();
+        return capability.vision();
+    }
+
+    /** 能力集合是否满足某个场景的要求。 */
+    public boolean supports(AiModelCapability required) {
+        return capability.matches(required);
     }
 
     /** 密钥是否由本配置自带（而不是沿用 yaml/环境变量）。 */
@@ -58,11 +63,11 @@ public record AiModelSpec(
      * 构建指纹：只包含"会影响 client 构造"的字段（不含 modelCode/displayName/source）。
      * 用于判断"配置变了吗、缓存的 ChatModel 还能不能用"，同时**避免把密钥明文写进日志或 map key**。
      * <p>
-     * 用途（type）也进指纹：它决定这份规格走哪条兜底凭据（见 AdminAiModelServiceImpl），
-     * 类型变了就该重建实例，不能继续复用同一个缓存条目。
+     * 能力集合也进指纹：它决定这份规格走哪条兜底凭据（见 AdminAiModelServiceImpl），
+     * 能力变了就该重建实例，不能继续复用同一个缓存条目。
      */
     public String buildFingerprint() {
-        return type + "|" + providerCode + "|" + nz(baseUrl) + "|" + nz(modelEndpoint) + "|"
+        return capability.value() + "|" + providerCode + "|" + nz(baseUrl) + "|" + nz(modelEndpoint) + "|"
                 + temperature + "|" + topP + "|" + maxTokens + "|" + thinking + "|"
                 + (timeout == null ? "" : timeout.toMillis()) + "|" + (apiKey == null ? "" : apiKey.hashCode());
     }

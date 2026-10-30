@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.scene.service;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
-import com.threadfit.glucopilot.ai.config.AiModelType;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.model.entity.AiModelConfigEntity;
 import com.threadfit.glucopilot.ai.model.mapper.AiModelConfigMapper;
@@ -96,7 +96,7 @@ class AdminAiSceneServiceTest {
 
     private static AiModelSpec spec(String code, String source) {
         return new AiModelSpec(code, code, 1, null, null, "deepseek-chat",
-                null, null, null, null, null, source, AiModelType.TEXT);
+                null, null, null, null, null, source, AiModelCapability.text());
     }
 
     @Test

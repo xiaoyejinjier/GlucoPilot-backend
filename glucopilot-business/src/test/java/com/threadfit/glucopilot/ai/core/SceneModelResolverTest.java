@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.core;
 
 import com.threadfit.glucopilot.ai.config.AIProperties;
-import com.threadfit.glucopilot.ai.config.AiModelType;
+import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
@@ -58,12 +58,12 @@ class SceneModelResolverTest {
     }
 
     private static AiModelSpec spec(String code, String endpoint) {
-        return spec(code, endpoint, AiModelType.TEXT);
+        return spec(code, endpoint, AiModelCapability.text());
     }
 
-    private static AiModelSpec spec(String code, String endpoint, AiModelType type) {
-        return new AiModelSpec(code, code, type == AiModelType.VISION ? 2 : 1, null, null, endpoint,
-                null, null, null, null, null, "db", type);
+    private static AiModelSpec spec(String code, String endpoint, AiModelCapability capability) {
+        return new AiModelSpec(code, code, capability.vision() ? 2 : 1, null, null, endpoint,
+                null, null, null, null, null, "db", capability);
     }
 
     private static AiSceneBindingService.SceneBinding binding(String modelCode, Double temperature,
@@ -176,7 +176,7 @@ class SceneModelResolverTest {
     @Test
     void 视觉场景绑定了视觉模型时应采纳绑定() {
         when(sceneBindings.binding(SceneCode.CHAT_IMAGE)).thenReturn(binding("qwen-vl-max", null, null, null));
-        when(runtimeConfig.specByModelCode("qwen-vl-max")).thenReturn(spec("qwen-vl-max", "qwen-vl-max-endpoint", AiModelType.VISION));
+        when(runtimeConfig.specByModelCode("qwen-vl-max")).thenReturn(spec("qwen-vl-max", "qwen-vl-max-endpoint", AiModelCapability.visionDefaults()));
         when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "db"));
 
         assertEquals("qwen-vl-max", resolver.modelCode(SceneCode.CHAT_IMAGE));
@@ -191,7 +191,7 @@ class SceneModelResolverTest {
         // 视觉场景绑一个文本模型是最容易犯的配置错：把 DeepSeek 塞进多模态请求只会 400，
         // 且错误信息与"绑定没生效"长得一样，所以这里必须显式回落而不是硬发
         when(sceneBindings.binding(SceneCode.CHAT_IMAGE)).thenReturn(binding("flash", null, null, null));
-        when(runtimeConfig.specByModelCode("flash")).thenReturn(spec("flash", "flash-endpoint", AiModelType.TEXT));
+        when(runtimeConfig.specByModelCode("flash")).thenReturn(spec("flash", "flash-endpoint", AiModelCapability.text()));
         when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "db"));
 
         assertEquals("qwen-vl", resolver.modelCode(SceneCode.CHAT_IMAGE));

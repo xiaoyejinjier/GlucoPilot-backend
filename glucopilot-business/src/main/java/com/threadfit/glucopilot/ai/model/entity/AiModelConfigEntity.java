@@ -32,12 +32,13 @@ public class AiModelConfigEntity {
     private Integer providerCode;
 
     /**
-     * 用途：{@code TEXT}（文本）/ {@code VISION}（视觉，多模态）。
+     * 能力集合：逗号分隔，取值 {@code text} / {@code vision} / {@code tool} / {@code stream}。
      * <p>
-     * 由 V45 引入。为 null 时按 TEXT 处理（历史行与旧前端都写不出这个字段）。
-     * 它与 {@link #providerCode} 正交：厂商决定"用什么协议连"，用途决定"能干什么、归哪个通道判默认"。
+     * 由 V46 引入（V45 的 {@code model_type} 二值字段升级而来，列名同时改掉）。
+     * 为 null 或空串时按"只有 text"处理（历史行与旧前端都写不出这个字段）。
+     * 它与 {@link #providerCode} 正交：厂商决定"用什么协议连"，能力决定"能干什么、归哪个默认池"。
      */
-    private String modelType;
+    private String capability;
 
     private String apiBaseUrl;
 

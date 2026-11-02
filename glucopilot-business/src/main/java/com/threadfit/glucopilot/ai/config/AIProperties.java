@@ -46,6 +46,34 @@ public class AIProperties {
 
     private ModelProperties model = new ModelProperties();
 
+    private RoutingProperties routing = new RoutingProperties();
+
+    /**
+     * 协议路由（<b>迁移期临时配置</b>，协议统一完成后连同 {@code ai.routing.*} 一起删除）。
+     * <p>
+     * 背景：DeepSeek 官方 API 本身就是 OpenAI 兼容的，我们却一直用 Spring AI 的 DeepSeek 专用实现，
+     * 导致同一件事有两套类、两套 options。把文本也切到 OpenAI 兼容协议后，
+     * {@code timeout / maxRetries / proxy} 才能作为正式参数下发（DeepSeek 协议的 options 里根本没有这三个）。
+     * <p>
+     * 保留这个开关的唯一目的是<b>回滚</b>：出问题时改环境变量 {@code AI_ROUTING_MODE=deepseek}
+     * 重启即可回到改造前的链路，不必重新发版。
+     */
+    @Data
+    public static class RoutingProperties {
+
+        /**
+         * 文本通道的协议：{@code deepseek}（Spring AI 专用实现，迁移期默认）或 {@code openai}。
+         * <p>
+         * 视觉通道不受此开关影响——它只有 OpenAI 兼容协议一条路。
+         */
+        private String mode = "deepseek";
+
+        /** 是否仍走 DeepSeek 专用实现。除 {@code openai} 以外的取值（含空）都算"是"。 */
+        public boolean legacyDeepSeek() {
+            return !"openai".equalsIgnoreCase(mode == null ? "" : mode.trim());
+        }
+    }
+
     /**
      * 模型配置的写入门槛。
      * <p>

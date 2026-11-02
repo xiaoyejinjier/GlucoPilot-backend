@@ -92,9 +92,15 @@ public class AiChatClientRegistry {
         return sceneModelResolver.hasOverrides(scene);
     }
 
-    /** 请求级参数。仅文本场景可用；视觉场景的 options 类型不同，调用会抛异常。 */
+    /** 请求级参数。类型由该场景实际会用的协议决定（见 {@link SceneModelResolver#optionsFor}）。 */
+    public ChatOptions.Builder<?> optionsFor(SceneCode scene) {
+        return sceneModelResolver.optionsFor(scene);
+    }
+
+    /** @deprecated 用 {@link #optionsFor(SceneCode)}；保留只为兼容，协议统一后删除。 */
+    @Deprecated
     public ChatOptions.Builder<?> optionsBuilder(SceneCode scene) {
-        return sceneModelResolver.optionsBuilder(scene);
+        return sceneModelResolver.optionsFor(scene);
     }
 
     /**

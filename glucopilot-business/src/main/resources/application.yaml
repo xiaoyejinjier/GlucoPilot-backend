@@ -145,6 +145,14 @@ management:
 # 不写就继承上面的 spring.ai.deepseek.chat.* ，避免同一份参数维护两处。
 # ---------------------------------------------------------------------------
 ai:
+  # 协议路由（**迁移期临时开关**，协议统一完成后删除本段）。
+  # DeepSeek 官方 API 本身就是 OpenAI 兼容的，我们却一直用 Spring AI 的 DeepSeek 专用实现，
+  # 于是 timeout / maxRetries / proxy 这三个参数根本没地方传（DeepSeekChatOptions 里没有它们）。
+  # 切到 openai 之后走 OpenAiChatModel，三个参数才成为真实配置项。
+  # 保留开关只为回滚：出问题设 AI_ROUTING_MODE=deepseek 重启即可回到旧链路，不必重新发版。
+  routing:
+    mode: ${AI_ROUTING_MODE:deepseek}
+
   # 会话生命周期（接口 5.3 列表 / 5.4 删除 / 2.23 新建）
   chat:
     # 惰性归档阈值（天）：拉列表时把"进行中但太久没消息"的会话置为 0 归档，0 = 关闭。

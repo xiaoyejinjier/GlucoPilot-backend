@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.ai.config.AiVisionClientConfig;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
+import com.threadfit.glucopilot.ai.model.runtime.AiProtocolResolver;
 import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
@@ -107,6 +108,7 @@ class MealVisionLiveTest {
                 mock(ToolCallingManager.class),
                 (ObjectProvider<ObservationRegistry>) mock(ObjectProvider.class),
                 (ObjectProvider<RetryTemplate>) mock(ObjectProvider.class),
-                (ObjectProvider<MeterRegistry>) mock(ObjectProvider.class));
+                (ObjectProvider<MeterRegistry>) mock(ObjectProvider.class),
+                new AiProtocolResolver(new AIProperties()));
     }
 }

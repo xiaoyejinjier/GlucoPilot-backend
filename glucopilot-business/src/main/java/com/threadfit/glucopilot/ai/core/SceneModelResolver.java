@@ -4,6 +4,8 @@ import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AIProperties.SceneProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
+import com.threadfit.glucopilot.ai.model.runtime.AiProtocol;
+import com.threadfit.glucopilot.ai.model.runtime.AiProtocolResolver;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 import jakarta.annotation.PostConstruct;
@@ -16,6 +18,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
 import com.threadfit.glucopilot.ai.model.runtime.DynamicChatModel;
+
+import java.util.Map;
 
 /**
  * 场景 → 模型编码 / 请求级参数的解析器。
@@ -66,14 +70,23 @@ public class SceneModelResolver {
     /** 只用于启动时检查老配置里是否还残留着 {@code ai.scenes.<key>.model-code}。 */
     private final Environment environment;
 
+    /**
+     * 协议判据。模型（{@code ChatModelFactory}）与请求级参数（本类）必须用<b>同一个</b>判据，
+     * 否则会出现「OpenAI 客户端 + DeepSeek options」——{@code OpenAiChatModel} 里是
+     * {@code checkcast OpenAiChatOptions}，请求期直接 {@code ClassCastException}。
+     */
+    private final AiProtocolResolver protocolResolver;
+
     public SceneModelResolver(AIProperties aiProperties,
                               AiRuntimeConfigService runtimeConfig,
                               AiSceneBindingService sceneBindings,
-                              Environment environment) {
+                              Environment environment,
+                              AiProtocolResolver protocolResolver) {
         this.aiProperties = aiProperties;
         this.runtimeConfig = runtimeConfig;
         this.sceneBindings = sceneBindings;
         this.environment = environment;
+        this.protocolResolver = protocolResolver;
     }
 
     /**
@@ -136,32 +149,34 @@ public class SceneModelResolver {
      * 后台禁用/删掉一个模型后若还按它落库，就会出现"记录里写 A、实际调 B"的老问题（2026-10-13 的反馈）。
      */
     public String modelCode(SceneCode scene) {
+        return resolveModelSpec(scene).modelCode();
+    }
+
+    /**
+     * 场景实际使用的模型规格（不只是编码）。
+     * <p>
+     * 这是「模型」这条链上<b>唯一</b>的解析入口：{@link #modelCode}（落库/回显）、
+     * {@link #optionsFor}（决定 options 类型）、{@link #hasOverrides} 都从它出发，
+     * 保证「记录里写的模型」「真正发出去的模型」「参数按哪个协议拼」三件事同源。
+     * <p>
+     * 采用条件与之前一致：后台绑定<b>必须仍可解析、且能力满足场景要求</b>才采纳；
+     * 否则回落通道默认（文本 → {@code textSpec(scene)}，视觉 → {@code visionSpec()}）并 WARN。
+     */
+    public AiModelSpec resolveModelSpec(SceneCode scene) {
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
-        if (scene.isRequiresVision()) {
-            // 视觉场景也认后台绑定（批次 2 之前这里是硬编码 visionSpec()，绑定"存了不用"）：
-            // 只有解析到「具备视觉能力」的规格才采纳，否则宁可回落通道视觉模型——
-            // 把一个纯文本模型塞进视觉请求，结果一定是 400/404，而且错误信息与"绑定没生效"长得一样。
-            if (binding.hasModel()) {
-                AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
-                if (bound != null && bound.vision()) {
-                    return bound.modelCode();
-                }
-                log.warn("视觉场景 {} 绑定的模型编码 {} 不可用（未登记、已停用，或能力不含 vision），"
-                                + "回落通道视觉模型",
-                        scene.getCode(), binding.modelCode());
-            }
-            return runtimeConfig.visionSpec().modelCode();
-        }
         if (binding.hasModel()) {
             AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
-            if (bound != null && bound.capability().contains(AiModelCapability.TEXT)) {
-                return bound.modelCode();
+            boolean usable = bound != null && (scene.isRequiresVision()
+                    ? bound.vision()
+                    : bound.capability().contains(AiModelCapability.TEXT));
+            if (usable) {
+                return bound;
             }
-            log.warn("场景 {} 在后台绑定的模型编码 {} 不可用（不存在、已停用，或能力不含 text），"
-                            + "回落通道默认模型",
+            log.warn("场景 {} 后台绑定的模型编码 {} 不可用（未登记、已停用，或能力不匹配），"
+                            + "本次回落通道默认模型",
                     scene.getCode(), binding.modelCode());
         }
-        return runtimeConfig.textSpec(scene).modelCode();
+        return scene.isRequiresVision() ? runtimeConfig.visionSpec() : runtimeConfig.textSpec(scene);
     }
 
     /**
@@ -208,10 +223,36 @@ public class SceneModelResolver {
      * 是类型层面的错误。视觉参数请用 {@link #visionOptionsBuilder(SceneCode)}。
      */
     public ChatOptions.Builder<?> optionsBuilder(SceneCode scene) {
+        return optionsFor(scene);
+    }
+
+    /**
+     * 场景的请求级参数，<b>类型由该场景实际会用的协议决定</b>。
+     * <p>
+     * 这是「参数」这条链上唯一的对外入口：先用 {@link #resolveModelSpec(SceneCode)} 拿到模型，
+     * 再问 {@link AiProtocolResolver} 该用哪种协议，最后按协议造 options。
+     * 三件事同源，就不可能出现「模型用 A、参数按 B 的协议发」。
+     * <p>
+     * 取值优先级仍是：后台绑定（{@code ai_scene_config} 非空字段）&gt; yaml {@code ai.scenes.<scene>.*}；
+     * 绑定里的 {@code model_code} 写进 options 时用的是 {@code model_endpoint}（编码是业务起的名字）。
+     *
+     * @return 请求级参数；视觉场景没有任何可写参数时返回 {@code null}（继承模型自身参数）
+     */
+    public ChatOptions.Builder<?> optionsFor(SceneCode scene) {
+        AiModelSpec spec = resolveModelSpec(scene);
+        // 视觉场景无条件走 OpenAI 兼容协议：即使解析出问题（比如视觉通道被配成文本规格），
+        // 也不能把 DeepSeek options 交给 OpenAI 客户端——那会在发送前抛 ClassCastException。
+        boolean openAi = scene.isRequiresVision()
+                || protocolResolver.protocolFor(spec) == AiProtocol.OPENAI_COMPAT;
+        return openAi ? openAiOptions(scene) : deepSeekOptions(scene);
+    }
+
+    /** DeepSeek 专用协议的请求级参数（迁移期用，协议统一后删除）。 */
+    private ChatOptions.Builder<?> deepSeekOptions(SceneCode scene) {
         if (scene.isRequiresVision()) {
-            throw new IllegalArgumentException("场景 " + scene.getCode()
-                    + " 是视觉场景，参数请走 visionOptionsBuilder(...)（OpenAI 协议），"
-                    + "不能通过请求级 DeepSeek options 传入");
+            // 视觉规格永远走 OpenAI 兼容协议（见 AiProtocolResolver），走到这里说明判据被改坏了
+            throw new IllegalStateException("视觉场景 " + scene.getCode()
+                    + " 不能使用 DeepSeek options（OpenAiChatModel 会 checkcast 失败）");
         }
         SceneProperties config = aiProperties.scene(scene);
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
@@ -248,6 +289,46 @@ public class SceneModelResolver {
     }
 
     /**
+     * OpenAI 兼容协议的请求级参数。
+     * <p>
+     * 与 DeepSeek 分支的差别只有一个：thinking 在 OpenAI 规范里没有对应字段，
+     * 只能作为私有扩展塞进请求体（{@code extraBody}）。视觉场景<b>不写</b>它——
+     * 百炼的视觉模型不认这个字段，硬发只会 400。
+     */
+    private ChatOptions.Builder<?> openAiOptions(SceneCode scene) {
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        SceneProperties config = aiProperties.scene(scene);
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
+
+        String boundEndpoint = boundEndpointFor(scene, binding);
+        if (boundEndpoint != null) {
+            // 没有这条，视觉场景的绑定只对参数有效、对模型永远无效
+            builder.model(boundEndpoint);
+        }
+        Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
+        Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : config.getMaxTokens();
+        if (temperature != null) {
+            builder.temperature(temperature);
+        }
+        if (maxTokens != null) {
+            builder.maxCompletionTokens(maxTokens);
+        }
+        boolean thinkingApplied = false;
+        if (!scene.isRequiresVision()) {
+            Boolean thinking = binding.thinking() != null ? binding.thinking() : config.getThinking();
+            if (thinking != null) {
+                builder.extraBody(Map.of("thinking", Map.of("type", thinking ? "enabled" : "disabled")));
+                thinkingApplied = true;
+            }
+        }
+        if (boundEndpoint == null && temperature == null && maxTokens == null && !thinkingApplied) {
+            // 三个字段都给不出时：继承模型自身的参数，不额外发请求级 options
+            return null;
+        }
+        return builder;
+    }
+
+    /**
      * 视觉场景的请求级参数（OpenAI 兼容协议）。
      * <p>
      * <b>只写三个字段：model / max-completion-tokens / temperature。</b>
@@ -260,43 +341,29 @@ public class SceneModelResolver {
     public ChatOptions.Builder<?> visionOptionsBuilder(SceneCode scene) {
         if (!scene.isRequiresVision()) {
             throw new IllegalArgumentException("场景 " + scene.getCode()
-                    + " 不是视觉场景，参数请走 optionsBuilder(...)（DeepSeek 协议）");
+                    + " 不是视觉场景，参数请走 optionsFor(...)");
         }
-        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
-        SceneProperties config = aiProperties.scene(scene);
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
-        // 后台绑定指定了视觉模型时优先用它：没有这条，视觉场景的绑定只对参数有效、对模型永远无效
-        String boundEndpoint = boundVisionEndpoint(binding);
-        if (boundEndpoint != null) {
-            builder.model(boundEndpoint);
-        }
-        Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
-        Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : config.getMaxTokens();
-        if (temperature != null) {
-            builder.temperature(temperature);
-        }
-        if (maxTokens != null) {
-            builder.maxCompletionTokens(maxTokens);
-        }
-        if (boundEndpoint == null && temperature == null && maxTokens == null) {
-            // 三个字段都给不出时：继承视觉模型自身的参数，不额外发请求级 options
-            return null;
-        }
-        return builder;
+        return optionsFor(scene);
     }
 
     /**
-     * 场景绑定里指定的、可用的视觉模型端点；没有绑定/不可用/用途不是视觉时返回 null。
+     * 场景绑定里指定的、可用于该场景的模型端点；没有绑定/不可用/能力不匹配时返回 null。
      * <p>
-     * 这里只解析端点、不在这里 WARN：不可用的情况 {@link #modelCode(SceneCode)} 已经 WARN 过一次，
+     * 这里只解析端点、不在这里 WARN：不可用的情况 {@link #resolveModelSpec(SceneCode)} 已经 WARN 过一次，
      * 同一次请求里重复两条相同告警只会稀释日志。
      */
-    private String boundVisionEndpoint(AiSceneBindingService.SceneBinding binding) {
+    private String boundEndpointFor(SceneCode scene, AiSceneBindingService.SceneBinding binding) {
         if (!binding.hasModel()) {
             return null;
         }
         AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
-        return bound != null && bound.vision() ? bound.modelEndpoint() : null;
+        if (bound == null) {
+            return null;
+        }
+        boolean usable = scene.isRequiresVision()
+                ? bound.vision()
+                : bound.capability().contains(AiModelCapability.TEXT);
+        return usable ? bound.modelEndpoint() : null;
     }
 
     /**
@@ -311,16 +378,7 @@ public class SceneModelResolver {
      * 给大额度只会让模型在 JSON 外面多写解释文字，反而降低解析成功率。
      */
     public ChatOptions.Builder<?> memoryOptionsBuilder() {
-        SceneCode scene = SceneCode.MEMORY;
-        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
-        SceneProperties config = aiProperties.scene(scene);
-        DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder().disableThinking();
-        Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
-        if (temperature != null) {
-            builder.temperature(temperature);
-        }
-        builder.maxTokens(aiProperties.getMemory().getMemoryExtractMaxTokens());
-        return builder;
+        return quietOptions(SceneCode.MEMORY, aiProperties.getMemory().getMemoryExtractMaxTokens());
     }
 
     /**
@@ -338,15 +396,37 @@ public class SceneModelResolver {
      * 单独绑一个更便宜的模型（这正是"把摘要做成独立场景"的价值之一）。
      */
     public ChatOptions.Builder<?> summaryOptionsBuilder() {
-        SceneCode scene = SceneCode.SUMMARY;
+        return quietOptions(SceneCode.SUMMARY, aiProperties.getMemory().getSummaryMaxTokens());
+    }
+
+    /**
+     * 「关掉思维链 + 输出封顶」的请求级参数，按场景实际用的协议造类型。
+     * <p>
+     * 摘要与记忆抽取共用这条规则：它们是压缩/抽取而不是推理，开思维链只会让首 token 更慢，
+     * 实测 6000 字输入叠加思维链会直接读超时。视觉场景不会调用它。
+     * <p>
+     * OpenAI 分支的 thinking 同样只能走 {@code extraBody}——这一步不能省，否则切到 OpenAI 协议后
+     * 摘要会突然带上思维链，时延与超时行为都会变。
+     */
+    private ChatOptions.Builder<?> quietOptions(SceneCode scene, int maxTokens) {
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         SceneProperties config = aiProperties.scene(scene);
-        DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder().disableThinking();
         Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
+        AiModelSpec spec = resolveModelSpec(scene);
+        if (protocolResolver.protocolFor(spec) == AiProtocol.DEEPSEEK) {
+            DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder().disableThinking();
+            if (temperature != null) {
+                builder.temperature(temperature);
+            }
+            builder.maxTokens(maxTokens);
+            return builder;
+        }
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
+                .maxCompletionTokens(maxTokens)
+                .extraBody(Map.of("thinking", Map.of("type", "disabled")));
         if (temperature != null) {
             builder.temperature(temperature);
         }
-        builder.maxTokens(aiProperties.getMemory().getSummaryMaxTokens());
         return builder;
     }
 }

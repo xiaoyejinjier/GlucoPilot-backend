@@ -263,7 +263,7 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
                 .toolContext(toolContext)
                 .user(input.promptText());
         if (chatClientRegistry.hasOverrides(SceneCode.CHAT)) {
-            promptSpec = promptSpec.options(chatClientRegistry.optionsBuilder(SceneCode.CHAT));
+            promptSpec = promptSpec.options(chatClientRegistry.optionsFor(SceneCode.CHAT));
         }
 
         Flux<ServerSentEvent<byte[]>> deltas = promptSpec.stream()

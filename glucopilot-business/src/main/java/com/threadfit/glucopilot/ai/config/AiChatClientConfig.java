@@ -19,7 +19,6 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
-import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
 
 /**
  * AI ChatClient 装配：把提示词、Advisor 链、工具白名单一次性挂好。

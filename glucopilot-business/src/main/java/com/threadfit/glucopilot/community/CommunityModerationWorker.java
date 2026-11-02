@@ -121,7 +121,7 @@ public class CommunityModerationWorker {
                 new SystemMessage(prompts.systemPrompt(SceneCode.MODERATION)),
                 new UserMessage(payload(job)));
         ChatOptions.Builder<?> options = sceneModelResolver.hasOverrides(SceneCode.MODERATION)
-                ? sceneModelResolver.optionsBuilder(SceneCode.MODERATION) : null;
+                ? sceneModelResolver.optionsFor(SceneCode.MODERATION) : null;
         Prompt prompt = options == null
                 ? new Prompt(messages)
                 : new Prompt(messages, options.build());

@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.ai.core;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
+import com.threadfit.glucopilot.ai.model.runtime.AiProtocolResolver;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,8 +12,11 @@ import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.mock.env.MockEnvironment;
 
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -53,7 +57,13 @@ class SceneModelResolverTest {
         }
         runtimeConfig = mock(AiRuntimeConfigService.class);
         sceneBindings = mock(AiSceneBindingService.class);
-        resolver = new SceneModelResolver(properties, runtimeConfig, sceneBindings, new MockEnvironment());
+        resolver = new SceneModelResolver(properties, runtimeConfig, sceneBindings,
+                new MockEnvironment(), new AiProtocolResolver(properties));
+    }
+
+    /** 切到 OpenAI 协议（迁移期的临时开关，只影响文本通道）。 */
+    private void useOpenAiProtocol() {
+        properties.getRouting().setMode(AiProtocolResolver.MODE_OPENAI);
     }
 
     private static AiModelSpec spec(String code, String endpoint) {
@@ -239,9 +249,53 @@ class SceneModelResolverTest {
     }
 
     @Test
-    void 两类optionsBuilder不允许混用() {
-        // 用错类型会得到"DeepSeek 的 options 交给 OpenAI 协议 client"这种类型层面的错误，必须当场拒绝
-        assertThrows(IllegalArgumentException.class, () -> resolver.optionsBuilder(SceneCode.CHAT_IMAGE));
+    void 两类options不允许混用() {
+        // 视觉参数方法只能用于视觉场景；反过来 optionsFor 会按协议自动选类型，不再需要调用方区分
+        when(sceneBindings.binding(SceneCode.CHAT_IMAGE)).thenReturn(binding(null, 0.3, null, null));
+        when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "qwen-vl-endpoint", AiModelCapability.visionDefaults()));
+
         assertThrows(IllegalArgumentException.class, () -> resolver.visionOptionsBuilder(SceneCode.CHAT));
+        assertInstanceOf(OpenAiChatOptions.Builder.class, resolver.optionsFor(SceneCode.CHAT_IMAGE),
+                "视觉场景无论开关如何都必须产出 OpenAI options");
+    }
+
+    // ---------------------------------------------------------------- 协议切换（迁移期）
+
+    @Test
+    void 默认仍走deepseek协议() {
+        when(sceneBindings.binding(SceneCode.CHAT)).thenReturn(inherit());
+        when(runtimeConfig.textSpec(SceneCode.CHAT)).thenReturn(spec("flash", "deepseek-chat"));
+        properties.scene(SceneCode.CHAT).setTemperature(0.5);
+
+        assertInstanceOf(DeepSeekChatOptions.Builder.class, resolver.optionsFor(SceneCode.CHAT));
+    }
+
+    @Test
+    void 切到openai协议后文本场景产出openai参数() {
+        useOpenAiProtocol();
+        properties.scene(SceneCode.CHAT).setTemperature(0.5);
+        properties.scene(SceneCode.CHAT).setMaxTokens(1024);
+        properties.scene(SceneCode.CHAT).setThinking(Boolean.FALSE);
+        when(sceneBindings.binding(SceneCode.CHAT)).thenReturn(inherit());
+        when(runtimeConfig.textSpec(SceneCode.CHAT)).thenReturn(spec("flash", "deepseek-chat"));
+
+        OpenAiChatOptions options = (OpenAiChatOptions) resolver.optionsFor(SceneCode.CHAT).build();
+
+        assertEquals(0.5, options.getTemperature());
+        assertEquals(1024, options.getMaxCompletionTokens());
+        // thinking 只能走私有扩展字段，否则切协议后思维链会静默消失
+        assertEquals(Map.of("thinking", Map.of("type", "disabled")), options.getExtraBody());
+    }
+
+    @Test
+    void openai协议下摘要仍然关掉思维链() {
+        useOpenAiProtocol();
+        when(sceneBindings.binding(SceneCode.SUMMARY)).thenReturn(inherit());
+        when(runtimeConfig.textSpec(SceneCode.SUMMARY)).thenReturn(spec("flash", "deepseek-chat"));
+
+        OpenAiChatOptions options = (OpenAiChatOptions) resolver.summaryOptionsBuilder().build();
+
+        assertEquals(Map.of("thinking", Map.of("type", "disabled")), options.getExtraBody(),
+                "摘要/记忆抽取不能带思维链，否则首 token 变慢、6000 字输入会读超时");
     }
 }

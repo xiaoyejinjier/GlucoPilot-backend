@@ -581,9 +581,13 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 
 ## 部署时关闭文本 AI
 
-服务器设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false` 时，不初始化模型客户端，不需要 DeepSeek Key。
+服务器设置 `SPRING_AI_MODEL_CHAT=none`、`AI_VISION_ENABLED=false` 时，不初始化模型客户端，不需要模型 Key。
 非 AI 接口继续工作；实际请求文本 AI 时返回现有 ApiResponse 业务拒绝错误（BIZ_REJECTED），提示“文本 AI 未启用”。
-接口路径、成功响应和 SSE 协议保持现有契约；启用时恢复 `SPRING_AI_MODEL_CHAT=deepseek` 并设置真实 Key。
+接口路径、成功响应和 SSE 协议保持现有契约。
+
+> 2026-11 协议统一后 `spring.ai.model.chat` 不再用于「选择哪个 provider」，只剩 `none` 这个关闭语义；
+> 启用时删掉该变量（或设为任意非 `none` 值），并提供 `AI_DEEPSEEK_API_KEY`（或 `application-local.yaml` 里的 `deepseek.apiKey`）。
+> 文本通道其余参数走 `AI_TEXT_BASE_URL` / `AI_TEXT_MODEL` / `AI_TEXT_TEMPERATURE` / `AI_TEXT_MAX_TOKENS`。
 
 
 ## 课程部署：关闭对象存储

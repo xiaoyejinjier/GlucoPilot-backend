@@ -114,7 +114,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 22 | `cipher_algo` | varchar(32) | YES | — | 密钥加密算法（如 `AES-GCM`）；NULL = 明文遗留或未配置 |
 | 23 | `key_version` | int unsigned | YES | — | 加密主密钥版本，支持轮换（`AiModelCipher.currentKeyVersion()`） |
 | 24 | `top_p` | decimal(3,2) | YES | — | 核采样；NULL = 用 provider 默认 |
-| 25 | `thinking` | tinyint(1) | YES | — | 是否开推理链（DeepSeek 专有）；NULL = 不显式设置（注意这里是**可空三态**，不是 0/1）；视觉用途没有这个入参，填了不生效 |
+| 25 | `thinking` | tinyint(1) | YES | — | 是否开推理链（厂商私有扩展：DeepSeek 的 `thinking`，协议统一后走 `extraBody`）；NULL = 不显式设置（这里是**可空三态**，不是 0/1）；视觉模型没有这个入参，填了不生效 |
 | 26 | `extra_params` | json | YES | — | 厂商特有参数，避免为每家加列 |
 | 27 | `config_version` | bigint unsigned | NO | 1 | 配置版本：乐观锁 + 缓存失效判据 |
 | 28 | `last_test_at` | datetime(3) | YES | — | 最近一次连通性测试时间 |

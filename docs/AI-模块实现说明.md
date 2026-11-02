@@ -89,7 +89,9 @@ ChatController ──► ChatCompletionServiceImpl.complete
 
 ```java
 @Configuration
-@ConditionalOnProperty(name = "spring.ai.model.chat", havingValue = "deepseek", matchIfMissing = true)
+// 2026-11 协议统一后不再按 provider 选择配置；这里只保留一个"总开关"：
+// spring.ai.model.chat=none 表示无 Key 部署，文本 AI 整体关闭（不建 ChatClient，调用给明确提示）。
+@ConditionalOnExpression("'${spring.ai.model.chat:}' != 'none'")
 public class AiChatClientConfig {
 
     @Bean("textChatClient")
@@ -601,13 +603,13 @@ public static Long requireUserId(ToolContext ctx) {
 
 ```java
 @Bean @Primary
-@ConditionalOnProperty(name = "spring.ai.model.chat", havingValue = "deepseek", matchIfMissing = true)
+@ConditionalOnExpression("'${spring.ai.model.chat:}' != 'none'")
 public ChatModel glucopilotTextChatModel(AiRuntimeConfigService runtimeConfig,
                                          ChatModelFactory chatModelFactory,
                                          ObjectProvider<ChatModel> allChatModels) {
-    Supplier<ChatModel> yamlFallback = () -> allChatModels.stream()
-            .filter(m -> !(m instanceof DynamicChatModel))
-            .findFirst().orElse(null);                       // 懒解析：构造期可能还没有 starter 的模型
+    // 协议统一后容器里只有这一个 ChatModel（DeepSeek starter 已移除），
+    // 没有"别人的模型"可以复用，所以 yaml 兜底恒为 null、yaml 规格每次都现造。
+    Supplier<ChatModel> yamlFallback = () -> null;
     return new DynamicChatModel("text", runtimeConfig, chatModelFactory,
             AiRuntimeConfigService.Snapshot::resolveTextDefault,   // 通道默认规格
             AiRuntimeConfigService.Snapshot::yamlText,             // yaml 规格（用于判断是否需要新建实例）
@@ -626,7 +628,7 @@ public ChatModel glucopilotVisionChatModel(...) {            // 非 @Primary，�
 
 两个注释里的坑值得记住：
 
-- **`@ConditionalOnMissingBean` 按方法返回类型判定**。starter 的 `deepSeekChatModel()` 返回 `DeepSeekChatModel`，本委托声明为 `ChatModel`，类型不同 → starter 的模型照常创建，正好成为「yaml 兜底」那一份（带 RetryTemplate 与观测）。
+- **协议统一（2026-11）之后不再有第二个 `ChatModel` Bean**。`spring-ai-starter-model-deepseek` 已移除，`ChatClientAutoConfiguration` 的单值 `ChatModel` 参数只会拿到本委托；`yamlFallback` 恒为 `null`，yaml 规格一律由 `ChatModelFactory` 现造（重试与观测改由 `OpenAiChatOptions.maxRetries` 与 `ObservationRegistry` 承担）。
 - **通道默认不能写成 `resolveText(null)` 或 `resolveText(yamlText().modelCode())`**。前者直接返回 yaml 规格，后者会永远盯着 yaml 里那个模型名——后台把它停用、改启用另一个模型后依然解析回旧模型（2026-10-13 的线上反馈）。所以这里传的是 `Snapshot::resolveTextDefault`。
 
 
@@ -697,18 +699,15 @@ public AiModelSpec modelCode(SceneCode scene) {
     return runtimeConfig.textSpec(scene).modelCode();              // 未绑定 → 用途默认
 }
 
-public ChatOptions.Builder<?> optionsBuilder(SceneCode scene) {
-    if (scene.isRequiresVision()) { throw new IllegalArgumentException(...); }
-    DeepSeekChatOptions.Builder b = DeepSeekChatOptions.builder();
-    ... 绑定非空字段 > yaml ai.scenes.<scene>.*
-    if (bound != null && bound.modelEndpoint() != null) { b.model(bound.modelEndpoint()); }  // 写 endpoint，不写业务编码
-    return b;
+public ChatOptions.Builder<?> optionsFor(SceneCode scene) {
+    // 协议统一后只剩一条路径：视觉/文本都产出 OpenAI 兼容参数
+    return openAiOptions(scene, resolveModelSpec(scene));
 }
 ```
 
 | 方法 | 场景 | 参数来源 |
 | --- | --- | --- |
-| `optionsBuilder` | 文本场景 | 绑定 > `ai.scenes.<scene>.*`（yaml 只给参数，不给模型） |
+| `optionsFor` | 文本 / 视觉 | 绑定 > `ai.scenes.<scene>.*`；model 恒写 `spec.modelEndpoint()`（yaml 只给参数，不给模型） |
 | `visionOptionsBuilder` | 视觉场景 | 绑定（含 model 端点）> `ai.scenes.<scene>.*`；三者全空返回 null（继承模型默认） |
 | `memoryOptionsBuilder` | MEMORY | `disableThinking()` + `ai.memory.memory-extract-max-tokens` |
 | `summaryOptionsBuilder` | SUMMARY | `disableThinking()` + `ai.memory.summary-max-tokens` |
@@ -734,11 +733,10 @@ public ChatClient visionClient(SceneCode scene) {
 
 用 `ObjectProvider<ChatClient>` 而不是直接注入：视觉没配时应用仍能启动（否则所有 C 端接口一起挂）。
 
-### 9.5 `ChatModelFactory`（230 行）与 `AiModelCipher`（148 行）
+### 9.5 `ChatModelFactory`（约 180 行）与 `AiModelCipher`（148 行）
 
 ```java
-public ChatModel build(AiModelSpec spec)          // 按协议分派（AiProtocolResolver）
-private ChatModel buildDeepSeek(AiModelSpec spec)            // 迁移期保留，可回滚
+public ChatModel build(AiModelSpec spec)                     // 只有一条路径：OpenAI 兼容
 private ChatModel buildOpenAiCompatible(AiModelSpec spec)    // DeepSeek 官方端点、百炼、任意 OpenAI 兼容网关
 public ConnectivityResult test(AiModelSpec spec, Duration timeout)   // 管理端「测试连通性」
 static String classify(Throwable e)               // 401/403/404/超时/DNS → 可读分类
@@ -747,17 +745,18 @@ public record ConnectivityResult(boolean ok, String category, long elapsedMs, ..
 
 `classify` + `advice()` 是给运维用的：把「连不上」翻译成「密钥无效/路径不存在/网络不通」，而不是抛一个 stack trace 给管理端页面。
 
-**协议统一（2026-11）**：DeepSeek 官方 API 本身就是 OpenAI 兼容的，原先却用 Spring AI 的 DeepSeek 专用实现，
+**协议统一（2026-11，已完成）**：DeepSeek 官方 API 本身就是 OpenAI 兼容的，原先却用 Spring AI 的 DeepSeek 专用实现，
 后果是 `timeout / maxRetries / proxy` 三个参数根本没地方传（`DeepSeekChatOptions` 里没有它们，只有 `DeepSeekApi.Builder` 的 `restClientBuilder` 能间接设超时）。
-现在文本也走 `OpenAiChatModel`：
+现在**只剩一条构造路径** `buildOpenAiCompatible`：DeepSeek 专用分支与 `AiProtocol` / `AiProtocolResolver` / `AiHttpTimeouts` 已全部删除。
 
-- 判据收敛在 `AiProtocolResolver`：视觉恒 OpenAI 兼容；文本由 `ai.routing.mode` 决定，默认 `openai`。
-  **`ChatModelFactory` 与 `SceneModelResolver` 必须用同一个判据**——`OpenAiChatModel` 内部是 `checkcast OpenAiChatOptions`，两边不一致会在请求期抛 `ClassCastException`。
-- OpenAI 分支补齐三件 DeepSeek 分支原本靠框架做的事：`maxRetries(3)`（该 Builder 没有 `retryTemplate`）、
-  `replayReasoningContent(true)`（多轮思考连贯性）、thinking 走 `extraBody({"thinking":{"type":"..."}})`（OpenAI 规范无此字段）。
+- 参数收敛到 `OpenAiChatOptions`：`timeout` / `maxRetries(3)` / `proxy` 都有落点；该 Builder 没有 `retryTemplate`，重试靠 `maxRetries`。
+- thinking 用 `extraBody({"thinking":{"type":"..."}})` 下发（OpenAI 规范无此字段，DeepSeek 接受为私有扩展）。
+- `replayReasoningContent(true)` 保证多轮思考连贯性。
 - **坑**：`OpenAiChatOptions.builder()` 会预填 SDK 默认模型名，`DynamicChatModel` 会把它当成「调用方指定了模型」原样发给厂商
   （实测发到 DeepSeek 端点报 400：`but you passed gpt-5-mini`）。所以只要构造了 OpenAI options，就必须显式 `builder.model(spec.modelEndpoint())`。
-- 回滚：设 `AI_ROUTING_MODE=deepseek` 重启即可回到旧链路（`AiProtocol`/`AiProtocolResolver` 与 DeepSeek 分支在协议统一稳定后删除）。
+- 依赖：`spring-ai-starter-model-deepseek` 已移除，显式引 `spring-ai-openai` / `spring-ai-client-chat` /
+  `spring-ai-autoconfigure-model-tool`（后两者原先由 starter 传递；少了它们编译期整包找不到，运行期也拿不到 `ToolCallingManager`）。
+- 回滚：本步没有开关，只能 `git revert` 掉 S3 那个提交。
 
 ```java
 // AiModelCipher：模型 API Key 落库前加密
@@ -1135,7 +1134,7 @@ ChatSummaryServiceImpl ──► summaryChatClient, ChatMessageMapper, ChatSessi
 | AI 相关测试类 | 44 个（`ai/**` 下） |
 | 全量单测 | 747 用例，0 失败 0 错误 2 跳过（110 套件） |
 | 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`DynamicPromptAdvisorTest`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`CommunityModerationParserTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库） |
-| 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 22 |
+| 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29 |
 | 迁移 | Flyway v49（V45–49 是 V46 能力化、V48 capability、V49 场景参数） |
 
 测试约定（新写测试要遵守）：

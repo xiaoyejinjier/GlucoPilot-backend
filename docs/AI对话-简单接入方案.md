@@ -1,5 +1,12 @@
 # AI 对话「简单接入」方案
 
+> ⚠️ **历史文档（2026-11 备注）**：本文记录的是 2026 年上半年把对话接进来的推演过程，其中
+> `spring.ai.deepseek.*` 配置、`DeepSeekChatModel` / `DeepSeekChatOptions` 的选择理由、以及
+> 「协议分派」的讨论，都已在 2026-11 的**协议统一**中作废——现在全链路只有 OpenAI 兼容一条路径，
+> 配置在 `ai.channels.*` / `AI_TEXT_*` / `AI_DEEPSEEK_API_KEY`。
+> 需要「现在到底怎么配」请看 `AI-模块实现说明.md` §9.5 与 `API-CONTRACT.md`「部署时关闭文本 AI」。
+> 本文保留原文，作为「当时为什么这么定」的证据。
+
 > 目标：用最小改动让小程序能和大模型真正对话（流式），消息可落库、可多轮。
 > 定位：本方案是《AI 模块开发方案》的**落地第一步**，只做「简单对话」，不碰 OCR / 预测 / 工具调用 / RAG。
 > 基线：`backend/pom.xml`（Boot 4.1.1 + Spring AI 2.0.1）、`backend/sql` + `db/migration` V1（38 表）、`接口设计文档.docx`（2.23 / 2.24 / 2.25）、`CURSOR.md`（硬契约）。

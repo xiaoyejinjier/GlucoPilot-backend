@@ -3,12 +3,10 @@ package com.threadfit.glucopilot.ai.core;
 import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
-import com.threadfit.glucopilot.ai.model.runtime.AiProtocolResolver;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.mock.env.MockEnvironment;
 
@@ -58,12 +56,7 @@ class SceneModelResolverTest {
         runtimeConfig = mock(AiRuntimeConfigService.class);
         sceneBindings = mock(AiSceneBindingService.class);
         resolver = new SceneModelResolver(properties, runtimeConfig, sceneBindings,
-                new MockEnvironment(), new AiProtocolResolver(properties));
-    }
-
-    /** 切到 OpenAI 协议（迁移期的临时开关，只影响文本通道）。 */
-    private void useOpenAiProtocol() {
-        properties.getRouting().setMode(AiProtocolResolver.MODE_OPENAI);
+                new MockEnvironment());
     }
 
     private static AiModelSpec spec(String code, String endpoint) {
@@ -87,11 +80,12 @@ class SceneModelResolverTest {
     }
 
     /**
-     * Spring AI 的 DeepSeek options 里 thinking 是个 {@code Thinking} 值对象（不是 Boolean），
-     * 这里只看它的类型名，避免把测试绑死在框架内部类上。
+     * 协议统一到 OpenAI 兼容之后，DeepSeek 的 {@code thinking} 私有入参只能塞进 {@code extraBody}。
+     * 这里按实际下发给厂商的那份 JSON 判定，避免测试绑死在框架内部类上。
      */
-    private static boolean thinkingEnabled(DeepSeekChatOptions options) {
-        return options.getThinking() != null && String.valueOf(options.getThinking()).contains("ENABLED");
+    private static boolean thinkingEnabled(OpenAiChatOptions options) {
+        return options.getExtraBody() != null
+                && String.valueOf(options.getExtraBody().get("thinking")).contains("enabled");
     }
 
     // ---------------------------------------------------------------- 优先级
@@ -105,7 +99,7 @@ class SceneModelResolverTest {
         when(runtimeConfig.specByModelCode(anyString())).thenReturn(null);
         when(runtimeConfig.textSpec(SceneCode.CHAT)).thenReturn(spec("flash", "deepseek-chat"));
 
-        DeepSeekChatOptions options = (DeepSeekChatOptions) resolver.optionsBuilder(SceneCode.CHAT).build();
+        OpenAiChatOptions options = (OpenAiChatOptions) resolver.optionsBuilder(SceneCode.CHAT).build();
 
         assertEquals(0.7, options.getTemperature());
         assertTrue(thinkingEnabled(options), "yaml 的 thinking=true 必须仍然生效");
@@ -121,10 +115,10 @@ class SceneModelResolverTest {
                 .thenReturn(binding(null, 0.2, 512, Boolean.FALSE));
         when(runtimeConfig.textSpec(SceneCode.CHAT)).thenReturn(spec("flash", "deepseek-chat"));
 
-        DeepSeekChatOptions options = (DeepSeekChatOptions) resolver.optionsBuilder(SceneCode.CHAT).build();
+        OpenAiChatOptions options = (OpenAiChatOptions) resolver.optionsBuilder(SceneCode.CHAT).build();
 
         assertEquals(0.2, options.getTemperature());
-        assertEquals(512, options.getMaxTokens());
+        assertEquals(512, options.getMaxCompletionTokens());
         assertFalse(thinkingEnabled(options), "后台显式关掉思维链必须生效");
     }
 
@@ -134,7 +128,7 @@ class SceneModelResolverTest {
         // 绑定的编码必须能解析出端点：编码是业务起的名字，发给厂商的必须是端点名
         when(runtimeConfig.specByModelCode("pro")).thenReturn(spec("pro", "deepseek-v4-pro"));
 
-        DeepSeekChatOptions options = (DeepSeekChatOptions) resolver.optionsBuilder(SceneCode.CHAT).build();
+        OpenAiChatOptions options = (OpenAiChatOptions) resolver.optionsBuilder(SceneCode.CHAT).build();
 
         assertEquals("deepseek-v4-pro", options.getModel());
         assertEquals("pro", resolver.modelCode(SceneCode.CHAT), "落库的模型编码必须是绑定的那个");
@@ -146,12 +140,9 @@ class SceneModelResolverTest {
         when(runtimeConfig.specByModelCode("retired")).thenReturn(null);
         when(runtimeConfig.textSpec(SceneCode.CHAT)).thenReturn(spec("flash", "deepseek-chat"));
 
-        DeepSeekChatOptions options = (DeepSeekChatOptions) resolver.optionsBuilder(SceneCode.CHAT).build();
-
-        // DeepSeekChatOptions 会与 spring.ai.deepseek.chat.* 合并，所以"什么都不写"并不是 null，
-        // 而是通道默认；关键是**不能把解析不到的编码当成模型名写进去**
-        String channelDefault = ((DeepSeekChatOptions) DeepSeekChatOptions.builder().build()).getModel();
-        assertEquals(channelDefault, options.getModel(), "解析不到端点时必须交给通道默认，而不是写一个错的");
+        // 没有任何要发的参数（无绑定温度/上限/思维链）时，不构造请求级 options，直接继承模型自身默认；
+        // 关键是**不能把解析不到的编码当成模型名写进去**
+        assertNull(resolver.optionsBuilder(SceneCode.CHAT), "没有参数可发时不应构造请求级 options");
         assertEquals("flash", resolver.modelCode(SceneCode.CHAT), "落库要与实际调用一致（回落后的那个）");
     }
 
@@ -262,20 +253,10 @@ class SceneModelResolverTest {
                 "视觉场景无论开关如何都必须产出 OpenAI options");
     }
 
-    // ---------------------------------------------------------------- 协议切换（迁移期）
+    // ---------------------------------------------------------------- 协议统一（2026-11 起只剩 OpenAI 兼容）
 
     @Test
-    void 默认仍走deepseek协议() {
-        when(sceneBindings.binding(SceneCode.CHAT)).thenReturn(inherit());
-        when(runtimeConfig.textSpec(SceneCode.CHAT)).thenReturn(spec("flash", "deepseek-chat"));
-        properties.scene(SceneCode.CHAT).setTemperature(0.5);
-
-        assertInstanceOf(DeepSeekChatOptions.Builder.class, resolver.optionsFor(SceneCode.CHAT));
-    }
-
-    @Test
-    void 切到openai协议后文本场景产出openai参数() {
-        useOpenAiProtocol();
+    void 文本场景产出openai兼容参数() {
         properties.scene(SceneCode.CHAT).setTemperature(0.5);
         properties.scene(SceneCode.CHAT).setMaxTokens(1024);
         properties.scene(SceneCode.CHAT).setThinking(Boolean.FALSE);
@@ -294,8 +275,7 @@ class SceneModelResolverTest {
     }
 
     @Test
-    void openai协议下摘要仍然关掉思维链() {
-        useOpenAiProtocol();
+    void 摘要仍然关掉思维链() {
         when(sceneBindings.binding(SceneCode.SUMMARY)).thenReturn(inherit());
         when(runtimeConfig.textSpec(SceneCode.SUMMARY)).thenReturn(spec("flash", "deepseek-chat"));
 

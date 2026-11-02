@@ -6,7 +6,6 @@ import com.threadfit.glucopilot.ai.config.AiVisionClientConfig;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
-import com.threadfit.glucopilot.ai.model.runtime.AiProtocolResolver;
 import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
@@ -99,16 +98,13 @@ class MealVisionLiveTest {
      * 只为"把规格变成能发图的 ChatModel"而构造工厂。
      * <p>
      * 本测试不涉及工具调用：OpenAI 兼容分支只用到 baseUrl/apiKey/timeout，
-     * 观测/重试/指标三个 {@code ObjectProvider} 给空实现即可（{@code ifAvailable} 在空 provider 下不做事），
-     * {@code toolCallingManager} 也不会被 OpenAI 兼容分支使用。用 mock 是为了不引入 Spring 上下文。
+     * 观测与指标两个 {@code ObjectProvider} 给空实现即可（{@code ifAvailable} 在空 provider 下不做事）。
+     * 用 mock 是为了不引入 Spring 上下文。
      */
     @SuppressWarnings("unchecked")
     private static ChatModelFactory factory() {
         return new ChatModelFactory(
-                mock(ToolCallingManager.class),
                 (ObjectProvider<ObservationRegistry>) mock(ObjectProvider.class),
-                (ObjectProvider<RetryTemplate>) mock(ObjectProvider.class),
-                (ObjectProvider<MeterRegistry>) mock(ObjectProvider.class),
-                new AiProtocolResolver(new AIProperties()));
+                (ObjectProvider<MeterRegistry>) mock(ObjectProvider.class));
     }
 }

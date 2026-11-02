@@ -4,14 +4,11 @@ import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AIProperties.SceneProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
-import com.threadfit.glucopilot.ai.model.runtime.AiProtocol;
-import com.threadfit.glucopilot.ai.model.runtime.AiProtocolResolver;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.prompt.ChatOptions;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
@@ -31,20 +28,14 @@ import java.util.Map;
  * 才是文本/视觉模型的真实来源，yaml 只是兜底。2026-10-13 的反馈（后台把默认模型从 flash 换成 pro，
  * 记录里却还写着 flash）就是这条没做全：解析走 DB 了，落库还在读 yaml，两边对不上。
  * <p>
- * 当前 provider 只有 DeepSeek，因此这里直接构造 {@link DeepSeekChatOptions}；
- * 这是本模块内**唯一**允许出现 DeepSeek 类型的地方，接入第二个 provider 时只改这里。
+ * 当前只有 OpenAI 兼容一种协议（协议统一 2026-11），文本与视觉共用 {@link OpenAiChatOptions}；
+ * DeepSeek 专用类型已从本类移除。
  * <p>
- * <b>视觉场景（{@link SceneCode#isRequiresVision()}）是例外，三个方法都要区别对待：</b>
- * 它们的模型与参数属于<b>另一个 provider</b>，配置在 {@code ai.vision.*}，
- * 并且在 {@code AiVisionClientConfig} 构造 client 时就烤进了 defaultOptions。
- * 若这里不做区分，会得到三种错误的组合：
- * <ul>
- *   <li>{@link #modelCode} 回落成 {@code spring.ai.deepseek.chat.model}——
- *       于是「落库的模型 = 实际调用的模型」这条承诺对视觉场景失效，记录里写的是一个没被调用过的模型；</li>
- *   <li>{@link #hasOverrides} 认为场景声明了覆盖，引导调用方去取 options；</li>
- *   <li>{@link #optionsBuilder} 造出 {@code DeepSeekChatOptions}——而视觉 client 是 OpenAI 协议，
- *       把 DeepSeek 的 options 交给它属于类型层面的错误，是这三者里唯一真会炸的。</li>
- * </ul>
+ * <b>视觉场景（{@link SceneCode#isRequiresVision()}）仍要区别对待：</b>
+ * 它们与文本场景共用同一个协议，但参数来源不同（{@code ai.scenes.meal-analysis.*} 等），
+ * 且百炼的视觉模型不认 {@code thinking} 这个私有扩展——硬发只会 400。
+ * 若这里不做区分，{@link #modelCode} 会回落成文本默认模型，
+ * 于是「落库的模型 = 实际调用的模型」这条承诺对视觉场景失效。
  */
 @Slf4j
 @Component
@@ -70,23 +61,14 @@ public class SceneModelResolver {
     /** 只用于启动时检查老配置里是否还残留着 {@code ai.scenes.<key>.model-code}。 */
     private final Environment environment;
 
-    /**
-     * 协议判据。模型（{@code ChatModelFactory}）与请求级参数（本类）必须用<b>同一个</b>判据，
-     * 否则会出现「OpenAI 客户端 + DeepSeek options」——{@code OpenAiChatModel} 里是
-     * {@code checkcast OpenAiChatOptions}，请求期直接 {@code ClassCastException}。
-     */
-    private final AiProtocolResolver protocolResolver;
-
     public SceneModelResolver(AIProperties aiProperties,
                               AiRuntimeConfigService runtimeConfig,
                               AiSceneBindingService sceneBindings,
-                              Environment environment,
-                              AiProtocolResolver protocolResolver) {
+                              Environment environment) {
         this.aiProperties = aiProperties;
         this.runtimeConfig = runtimeConfig;
         this.sceneBindings = sceneBindings;
         this.environment = environment;
-        this.protocolResolver = protocolResolver;
     }
 
     /**
@@ -227,11 +209,11 @@ public class SceneModelResolver {
     }
 
     /**
-     * 场景的请求级参数，<b>类型由该场景实际会用的协议决定</b>。
+     * 场景的请求级参数。
      * <p>
      * 这是「参数」这条链上唯一的对外入口：先用 {@link #resolveModelSpec(SceneCode)} 拿到模型，
-     * 再问 {@link AiProtocolResolver} 该用哪种协议，最后按协议造 options。
-     * 三件事同源，就不可能出现「模型用 A、参数按 B 的协议发」。
+     * 再按该模型造 options。协议统一（2026-11）之后只有 OpenAI 兼容一种，因此不存在
+     * 「模型用 A、参数按 B 的协议发」的可能。
      * <p>
      * 取值优先级仍是：后台绑定（{@code ai_scene_config} 非空字段）&gt; yaml {@code ai.scenes.<scene>.*}；
      * 绑定里的 {@code model_code} 写进 options 时用的是 {@code model_endpoint}（编码是业务起的名字）。
@@ -239,61 +221,14 @@ public class SceneModelResolver {
      * @return 请求级参数；视觉场景没有任何可写参数时返回 {@code null}（继承模型自身参数）
      */
     public ChatOptions.Builder<?> optionsFor(SceneCode scene) {
-        AiModelSpec spec = resolveModelSpec(scene);
-        // 视觉场景无条件走 OpenAI 兼容协议：即使解析出问题（比如视觉通道被配成文本规格），
-        // 也不能把 DeepSeek options 交给 OpenAI 客户端——那会在发送前抛 ClassCastException。
-        boolean openAi = scene.isRequiresVision()
-                || protocolResolver.protocolFor(spec) == AiProtocol.OPENAI_COMPAT;
-        return openAi ? openAiOptions(scene, spec) : deepSeekOptions(scene);
-    }
-
-    /** DeepSeek 专用协议的请求级参数（迁移期用，协议统一后删除）。 */
-    private ChatOptions.Builder<?> deepSeekOptions(SceneCode scene) {
-        if (scene.isRequiresVision()) {
-            // 视觉规格永远走 OpenAI 兼容协议（见 AiProtocolResolver），走到这里说明判据被改坏了
-            throw new IllegalStateException("视觉场景 " + scene.getCode()
-                    + " 不能使用 DeepSeek options（OpenAiChatModel 会 checkcast 失败）");
-        }
-        SceneProperties config = aiProperties.scene(scene);
-        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
-        String modelCode = binding.hasModel() ? binding.modelCode() : null;
-        Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
-        Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : config.getMaxTokens();
-        Boolean thinking = binding.thinking() != null ? binding.thinking() : config.getThinking();
-
-        DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder();
-        if (StringUtils.hasText(modelCode)) {
-            AiModelSpec bound = runtimeConfig.specByModelCode(modelCode);
-            if (bound != null) {
-                builder.model(bound.modelEndpoint());
-            } else {
-                log.warn("场景 {} 绑定的模型编码 {} 不在运行时配置里（不存在或已停用），"
-                                + "本次不指定模型，交由通道默认模型处理",
-                        scene.getCode(), modelCode);
-            }
-        }
-        if (temperature != null) {
-            builder.temperature(temperature);
-        }
-        if (maxTokens != null) {
-            builder.maxTokens(maxTokens);
-        }
-        if (thinking != null) {
-            if (thinking) {
-                builder.enableThinking();
-            } else {
-                builder.disableThinking();
-            }
-        }
-        return builder;
+        return openAiOptions(scene, resolveModelSpec(scene));
     }
 
     /**
      * OpenAI 兼容协议的请求级参数。
      * <p>
-     * 与 DeepSeek 分支的差别只有一个：thinking 在 OpenAI 规范里没有对应字段，
-     * 只能作为私有扩展塞进请求体（{@code extraBody}）。视觉场景<b>不写</b>它——
-     * 百炼的视觉模型不认这个字段，硬发只会 400。
+     * thinking 在 OpenAI 规范里没有对应字段，只能作为私有扩展塞进请求体（{@code extraBody}）。
+     * 视觉场景<b>不写</b>它——百炼的视觉模型不认这个字段，硬发只会 400。
      */
     private ChatOptions.Builder<?> openAiOptions(SceneCode scene, AiModelSpec spec) {
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
@@ -408,27 +343,19 @@ public class SceneModelResolver {
     }
 
     /**
-     * 「关掉思维链 + 输出封顶」的请求级参数，按场景实际用的协议造类型。
+     * 「关掉思维链 + 输出封顶」的请求级参数。
      * <p>
      * 摘要与记忆抽取共用这条规则：它们是压缩/抽取而不是推理，开思维链只会让首 token 更慢，
      * 实测 6000 字输入叠加思维链会直接读超时。视觉场景不会调用它。
      * <p>
-     * OpenAI 分支的 thinking 同样只能走 {@code extraBody}——这一步不能省，否则切到 OpenAI 协议后
-     * 摘要会突然带上思维链，时延与超时行为都会变。
+     * thinking 在 OpenAI 规范里没有对应字段，只能走 {@code extraBody}——这一步不能省，
+     * 否则摘要会突然带上思维链，时延与超时行为都会变。
      */
     private ChatOptions.Builder<?> quietOptions(SceneCode scene, int maxTokens) {
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         SceneProperties config = aiProperties.scene(scene);
         Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
         AiModelSpec spec = resolveModelSpec(scene);
-        if (protocolResolver.protocolFor(spec) == AiProtocol.DEEPSEEK) {
-            DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder().disableThinking();
-            if (temperature != null) {
-                builder.temperature(temperature);
-            }
-            builder.maxTokens(maxTokens);
-            return builder;
-        }
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
                 // 同 openAiOptions：不显式写 model 就会被 SDK 默认值（gpt-5-mini）顶替
                 .model(spec.modelEndpoint())

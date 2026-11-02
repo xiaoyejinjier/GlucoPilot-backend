@@ -80,7 +80,7 @@ class ChatSummaryServiceTest {
         when(requestSpec.system(anyString())).thenReturn(requestSpec);
         // 用 thenAnswer 而不是 thenReturn：返回类型是 ChatOptions.Builder<?>，泛型推断在 thenReturn 上过不去
         when(sceneModelResolver.summaryOptionsBuilder())
-                .thenAnswer(invocation -> org.springframework.ai.deepseek.DeepSeekChatOptions.builder());
+                .thenAnswer(invocation -> org.springframework.ai.openai.OpenAiChatOptions.builder());
         when(requestSpec.options(any(org.springframework.ai.chat.prompt.ChatOptions.Builder.class)))
                 .thenReturn(requestSpec);
         when(requestSpec.user(anyString())).thenReturn(requestSpec);

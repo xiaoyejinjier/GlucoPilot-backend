@@ -12,7 +12,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
@@ -50,7 +50,8 @@ import java.util.List;
  */
 @Slf4j
 @Configuration
-@ConditionalOnProperty(name = "spring.ai.model.chat", havingValue = "deepseek", matchIfMissing = true)
+// 无 Key 部署可以设 spring.ai.model.chat=none 关掉文本 AI（此时不创建 ChatClient，调用会得到明确提示）。
+@ConditionalOnExpression("'${spring.ai.model.chat:}' != 'none'")
 @RequiredArgsConstructor
 public class AiChatClientConfig {
 

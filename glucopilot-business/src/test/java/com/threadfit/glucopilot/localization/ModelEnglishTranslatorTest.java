@@ -45,7 +45,7 @@ class ModelEnglishTranslatorTest {
                 new ChatResponse(List.of(new Generation(new AssistantMessage("{\"title:0\":\"Article title\"}")))));
         assertEquals("Article title",new ModelEnglishTranslator(provider,json).translate("ARTICLE_PREVIEW",Map.of("title","文章标题")).get("title"));
         var prompts=org.mockito.ArgumentCaptor.forClass(Prompt.class);verify(model,times(2)).call(prompts.capture());
-        for(var prompt:prompts.getAllValues())assertEquals(org.springframework.ai.deepseek.api.ResponseFormat.Type.JSON_OBJECT,((org.springframework.ai.deepseek.DeepSeekChatOptions)prompt.getOptions()).getResponseFormat().getType());
+        for(var prompt:prompts.getAllValues())assertEquals(org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type.JSON_OBJECT,((org.springframework.ai.openai.OpenAiChatOptions)prompt.getOptions()).getResponseFormat().getType());
         reset(model);when(model.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("{}")))));
         assertThrows(RuntimeException.class,()->new ModelEnglishTranslator(provider,json).translate("ARTICLE_PREVIEW",Map.of("title","文章标题")));
         verify(model,times(2)).call(any(Prompt.class));

@@ -5,7 +5,6 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration;
 import org.springframework.ai.model.chat.client.autoconfigure.ChatClientAutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import com.threadfit.glucopilot.ai.config.AiChatClientConfig;
@@ -46,9 +45,8 @@ class AiChatClientRegistryTest {
     @Test
     void disabledTextAiStartsWithoutApiKeyAndRejectsCalls() {
         new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(
-                        DeepSeekChatAutoConfiguration.class, ChatClientAutoConfiguration.class))
-                .withPropertyValues("spring.ai.model.chat=none", "spring.ai.deepseek.api-key=")
+                .withConfiguration(AutoConfigurations.of(ChatClientAutoConfiguration.class))
+                .withPropertyValues("spring.ai.model.chat=none")
                 .withBean(SceneModelResolver.class, () -> mock(SceneModelResolver.class))
                 .withUserConfiguration(AiChatClientRegistry.class, AiChatClientConfig.class)
                 .run(context -> {

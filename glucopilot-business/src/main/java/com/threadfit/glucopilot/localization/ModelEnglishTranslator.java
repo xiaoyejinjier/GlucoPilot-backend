@@ -4,8 +4,8 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.ai.deepseek.api.ResponseFormat;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -106,7 +106,10 @@ public class ModelEnglishTranslator implements EnglishTranslator {
     private Map<String,String> call(String kind,Map<String,String> source) {
         ChatModel model=models.getIfAvailable();if(model==null)throw new IllegalStateException("Translation model unavailable");
         String data=json.writeValueAsString(source);
-        var options=DeepSeekChatOptions.builder().disableThinking().temperature(0.0).maxTokens(6000)
+        // 协议统一后只有 OpenAI 兼容一条路：thinking 是 DeepSeek 私有扩展，只能走 extraBody；
+        // JSON 输出走 OpenAI 的 response_format=json_object。
+        var options=OpenAiChatOptions.builder().temperature(0.0).maxCompletionTokens(6000)
+                .extraBody(Map.of("thinking", Map.of("type", "disabled")))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()).build();
         for(int attempt=0;attempt<2;attempt++) {
             String system=SYSTEM+"\nContent category: "+kind+(attempt==0?"":"\nThe prior response could not be validated. Return valid JSON with all requested string fields, without missing or changing any numeric values or units.");

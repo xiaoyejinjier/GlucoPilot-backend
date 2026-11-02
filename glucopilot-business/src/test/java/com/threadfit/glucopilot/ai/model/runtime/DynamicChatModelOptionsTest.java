@@ -7,7 +7,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import reactor.core.publisher.Flux;
 
@@ -129,8 +129,8 @@ class DynamicChatModelOptionsTest {
      */
     @Test
     void yaml通道返回容器模型的provider级options() {
-        DeepSeekChatOptions options = DeepSeekChatOptions.builder()
-                .model("deepseek-v4-pro").temperature(0.7).maxTokens(2048).build();
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+                .model("deepseek-v4-pro").temperature(0.7).maxCompletionTokens(2048).build();
         ChatModel containerModel = new StubModel(options);
         AiRuntimeConfigService runtime = mock(AiRuntimeConfigService.class);
         ChatModelFactory factory = mock(ChatModelFactory.class);
@@ -149,7 +149,7 @@ class DynamicChatModelOptionsTest {
     @Test
     void db默认模型通道返回工厂构造模型的options() {
         AiModelSpec db = dbSpec("glucopilot-chat", "deepseek-v4-pro");
-        DeepSeekChatOptions dbOptions = DeepSeekChatOptions.builder()
+        OpenAiChatOptions dbOptions = OpenAiChatOptions.builder()
                 .model("deepseek-v4-pro").temperature(0.2).build();
         ChatModel built = new StubModel(dbOptions);
         AiRuntimeConfigService runtime = mock(AiRuntimeConfigService.class);
@@ -178,15 +178,15 @@ class DynamicChatModelOptionsTest {
      */
     @Test
     void 请求级参数覆盖通道默认参数() {
-        ChatOptions base = DeepSeekChatOptions.builder()
-                .model("deepseek-v4-pro").temperature(0.7).maxTokens(2048).build();
-        ChatOptions request = DeepSeekChatOptions.builder()
+        ChatOptions base = OpenAiChatOptions.builder()
+                .model("deepseek-v4-pro").temperature(0.7).maxCompletionTokens(2048).build();
+        ChatOptions request = OpenAiChatOptions.builder()
                 .model("deepseek-chat-faster").temperature(0.0).build();
 
         ChatOptions merged = base.mutate().combineWith(request.mutate()).build();
 
         assertEquals("deepseek-chat-faster", merged.getModel(), "请求声明的 model 必须覆盖通道默认");
         assertEquals(0.0, merged.getTemperature(), "请求声明的温度必须覆盖通道默认");
-        assertEquals(2048, merged.getMaxTokens(), "请求未声明的字段仍继承通道默认");
+        assertEquals(2048, ((OpenAiChatOptions) merged).getMaxCompletionTokens(), "请求未声明的字段仍继承通道默认");
     }
 }

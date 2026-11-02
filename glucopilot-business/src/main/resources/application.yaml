@@ -74,34 +74,10 @@ spring:
       # 不配置则落到容器默认值（Tomcat 通常 30s），等于把原来的 60s 悄悄改小。
       request-timeout: 60s
   ai:
-    # 显式声明生效的聊天 provider。
-    # 原因：各 provider 的自动装配条件都是
-    # @ConditionalOnProperty(name="spring.ai.model.chat", havingValue="<provider>", matchIfMissing=true)，
-    # 引入第二个 provider（如接入多模态）后若不显式指定，两者会争抢同一个 ChatModel Bean。
-    model:
-      chat: deepseek
-    deepseek:
-      api-key: ${AI_DEEPSEEK_API_KEY:${deepseek.apiKey:}}
-      chat:
-        # 官方枚举名（DeepSeekApi.ChatModel.DEEPSEEK_V4_FLASH = "deepseek-v4-flash"）。
-        # 此前用的是不在枚举内的 "deepseek-flash"，实测可通但不规范，2026-09-23 统一为官方名。
-        model: deepseek-v4-flash
-        # deepseek-v4-flash 是推理模型：默认会先输出一大段思维链。
-        # 实测同一问题：默认 7737ms / 426 tokens，关掉后 2293ms / 51 tokens，正文质量无肉眼差异。
-        # 需要推理能力的场景（饮食分析、血糖识别）由 ai.scenes.<scene>.thinking 按场景单独开启。
-        thinking:
-          type: disabled
-        # 兜底：思维链会吃光 max_tokens，设太小会出现 content 为空 + finish_reason=length
-        max-tokens: 2048
-    # 模型调用的自动重试（DeepSeekChatModel 内部持有 RetryTemplate，真的会重试）。
-    # 默认值 max-attempts=10、backoff 初始 2s × 5 倍，与本模块 60s 的 SSE 超时叠加后，
-    # 上游 5xx 时用户会长时间「正在思考」然后一次性拿到 error。这里显式收紧。
-    retry:
-      max-attempts: 3
-      on-client-errors: false
-      backoff:
-        initial-interval: 1s
-        multiplier: 2
+    # 协议统一（2026-11）之后不再有 spring.ai.deepseek.*：
+    # 文本与视觉都走 OpenAiChatModel（DeepSeek 官方端点本身就是 OpenAI 兼容的）。
+    # 模型行来自数据库（ai_model_config），连接参数与凭据来自下面的 ai.channels.*，
+    # 因此这里只需要保留「工具调用护栏」这类与 provider 无关的框架行为。
     tools:
       limits:
         # 工具调用护栏：超过上限直接抛异常，避免模型陷入反复调用的死循环（当前未注册工具，先立好规矩）
@@ -141,18 +117,10 @@ management:
 # 场景 → 提示词/参数、记忆窗口、医疗安全词、工具白名单。
 #
 # 场景是 AI 模块的组织单位（见 SceneCode）：对话 / 对话内图片 / 饮食分析 / 血糖识别。
-# 场景里 model-code、temperature、max-tokens、thinking 都是**可选覆盖**，
-# 不写就继承上面的 spring.ai.deepseek.chat.* ，避免同一份参数维护两处。
+# 场景里 temperature、max-tokens、thinking 都是**可选覆盖**，
+# 不写就继承模型行（ai_model_config）上的值。
 # ---------------------------------------------------------------------------
 ai:
-  # 协议路由（**迁移期临时开关**，协议统一完成后删除本段）。
-  # DeepSeek 官方 API 本身就是 OpenAI 兼容的，我们却一直用 Spring AI 的 DeepSeek 专用实现，
-  # 于是 timeout / maxRetries / proxy 这三个参数根本没地方传（DeepSeekChatOptions 里没有它们）。
-  # 切到 openai 之后走 OpenAiChatModel，三个参数才成为真实配置项。
-  # 保留开关只为回滚：出问题设 AI_ROUTING_MODE=deepseek 重启即可回到旧链路，不必重新发版。
-  routing:
-    mode: ${AI_ROUTING_MODE:openai}
-
   # 会话生命周期（接口 5.3 列表 / 5.4 删除 / 2.23 新建）
   chat:
     # 惰性归档阈值（天）：拉列表时把"进行中但太久没消息"的会话置为 0 归档，0 = 关闭。
@@ -275,17 +243,19 @@ ai:
   # 改一个忘一个就会出现「配置说 A、实际调 B」。
 
   # 通道级配置的统一视图：业务代码只读这一份（AiChannelProperties），两个通道形状完全相同。
-  # 刻意「不改前缀、只加视图」：spring.ai.deepseek.* 仍由 starter 消费、ai.vision.* 仍由
-  # AIProperties.VisionProperties 消费，这里用占位符把它们投影成同一形状，避免为了统一而
-  # 把文本通道搬出 starter（那会丢掉自动装配的 RetryTemplate 与观测）。
+  # 协议统一（S3）之后不再有 spring.ai.deepseek.*：文本通道和视觉通道一样，直接读环境变量。
+  # 注意这里是**兜底**：真正生效的模型行来自数据库（ai_model_config），本段只在库里没有
+  # 可用行时提供通道默认凭据与模型名。
   # 超时只作用于非流式调用（连通性测试、审核、摘要、记忆抽取）；SSE 流式不设读超时。
   channels:
     text:
-      base-url: ${spring.ai.deepseek.base-url:https://api.deepseek.com}
-      api-key: ${spring.ai.deepseek.api-key:}
-      model: ${spring.ai.deepseek.chat.model:}
-      temperature: ${spring.ai.deepseek.chat.temperature:}
-      max-tokens: ${spring.ai.deepseek.chat.max-tokens:}
+      # DeepSeek 官方端点本身就是 OpenAI 兼容的，协议统一后与视觉通道共用 OpenAiChatModel。
+      base-url: ${AI_TEXT_BASE_URL:https://api.deepseek.com}
+      # 兼容历史配置：仍然认 AI_DEEPSEEK_API_KEY 与 application-local.yaml 里的 deepseek.apiKey。
+      api-key: ${AI_DEEPSEEK_API_KEY:${deepseek.apiKey:}}
+      model: ${AI_TEXT_MODEL:deepseek-v4-flash}
+      temperature: ${AI_TEXT_TEMPERATURE:}
+      max-tokens: ${AI_TEXT_MAX_TOKENS:}
       timeout-seconds: ${AI_TEXT_TIMEOUT_SECONDS:60}
       connect-timeout-seconds: ${AI_TEXT_CONNECT_TIMEOUT_SECONDS:10}
     vision:

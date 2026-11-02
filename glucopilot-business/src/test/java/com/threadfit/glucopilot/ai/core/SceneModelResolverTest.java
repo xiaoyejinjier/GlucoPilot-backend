@@ -219,11 +219,13 @@ class SceneModelResolverTest {
     void 视觉场景的参数会进请求级options() {
         when(sceneBindings.binding(SceneCode.CHAT_IMAGE))
                 .thenReturn(binding(null, 0.35, 256, null));
+        when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "qwen-vl-endpoint", AiModelCapability.visionDefaults()));
 
         OpenAiChatOptions options = (OpenAiChatOptions) resolver.visionOptionsBuilder(SceneCode.CHAT_IMAGE).build();
 
         assertEquals(0.35, options.getTemperature());
         assertEquals(256, options.getMaxCompletionTokens());
+        assertEquals("qwen-vl-endpoint", options.getModel(), "发了 options 就必须同时钉住模型，否则 SDK 默认名泄漏");
         assertTrue(resolver.hasOverrides(SceneCode.CHAT_IMAGE));
     }
 
@@ -231,6 +233,7 @@ class SceneModelResolverTest {
     void 饮食分析的参数来自场景绑定() {
         // C2 之后 ai.meal.* 已删除：模型与参数一律走场景绑定 / ai.scenes.*
         when(sceneBindings.binding(SceneCode.MEAL_ANALYSIS)).thenReturn(binding(null, 0.1, 2048, null));
+        when(runtimeConfig.visionSpec()).thenReturn(spec("qwen-vl", "qwen-vl-endpoint", AiModelCapability.visionDefaults()));
 
         OpenAiChatOptions options = (OpenAiChatOptions) resolver.visionOptionsBuilder(SceneCode.MEAL_ANALYSIS).build();
 
@@ -285,6 +288,9 @@ class SceneModelResolverTest {
         assertEquals(1024, options.getMaxCompletionTokens());
         // thinking 只能走私有扩展字段，否则切协议后思维链会静默消失
         assertEquals(Map.of("thinking", Map.of("type", "disabled")), options.getExtraBody());
+        // 模型必须显式钉住：OpenAiChatOptions.builder() 预填的是 SDK 默认名（gpt-5-mini），
+        // 不覆盖就会被当成"调用方指定了模型"原样发给 DeepSeek（实测 400）
+        assertEquals("deepseek-chat", options.getModel());
     }
 
     @Test

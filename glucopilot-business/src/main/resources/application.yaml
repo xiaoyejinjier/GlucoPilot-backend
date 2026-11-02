@@ -151,7 +151,7 @@ ai:
   # 切到 openai 之后走 OpenAiChatModel，三个参数才成为真实配置项。
   # 保留开关只为回滚：出问题设 AI_ROUTING_MODE=deepseek 重启即可回到旧链路，不必重新发版。
   routing:
-    mode: ${AI_ROUTING_MODE:deepseek}
+    mode: ${AI_ROUTING_MODE:openai}
 
   # 会话生命周期（接口 5.3 列表 / 5.4 删除 / 2.23 新建）
   chat:

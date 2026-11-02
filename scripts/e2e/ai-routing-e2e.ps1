@@ -27,6 +27,11 @@ function Check([string]$Name, [bool]$Ok, [string]$Detail = "") {
     if ($Ok) { $script:pass++ ; Write-Host ("  [PASS] {0} {1}" -f $Name, $Detail) -ForegroundColor Green }
     else { $script:fail++ ; Write-Host ("  [FAIL] {0} {1}" -f $Name, $Detail) -ForegroundColor Red }
 }
+function Sql([string]$query) {
+    $out = Invoke-E2eSql $query
+    if ($null -eq $out) { return '' }
+    return ($out -join "`n").Trim()
+}
 
 Save-Json "$outDir\routing-admin-login.json" @{ username = "admin"; password = (Get-E2eAdminPassword) }
 $lr = & curl.exe -s -X POST "$admin/auth/sessions" -H "Content-Type: application/json" --data-binary "@$outDir\routing-admin-login.json"
@@ -109,6 +114,10 @@ Write-Host ""
 Write-Host "---- 结果 ----" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "F) 保存前连通性校验（P1）" -ForegroundColor Cyan
+# 重跑友好：模型编码有唯一约束，上一轮留下的同名行会让本次 create 直接 409。
+# 后台没有删除接口，这里用逻辑删除清掉现场（与 V50 的清理方式一致）。
+Sql "UPDATE sugar_health.ai_model_config SET is_deleted = 1, deleted_at = NOW(3) WHERE model_code = 'e2e-bad-endpoint' AND is_deleted = 0;" | Out-Null
+
 $badModel = @{
     modelCode       = "e2e-bad-endpoint"
     modelName       = "E2E 故意写错的模型"

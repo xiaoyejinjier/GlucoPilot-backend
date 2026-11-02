@@ -244,7 +244,7 @@ public class SceneModelResolver {
         // 也不能把 DeepSeek options 交给 OpenAI 客户端——那会在发送前抛 ClassCastException。
         boolean openAi = scene.isRequiresVision()
                 || protocolResolver.protocolFor(spec) == AiProtocol.OPENAI_COMPAT;
-        return openAi ? openAiOptions(scene) : deepSeekOptions(scene);
+        return openAi ? openAiOptions(scene, spec) : deepSeekOptions(scene);
     }
 
     /** DeepSeek 专用协议的请求级参数（迁移期用，协议统一后删除）。 */
@@ -295,15 +295,17 @@ public class SceneModelResolver {
      * 只能作为私有扩展塞进请求体（{@code extraBody}）。视觉场景<b>不写</b>它——
      * 百炼的视觉模型不认这个字段，硬发只会 400。
      */
-    private ChatOptions.Builder<?> openAiOptions(SceneCode scene) {
+    private ChatOptions.Builder<?> openAiOptions(SceneCode scene, AiModelSpec spec) {
         AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
         SceneProperties config = aiProperties.scene(scene);
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
 
+        boolean modelSet = false;
         String boundEndpoint = boundEndpointFor(scene, binding);
         if (boundEndpoint != null) {
             // 没有这条，视觉场景的绑定只对参数有效、对模型永远无效
             builder.model(boundEndpoint);
+            modelSet = true;
         }
         Double temperature = binding.temperature() != null ? binding.temperature() : config.getTemperature();
         Integer maxTokens = binding.maxTokens() != null ? binding.maxTokens() : config.getMaxTokens();
@@ -324,6 +326,12 @@ public class SceneModelResolver {
         if (boundEndpoint == null && temperature == null && maxTokens == null && !thinkingApplied) {
             // 三个字段都给不出时：继承模型自身的参数，不额外发请求级 options
             return null;
+        }
+        if (!modelSet && spec != null) {
+            // 必须显式钉住模型：OpenAiChatOptions.builder() 会预填 SDK 默认模型名，
+            // 这个默认值会被 DynamicChatModel 当成"调用方指定了模型"而原样发给厂商
+            // （实测发到 DeepSeek 端点是 400：The supported API model names are ... but you passed gpt-5-mini）。
+            builder.model(spec.modelEndpoint());
         }
         return builder;
     }
@@ -422,6 +430,8 @@ public class SceneModelResolver {
             return builder;
         }
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
+                // 同 openAiOptions：不显式写 model 就会被 SDK 默认值（gpt-5-mini）顶替
+                .model(spec.modelEndpoint())
                 .maxCompletionTokens(maxTokens)
                 .extraBody(Map.of("thinking", Map.of("type", "disabled")));
         if (temperature != null) {

@@ -9,7 +9,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import com.threadfit.glucopilot.ai.prompt.advisor.DynamicPromptAdvisor;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 
 /**

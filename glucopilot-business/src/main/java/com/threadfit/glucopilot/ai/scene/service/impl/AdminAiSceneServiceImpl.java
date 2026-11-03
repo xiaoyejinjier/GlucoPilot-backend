@@ -50,7 +50,7 @@ import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 public class AdminAiSceneServiceImpl implements AdminAiSceneService {
 
     private static final Map<Integer, String> PROVIDER_TEXT = Map.of(
-            1, "DeepSeek（自研 SDK）",
+            1, "DeepSeek（OpenAI 兼容）",
             2, "OpenAI 兼容",
             3, "通义千问",
             4, "文心一言",

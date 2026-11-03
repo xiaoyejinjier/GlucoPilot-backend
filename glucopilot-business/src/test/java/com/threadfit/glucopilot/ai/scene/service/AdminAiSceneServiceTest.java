@@ -280,7 +280,7 @@ class AdminAiSceneServiceTest {
         assertEquals(7, list.getRecords().size());
         assertEquals(1, list.getModels().size());
         assertEquals("DeepSeek Flash", list.getModels().get(0).getName());
-        assertEquals("DeepSeek（自研 SDK）", list.getModels().get(0).getProviderName());
+        assertEquals("DeepSeek（OpenAI 兼容）", list.getModels().get(0).getProviderName());
         // 下拉要按能力过滤：历史行没有 capability 时按 text 兜底，前端据此只列给文本场景
         assertTrue(list.getModels().get(0).getCapability().contains("text"));
         assertTrue(list.getModels().get(0).getCapabilityText().contains("文本"));

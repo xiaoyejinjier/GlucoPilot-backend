@@ -1,4 +1,10 @@
 package com.threadfit.glucopilot.ai.tool;
+import com.threadfit.glucopilot.ai.tool.builtin.FoodNutritionTools;
+import com.threadfit.glucopilot.ai.tool.builtin.GlucoseQueryTools;
+import com.threadfit.glucopilot.ai.tool.builtin.HealthProfileTools;
+import com.threadfit.glucopilot.ai.tool.builtin.MealRecordTools;
+import com.threadfit.glucopilot.ai.tool.builtin.StatisticsTools;
+import com.threadfit.glucopilot.ai.tool.runtime.AiToolContext;
 
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiToolConfig;

@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.tool;
+package com.threadfit.glucopilot.ai.tool.runtime;
 
 import org.springframework.ai.chat.model.ToolContext;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatCompletionService;

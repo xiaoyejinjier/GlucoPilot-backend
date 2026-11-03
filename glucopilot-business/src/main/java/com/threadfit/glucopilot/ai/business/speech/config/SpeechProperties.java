@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.speech;
+package com.threadfit.glucopilot.ai.business.speech.config;
 
 import lombok.Getter;
 import lombok.Setter;

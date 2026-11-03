@@ -1,4 +1,5 @@
-package com.threadfit.glucopilot.ai.tool;
+package com.threadfit.glucopilot.ai.tool.trace;
+import com.threadfit.glucopilot.ai.tool.runtime.AiToolContext;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatToolCall;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper;

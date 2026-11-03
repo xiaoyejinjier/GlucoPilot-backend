@@ -1,4 +1,5 @@
-package com.threadfit.glucopilot.ai.tool;
+package com.threadfit.glucopilot.ai.tool.builtin;
+import com.threadfit.glucopilot.ai.tool.runtime.AiToolContext;
 
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import com.threadfit.glucopilot.glucose.entity.GlucoseNode;

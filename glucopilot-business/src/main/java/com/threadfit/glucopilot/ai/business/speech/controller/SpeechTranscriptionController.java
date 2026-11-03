@@ -1,4 +1,6 @@
-package com.threadfit.glucopilot.ai.business.speech;
+package com.threadfit.glucopilot.ai.business.speech.controller;
+import com.threadfit.glucopilot.ai.business.speech.dto.SpeechDtos;
+import com.threadfit.glucopilot.ai.business.speech.service.SpeechTranscriptionService;
 
 import com.threadfit.glucopilot.common.api.ApiResponse;
 import com.threadfit.glucopilot.common.context.RequestContext;

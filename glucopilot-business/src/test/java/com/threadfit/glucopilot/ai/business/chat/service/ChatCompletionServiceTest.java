@@ -11,7 +11,7 @@ import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
 import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.business.chat.support.EnglishPreambleGuard;
-import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
+import com.threadfit.glucopilot.ai.tool.runtime.AiToolRegistry;
 import com.threadfit.glucopilot.ai.business.chat.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;

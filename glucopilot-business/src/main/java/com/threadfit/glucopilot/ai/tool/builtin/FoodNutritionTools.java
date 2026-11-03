@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.tool;
+package com.threadfit.glucopilot.ai.tool.builtin;
 
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;

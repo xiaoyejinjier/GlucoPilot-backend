@@ -1,10 +1,11 @@
 package com.threadfit.glucopilot.ai.config;
+import com.threadfit.glucopilot.ai.tool.runtime.AiToolRegistry;
 
-import com.threadfit.glucopilot.ai.tool.FoodNutritionTools;
-import com.threadfit.glucopilot.ai.tool.GlucoseQueryTools;
-import com.threadfit.glucopilot.ai.tool.HealthProfileTools;
-import com.threadfit.glucopilot.ai.tool.MealRecordTools;
-import com.threadfit.glucopilot.ai.tool.StatisticsTools;
+import com.threadfit.glucopilot.ai.tool.builtin.FoodNutritionTools;
+import com.threadfit.glucopilot.ai.tool.builtin.GlucoseQueryTools;
+import com.threadfit.glucopilot.ai.tool.builtin.HealthProfileTools;
+import com.threadfit.glucopilot.ai.tool.builtin.MealRecordTools;
+import com.threadfit.glucopilot.ai.tool.builtin.StatisticsTools;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;

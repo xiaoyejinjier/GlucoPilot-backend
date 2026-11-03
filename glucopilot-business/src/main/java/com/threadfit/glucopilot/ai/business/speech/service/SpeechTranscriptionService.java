@@ -1,4 +1,6 @@
-package com.threadfit.glucopilot.ai.business.speech;
+package com.threadfit.glucopilot.ai.business.speech.service;
+import com.threadfit.glucopilot.ai.business.speech.dto.SpeechDtos;
+import com.threadfit.glucopilot.ai.business.speech.config.SpeechProperties;
 
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.common.api.ErrorCode;

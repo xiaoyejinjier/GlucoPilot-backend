@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.speech;
+package com.threadfit.glucopilot.ai.business.speech.dto;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;

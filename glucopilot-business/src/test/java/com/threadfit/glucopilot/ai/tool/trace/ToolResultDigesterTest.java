@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.tool;
+package com.threadfit.glucopilot.ai.tool.trace;
 
 import org.junit.jupiter.api.Test;
 

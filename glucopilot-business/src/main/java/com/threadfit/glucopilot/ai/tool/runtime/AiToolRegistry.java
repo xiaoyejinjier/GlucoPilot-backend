@@ -1,4 +1,5 @@
-package com.threadfit.glucopilot.ai.tool;
+package com.threadfit.glucopilot.ai.tool.runtime;
+import com.threadfit.glucopilot.ai.tool.trace.ToolCallTraceRecorder;
 
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import lombok.RequiredArgsConstructor;

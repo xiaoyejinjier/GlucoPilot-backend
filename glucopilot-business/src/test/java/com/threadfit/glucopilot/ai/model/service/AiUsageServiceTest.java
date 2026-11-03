@@ -1,8 +1,8 @@
 package com.threadfit.glucopilot.ai.model.service;
 
 import com.threadfit.glucopilot.ai.model.dto.AiUsageDtos;
-import com.threadfit.glucopilot.ai.model.mapper.AiUsageMapper;
-import com.threadfit.glucopilot.ai.model.mapper.ChatUsageRow;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatUsageRow;
 import com.threadfit.glucopilot.ai.model.service.impl.AiUsageServiceImpl;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
@@ -32,26 +32,26 @@ import static org.mockito.Mockito.when;
  */
 class AiUsageServiceTest {
 
-    private AiUsageMapper usageMapper;
+    private ChatMessageMapper messageMapper;
     private AiUsageService service;
 
     @BeforeEach
     void setUp() {
-        usageMapper = mock(AiUsageMapper.class);
-        service = new AiUsageServiceImpl(usageMapper);
+        messageMapper = mock(ChatMessageMapper.class);
+        service = new AiUsageServiceImpl(messageMapper);
     }
 
     @Test
     @DisplayName("不传日期时默认看最近七天，并把结束日的次日零点作为开区间上界")
     void defaultWindowIsLastSevenDays() {
         LocalDate today = LocalDate.now();
-        when(usageMapper.selectDailyUsage(any(), any())).thenReturn(List.of());
+        when(messageMapper.selectDailyUsage(any(), any())).thenReturn(List.of());
 
         AiUsageDtos.Report report = service.report(null, null);
 
         assertThat(report.startDate()).isEqualTo(today.minusDays(6).toString());
         assertThat(report.endDate()).isEqualTo(today.toString());
-        verify(usageMapper).selectDailyUsage(
+        verify(messageMapper).selectDailyUsage(
                 today.minusDays(6).atStartOfDay(),
                 today.plusDays(1).atStartOfDay());
     }
@@ -59,13 +59,13 @@ class AiUsageServiceTest {
     @Test
     @DisplayName("显式区间原样透传，上界是结束日次日零点")
     void explicitRangeUsesHalfOpenWindow() {
-        when(usageMapper.selectDailyUsage(any(), any())).thenReturn(List.of());
+        when(messageMapper.selectDailyUsage(any(), any())).thenReturn(List.of());
 
         AiUsageDtos.Report report = service.report(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 3));
 
         assertThat(report.startDate()).isEqualTo("2026-10-01");
         assertThat(report.endDate()).isEqualTo("2026-10-03");
-        verify(usageMapper).selectDailyUsage(
+        verify(messageMapper).selectDailyUsage(
                 LocalDateTime.of(2026, 10, 1, 0, 0),
                 LocalDateTime.of(2026, 10, 4, 0, 0));
     }
@@ -73,7 +73,7 @@ class AiUsageServiceTest {
     @Test
     @DisplayName("只给结束日期时，起点往前推七天")
     void onlyEndDateInfersStart() {
-        when(usageMapper.selectDailyUsage(any(), any())).thenReturn(List.of());
+        when(messageMapper.selectDailyUsage(any(), any())).thenReturn(List.of());
 
         AiUsageDtos.Report report = service.report(null, LocalDate.of(2026, 9, 30));
 
@@ -88,7 +88,7 @@ class AiUsageServiceTest {
                 .isInstanceOf(BizException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.BAD_REQUEST)
                 .hasMessageContaining("起始日期不能晚于结束日期");
-        verify(usageMapper, never()).selectDailyUsage(any(), any());
+        verify(messageMapper, never()).selectDailyUsage(any(), any());
     }
 
     @Test
@@ -102,13 +102,13 @@ class AiUsageServiceTest {
                 .hasMessageContaining("最多 " + AiUsageService.MAX_RANGE_DAYS + " 天");
         // 恰好等于上限时应当放行（边界是"最多 92 天"，不是"少于"）
         assertThatCode(() -> service.report(start, end.minusDays(1))).doesNotThrowAnyException();
-        verify(usageMapper).selectDailyUsage(any(), any());
+        verify(messageMapper).selectDailyUsage(any(), any());
     }
 
     @Test
     @DisplayName("汇总按行累加，total 等于 prompt+completion，缺模型的行显示占位")
     void aggregatesRowsAndLabelsUnknownModel() {
-        when(usageMapper.selectDailyUsage(any(), any())).thenReturn(List.of(
+        when(messageMapper.selectDailyUsage(any(), any())).thenReturn(List.of(
                 row(LocalDate.of(2026, 10, 2), "deepseek-v4-pro", 100, 20, 3),
                 row(LocalDate.of(2026, 10, 2), null, 7, 3, 1),
                 row(LocalDate.of(2026, 10, 1), "deepseek-v4-flash", 50, 10, 2)));
@@ -128,7 +128,7 @@ class AiUsageServiceTest {
     @Test
     @DisplayName("没有数据时返回零合计而不是 null")
     void emptyResultYieldsZeroTotals() {
-        when(usageMapper.selectDailyUsage(any(), any())).thenReturn(List.of());
+        when(messageMapper.selectDailyUsage(any(), any())).thenReturn(List.of());
 
         AiUsageDtos.Report report = service.report(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 1));
 

@@ -1,8 +1,8 @@
 package com.threadfit.glucopilot.ai.model.service.impl;
 
 import com.threadfit.glucopilot.ai.model.dto.AiUsageDtos;
-import com.threadfit.glucopilot.ai.model.mapper.AiUsageMapper;
-import com.threadfit.glucopilot.ai.model.mapper.ChatUsageRow;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatUsageRow;
 import com.threadfit.glucopilot.ai.model.service.AiUsageService;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
@@ -28,7 +28,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AiUsageServiceImpl implements AiUsageService {
 
-    private final AiUsageMapper usageMapper;
+    private final ChatMessageMapper messageMapper;
 
     @Override
     public AiUsageDtos.Report report(LocalDate startDate, LocalDate endDate) {
@@ -47,7 +47,7 @@ public class AiUsageServiceImpl implements AiUsageService {
         // 半开区间：结束日期当天 23:59:59.999 也要算进来，所以 to 取次日零点
         LocalDateTime from = start.atStartOfDay();
         LocalDateTime to = end.plusDays(1).atStartOfDay();
-        List<ChatUsageRow> rows = usageMapper.selectDailyUsage(from, to);
+        List<ChatUsageRow> rows = messageMapper.selectDailyUsage(from, to);
 
         List<AiUsageDtos.DailyUsage> usages = new ArrayList<>(rows.size());
         long promptTotal = 0;

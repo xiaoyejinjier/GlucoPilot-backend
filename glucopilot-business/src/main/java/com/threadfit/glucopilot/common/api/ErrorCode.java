@@ -2,20 +2,18 @@ package com.threadfit.glucopilot.common.api;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.http.HttpStatus;
 
-/**
- * 统一业务错误码：HTTP 三位语义 + body.code 五位细分。
- * 成功固定 code=0；后续细分只在同族下追加（如 40901）。
- */
+/** 统一业务错误码：HTTP 三位语义 + body.code 五位细分。 成功固定 code=0；后续细分只在同族下追加（如 40901）。 */
 @Getter
 @RequiredArgsConstructor
 public enum ErrorCode {
-
     SUCCESS(HttpStatus.OK, 0, "ok"),
     BAD_REQUEST(HttpStatus.BAD_REQUEST, 40000, "参数格式、类型或必填校验失败"),
     BIZ_REJECTED(HttpStatus.BAD_REQUEST, 40001, "业务校验失败或凭证错误"),
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, 40100, "未登录或 Token 失效"),
+    SESSION_REPLACED(HttpStatus.UNAUTHORIZED, 40101, "账号已在其他终端登录，请重新登录"),
     FORBIDDEN(HttpStatus.FORBIDDEN, 40300, "无权限、账号禁用或注销中"),
     MESSAGE_REQUEST_PENDING(HttpStatus.FORBIDDEN, 40301, "等待对方回复或相互关注后可继续发信息"),
     NOT_FOUND(HttpStatus.NOT_FOUND, 40400, "资源不存在或不属于当前用户"),

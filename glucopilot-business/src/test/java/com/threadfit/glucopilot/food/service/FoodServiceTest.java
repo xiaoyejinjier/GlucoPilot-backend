@@ -9,6 +9,7 @@ import com.threadfit.glucopilot.food.entity.FoodNutrition;
 import com.threadfit.glucopilot.food.mapper.FoodCategoryMapper;
 import com.threadfit.glucopilot.food.mapper.FoodNutritionMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -16,11 +17,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 /**
  * {@link FoodService} 的单元测试。
@@ -39,9 +42,24 @@ class FoodServiceTest {
     @Mock
     private FoodNutritionMapper foodNutritionMapper;
 
+    @Mock
+    private FoodCatalogCache cache;
+
     /** Mockito 会把上面的两个 Mock Mapper 注入被测试的 FoodService。 */
     @InjectMocks
     private FoodService service;
+
+    @BeforeEach
+    void useDatabaseCallbacksForExistingMappingTests() {
+        lenient().when(cache.categories(any())).thenAnswer(invocation -> {
+            Supplier<?> query = invocation.getArgument(0);
+            return query.get();
+        });
+        lenient().when(cache.foodDetail(any(), any())).thenAnswer(invocation -> {
+            Supplier<?> query = invocation.getArgument(1);
+            return query.get();
+        });
+    }
 
     /** 验证分类实体转换为 DTO 时，Long 类型 ID 会转换为 String。 */
     @Test

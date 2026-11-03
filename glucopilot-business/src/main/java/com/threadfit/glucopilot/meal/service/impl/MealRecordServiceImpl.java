@@ -21,7 +21,9 @@ import com.threadfit.glucopilot.meal.mapper.MealFoodItemMapper;
 import com.threadfit.glucopilot.meal.mapper.MealRecordMapper;
 import com.threadfit.glucopilot.meal.service.MealRecordService;
 import com.threadfit.glucopilot.meal.vo.MealVos;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -42,15 +44,16 @@ import java.util.stream.Collectors;
 
 /**
  * 饮食记录业务实现。
+ *
  * <p>核心语义：
+ *
  * <ul>
  *   <li><b>覆盖保存</b>：按 (userId, recordDate, nodeCode) 唯一键定位当天该餐点的活跃记录，命中则 update，否则 insert；
- *       明细采用「旧记录整体逻辑删除 + 重新插入」的重建方式，天然丢弃历史版本；</li>
- *   <li><b>快照固化</b>：入库的 carbsG / 明细营养值均按请求原样落库，不反向 join 营养库重算（禁用字段级 PATCH，
- *       要改就整体重新保存覆盖）；</li>
+ *       明细采用「旧记录整体逻辑删除 + 重新插入」的重建方式，天然丢弃历史版本；
+ *   <li><b>快照固化</b>：入库的 carbsG / 明细营养值均按请求原样落库，不反向 join 营养库重算（禁用字段级 PATCH， 要改就整体重新保存覆盖）；
  *   <li><b>预测三列</b>（predictNow / predictSuggest / suggestText）只校验范围、不改写，由 prediction 客户端串联携带，
- *       即使该模块未上线也可存 null，两模块保持解耦；</li>
- *   <li><b>recordedAt 一律取服务端当前时间</b>，防止客户端伪造记录时点。</li>
+ *       即使该模块未上线也可存 null，两模块保持解耦；
+ *   <li><b>recordedAt 一律取服务端当前时间</b>，防止客户端伪造记录时点。
  * </ul>
  */
 @Service
@@ -58,6 +61,7 @@ import java.util.stream.Collectors;
 public class MealRecordServiceImpl implements MealRecordService {
 
     private static final int TEXT_MAX = 512;
+
     /** 档案汇总高频食物条数上限。 */
     private static final int TOP_FOOD_LIMIT = 4;
 
@@ -87,11 +91,13 @@ public class MealRecordServiceImpl implements MealRecordService {
         BigDecimal carbsG = resolveCarbsG(request.getCarbsG(), items);
 
         // 按 (user_id, record_date, node_code) 查当天该餐点的活跃主记录：命中即覆盖更新，否则新建
-        MealRecord existing = mealRecordMapper.selectOne(new LambdaQueryWrapper<MealRecord>()
-                .eq(MealRecord::getUserId, userId)
-                .eq(MealRecord::getRecordDate, request.getRecordDate())
-                .eq(MealRecord::getNodeCode, request.getNodeCode())
-                .last("LIMIT 1"));
+        MealRecord existing =
+                mealRecordMapper.selectOne(
+                        new LambdaQueryWrapper<MealRecord>()
+                                .eq(MealRecord::getUserId, userId)
+                                .eq(MealRecord::getRecordDate, request.getRecordDate())
+                                .eq(MealRecord::getNodeCode, request.getNodeCode())
+                                .last("LIMIT 1"));
 
         // recordedAt 统一取服务端当前时间，防客户端伪造；prediction 三列原样落库不校验范围之外的值
         LocalDateTime at = LocalDateTime.now();
@@ -131,36 +137,43 @@ public class MealRecordServiceImpl implements MealRecordService {
 
         // 明细整体重建：先逻辑删除旧项再逐条插入快照
         replaceItems(mealId, items);
-        return MealVos.SaveResult.builder()
-                .id(String.valueOf(mealId))
-                .created(created)
-                .build();
+        return MealVos.SaveResult.builder().id(String.valueOf(mealId)).created(created).build();
     }
 
     @Override
     public MealVos.DayMeals listDay(Long userId, LocalDate recordDate) {
         // 查询用户当天全部活跃餐点记录，按 nodeCode（餐次先后）排序
-        List<MealRecord> records = mealRecordMapper.selectList(new LambdaQueryWrapper<MealRecord>()
-                .eq(MealRecord::getUserId, userId)
-                .eq(MealRecord::getRecordDate, recordDate)
-                .orderByAsc(MealRecord::getNodeCode)
-                .orderByAsc(MealRecord::getId));
+        List<MealRecord> records =
+                mealRecordMapper.selectList(
+                        new LambdaQueryWrapper<MealRecord>()
+                                .eq(MealRecord::getUserId, userId)
+                                .eq(MealRecord::getRecordDate, recordDate)
+                                .orderByAsc(MealRecord::getNodeCode)
+                                .orderByAsc(MealRecord::getId));
         if (records.isEmpty()) {
             return MealVos.DayMeals.builder().recordDate(recordDate).meals(List.of()).build();
         }
         // 一次性批量取出当天所有餐点的活跃明细，按 mealId 分组，避免 N+1 查询
         List<Long> mealIds = records.stream().map(MealRecord::getId).toList();
-        Map<Long, List<MealFoodItem>> itemsByMeal = mealFoodItemMapper.selectList(
-                        new LambdaQueryWrapper<MealFoodItem>()
-                                .in(MealFoodItem::getMealId, mealIds)
-                                .orderByAsc(MealFoodItem::getSortNo)
-                                .orderByAsc(MealFoodItem::getId))
-                .stream()
-                .collect(Collectors.groupingBy(MealFoodItem::getMealId));
+        Map<Long, List<MealFoodItem>> itemsByMeal =
+                mealFoodItemMapper
+                        .selectList(
+                                new LambdaQueryWrapper<MealFoodItem>()
+                                        .in(MealFoodItem::getMealId, mealIds)
+                                        .orderByAsc(MealFoodItem::getSortNo)
+                                        .orderByAsc(MealFoodItem::getId))
+                        .stream()
+                        .collect(Collectors.groupingBy(MealFoodItem::getMealId));
 
-        List<MealVos.MealDetail> meals = records.stream()
-                .map(r -> toDetail(r, userId, itemsByMeal.getOrDefault(r.getId(), List.of())))
-                .toList();
+        List<MealVos.MealDetail> meals =
+                records.stream()
+                        .map(
+                                r ->
+                                        toDetail(
+                                                r,
+                                                userId,
+                                                itemsByMeal.getOrDefault(r.getId(), List.of())))
+                        .toList();
         return MealVos.DayMeals.builder().recordDate(recordDate).meals(meals).build();
     }
 
@@ -169,19 +182,25 @@ public class MealRecordServiceImpl implements MealRecordService {
     public void remove(Long userId, Long id) {
         // 先校验记录归属当前用户，再主记录+明细一并逻辑删除（is_deleted=1）
         MealRecord row = requireOwned(userId, id);
-        SoftDeletes.mark(mealRecordMapper, MealRecord::getId, row.getId(),
-                MealRecord::getIsDeleted, MealRecord::getDeletedAt, MealRecord::getDeletedBy);
+        SoftDeletes.mark(
+                mealRecordMapper,
+                MealRecord::getId,
+                row.getId(),
+                MealRecord::getIsDeleted,
+                MealRecord::getDeletedAt,
+                MealRecord::getDeletedBy);
         markItemsDeleted(row.getId());
     }
 
     @Override
     public List<MealRecord> listRange(Long userId, LocalDate from, LocalDate to) {
-        return mealRecordMapper.selectList(new LambdaQueryWrapper<MealRecord>()
-                .eq(MealRecord::getUserId, userId)
-                .ge(MealRecord::getRecordDate, from)
-                .le(MealRecord::getRecordDate, to)
-                .orderByAsc(MealRecord::getRecordDate)
-                .orderByAsc(MealRecord::getId));
+        return mealRecordMapper.selectList(
+                new LambdaQueryWrapper<MealRecord>()
+                        .eq(MealRecord::getUserId, userId)
+                        .ge(MealRecord::getRecordDate, from)
+                        .le(MealRecord::getRecordDate, to)
+                        .orderByAsc(MealRecord::getRecordDate)
+                        .orderByAsc(MealRecord::getId));
     }
 
     @Override
@@ -189,9 +208,8 @@ public class MealRecordServiceImpl implements MealRecordService {
         if (userIds == null || userIds.isEmpty()) {
             return Collections.emptyMap();
         }
-        return mealRecordMapper.selectList(new QueryWrapper<MealRecord>()
-                        .select("user_id")
-                        .in("user_id", userIds))
+        return mealRecordMapper
+                .selectList(new QueryWrapper<MealRecord>().select("user_id").in("user_id", userIds))
                 .stream()
                 .collect(Collectors.groupingBy(MealRecord::getUserId, Collectors.counting()));
     }
@@ -211,32 +229,49 @@ public class MealRecordServiceImpl implements MealRecordService {
 
     @Override
     public MealVos.ArchiveSummary archiveSummary(Long userId, LocalDate from, LocalDate to) {
-        List<MealRecord> records = mealRecordMapper.selectList(new LambdaQueryWrapper<MealRecord>()
-                .eq(MealRecord::getUserId, userId)
-                .ge(MealRecord::getRecordDate, from)
-                .le(MealRecord::getRecordDate, to));
+        List<MealRecord> records =
+                mealRecordMapper.selectList(
+                        new LambdaQueryWrapper<MealRecord>()
+                                .eq(MealRecord::getUserId, userId)
+                                .ge(MealRecord::getRecordDate, from)
+                                .le(MealRecord::getRecordDate, to));
         int recordDays = (int) records.stream().map(MealRecord::getRecordDate).distinct().count();
         // 均碳：按主记录 carbsG 快照取均餐值（无值记录不参与）
         BigDecimal avgCarbsG = averageOf(records.stream().map(MealRecord::getCarbsG).toList());
         // 均热：明细热量先按餐求和，再取均餐值（无热量明细的餐点不参与）
-        List<MealFoodItem> items = records.isEmpty() ? List.of() : mealFoodItemMapper.selectList(
-                new LambdaQueryWrapper<MealFoodItem>()
-                        .in(MealFoodItem::getMealId, records.stream().map(MealRecord::getId).toList()));
-        Map<Long, BigDecimal> calByMeal = items.stream()
-                .filter(i -> i.getCaloriesKcal() != null)
-                .collect(Collectors.groupingBy(MealFoodItem::getMealId,
-                        Collectors.reducing(BigDecimal.ZERO, MealFoodItem::getCaloriesKcal, BigDecimal::add)));
+        List<MealFoodItem> items =
+                records.isEmpty()
+                        ? List.of()
+                        : mealFoodItemMapper.selectList(
+                                new LambdaQueryWrapper<MealFoodItem>()
+                                        .in(
+                                                MealFoodItem::getMealId,
+                                                records.stream().map(MealRecord::getId).toList()));
+        Map<Long, BigDecimal> calByMeal =
+                items.stream()
+                        .filter(i -> i.getCaloriesKcal() != null)
+                        .collect(
+                                Collectors.groupingBy(
+                                        MealFoodItem::getMealId,
+                                        Collectors.reducing(
+                                                BigDecimal.ZERO,
+                                                MealFoodItem::getCaloriesKcal,
+                                                BigDecimal::add)));
         BigDecimal avgCal = averageOf(new ArrayList<>(calByMeal.values()));
-        List<String> topFoods = items.stream()
-                .map(MealFoodItem::getFoodName)
-                .filter(StringUtils::hasText)
-                .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()))
-                .entrySet().stream()
-                .sorted(Map.Entry.<String, Long>comparingByValue().reversed()
-                        .thenComparing(Map.Entry.comparingByKey()))
-                .limit(TOP_FOOD_LIMIT)
-                .map(Map.Entry::getKey)
-                .toList();
+        List<String> topFoods =
+                items.stream()
+                        .map(MealFoodItem::getFoodName)
+                        .filter(StringUtils::hasText)
+                        .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()))
+                        .entrySet()
+                        .stream()
+                        .sorted(
+                                Map.Entry.<String, Long>comparingByValue()
+                                        .reversed()
+                                        .thenComparing(Map.Entry.comparingByKey()))
+                        .limit(TOP_FOOD_LIMIT)
+                        .map(Map.Entry::getKey)
+                        .toList();
         return MealVos.ArchiveSummary.builder()
                 .recordDays(recordDays)
                 .avgCarbsG(avgCarbsG)
@@ -269,17 +304,19 @@ public class MealRecordServiceImpl implements MealRecordService {
 
     /** 校验明细 foodId 存在性：去重后批量查询，任一 foodId 不存在/已下架即拒绝；全部为空（手输）则跳过。 */
     private void validateFoodIds(List<MealDtos.Item> items) {
-        List<Long> foodIds = items.stream()
-                .map(MealDtos.Item::getFoodId)
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
+        List<Long> foodIds =
+                items.stream()
+                        .map(MealDtos.Item::getFoodId)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .toList();
         if (foodIds.isEmpty()) {
             return;
         }
-        Set<Long> available = foodService.listAvailableByIds(foodIds).stream()
-                .map(FoodNutrition::getId)
-                .collect(Collectors.toSet());
+        Set<Long> available =
+                foodService.listAvailableByIds(foodIds).stream()
+                        .map(FoodNutrition::getId)
+                        .collect(Collectors.toSet());
         boolean missing = foodIds.stream().anyMatch(id -> !available.contains(id));
         if (missing) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "食物不存在或已下架");
@@ -294,7 +331,8 @@ public class MealRecordServiceImpl implements MealRecordService {
         if (items.isEmpty()) {
             return null;
         }
-        return trimToMax(items.stream().map(MealDtos.Item::getFoodName).collect(Collectors.joining("、")));
+        return trimToMax(
+                items.stream().map(MealDtos.Item::getFoodName).collect(Collectors.joining("、")));
     }
 
     /** 碳水化合物：优先用入参 carbsG；否则把明细 carbsG 求和兜底；明细也没有则 null。 */
@@ -333,11 +371,13 @@ public class MealRecordServiceImpl implements MealRecordService {
     private void markItemsDeleted(Long mealId) {
         LocalDateTime now = LocalDateTime.now();
         long operator = RequestContext.operatorIdOrZero();
-        mealFoodItemMapper.update(null, new LambdaUpdateWrapper<MealFoodItem>()
-                .eq(MealFoodItem::getMealId, mealId)
-                .set(MealFoodItem::getIsDeleted, 1)
-                .set(MealFoodItem::getDeletedAt, now)
-                .set(MealFoodItem::getDeletedBy, operator));
+        mealFoodItemMapper.update(
+                null,
+                new LambdaUpdateWrapper<MealFoodItem>()
+                        .eq(MealFoodItem::getMealId, mealId)
+                        .set(MealFoodItem::getIsDeleted, 1)
+                        .set(MealFoodItem::getDeletedAt, now)
+                        .set(MealFoodItem::getDeletedBy, operator));
     }
 
     /** 归属校验：记录必须存在且属于当前用户，否则按未找到处理。 */
@@ -353,8 +393,13 @@ public class MealRecordServiceImpl implements MealRecordService {
     private MealVos.MealDetail toDetail(MealRecord r, Long userId, List<MealFoodItem> items) {
         String mediaUrl = null;
         if (r.getMediaId() != null) {
-            MediaFile media = mediaFileService.findOwnedMedia(r.getMediaId(), userId, MediaBizType.MEAL);
-            mediaUrl = media == null ? null : com.threadfit.glucopilot.meal.service.MealPhotoService.path(media.getId());
+            MediaFile media =
+                    mediaFileService.findOwnedMedia(r.getMediaId(), userId, MediaBizType.MEAL);
+            mediaUrl =
+                    media == null
+                            ? null
+                            : com.threadfit.glucopilot.meal.service.MealPhotoService.path(
+                                    media.getId());
         }
         List<MealVos.MealItemDetail> itemDetails = items.stream().map(this::toItemDetail).toList();
         return MealVos.MealDetail.builder()

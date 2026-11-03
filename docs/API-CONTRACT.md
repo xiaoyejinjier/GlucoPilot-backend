@@ -1,5 +1,31 @@
 # API 契约
 
+## 2026-11-03 单字找糖友与 C 端单会话登录
+
+找糖友 `GET /api/v1/community/profiles` 的昵称关键词范围改为去空白后 1～32 字；仍使用昵称字面包含查询，保留分页、排除本人/删除/非正常账号及手机号/openid隔离。不将 `%`、`_` 当通配符，不自动返回所有账号。
+
+C端微信、手机号和邮箱登录统一采用后登录替换旧会话：同一事务锁定账号记录，失效该账号旧会话，再创建新会话；失败回滚保留旧登录。继续使用 `user_session`，无需新增表；不同账号互不替换。旧令牌在后续鉴权时失效；存在其他未过期有效会话时返回HTTP401、业务码40101及“账号已在其他终端登录，请重新登录”，普通过期/退出保持40100。管理端登录不变。
+
+小程序统一请求层识别401，只有响应属于当前令牌时才清理账号状态并返回登录页，防止旧请求踢掉新登录；40101在JavaScript错误对象中仍归一化为40100以兼容现有页面，原始业务码保留在body。前台通知轮询可触发失效检查，后台/离线设备在恢复请求后退出，不宣称离线即时推送。
+
+## 2026-11-02 个人负责功能剩余JDBC统一为MyBatis
+
+异常血糖事件、正餐照片读取、周视图推荐吃法预测值汇总、管理端全局待办、英文内容翻译及头像读取的生产数据库访问统一迁入显式MyBatis Mapper。保留原接口、ApiResponse/DTO、SQL筛选和排序分页、日期/ID类型、异常快照/版本/行锁、用户回复隔离及翻译租约语义；图片的对象键、桶、提供方、MIME和归属校验保持。预测分数算法不改，仅替换预测结果汇总的持久化访问。
+
+本次不新增数据库迁移或前端改动。测试继续使用JDBC建表、准备数据及断言，业务调用通过真实MyBatis和Spring事务执行；日期兼容转换不属于直接JDBC访问。既有社区分包、食品缓存V52、反馈和导出MyBatis实现保留。新增statistics/notification/localization Mapper包纳入独立启动扫描；若依适配器沿用现有显式Mapper递归扫描。
+
+## 2026-11-02 食品分类与详情Redis读缓存
+
+`GET /api/v1/food-categories`与`GET /api/v1/foods/{id}`增加Redis旁路读缓存，HTTP路径、参数、响应和404规则不变。分页食品检索及图片二进制读取保持数据库/对象存储原链路。Redis仅缓存公开食品分类和食品详情JSON，不保存照片文件或个人健康数据。
+
+新增V52的`food_catalog_cache_version`单行版本表。管理端新增、编辑、删除分类及食品（含上/下架、审核启用和换图）在原数据库事务中递增版本。读缓存前使用MyBatis读取当前已提交版本，并将库内随机命名空间、版本与资源ID组成Redis键；事务提交后新请求使用新版本，回滚不切换缓存，旧请求迟到回填只能写旧版本键。每次读取仍保留一条轻量版本查询；历史缓存按默认10分钟TTL回收，不使用KEYS扫描。手工SQL或其他程序直接修改食品表时需同事务递增版本或禁用读缓存。
+
+新增`food.catalog-cache.enabled/ttl/key-prefix`配置，默认启用、10分钟、`glucopilot:food:v1`。Redis读写失败回源数据库并短暂退避，缓存格式损坏按未命中处理；数据库业务错误正常返回。已有事务内的读取绕过缓存，避免未提交数据或旧事务快照写入Redis。无需修改前端和已有Redis连接参数；本次不缓存推荐、私信或权限判断。
+
+## 2026-11-02 远端更新与本地分包兼容
+
+合入远端账号注销、官方文章标签与AI模型路由更新。社区注销清理由shared功能中的独立Service和MyBatis Mapper承接；导出注销清理保持MyBatis实现，先删文件再删任务；既有私信、推荐和社区功能分包保持。官方文章预置/自定义标签沿用远端1～3个去重标签规则，不改变远端新增接口契约。
+
 ## 账号注销（2026-10-27）
 
 **规则**：验证通过即生效，不设强制冷静期；可选 7 天可恢复，默认不勾选。本人发起，管理端不代发起、不代撤销；无资产/权益/订单/会员/券/积分模块，确认页不展示、不拦截、不建空卡片。
@@ -25,6 +51,37 @@
 **管理端**：P0 支持 accountStatus=0..4 筛选、详情返回注销摘要、状态 2/3/4 拒绝启用禁用，不提供代发起/代撤销；协助恢复（同通道核验+二级审批+留痕）排 P1；已注销用户健康档案返回空态并提示“健康数据已删除”。
 
 **迁移与前端清理**：V45 新建 user_account_cancellation、openid 放宽为 NULL、chk_ua_status 扩展至 0..4；V46 verify_channel 扩为 1=短信/2=邮箱/3=微信并新增 pre_status 列；V47 为 auth_sms_code / auth_email_code 增加 scene（login/bind/cancel/recover，默认 login）与（目标,scene,is_used）索引，存量按 login 处理。前端注销或“暂不使用”后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
+
+## 导出持久化统一为MyBatis（2026-10-29，无HTTP契约变化）
+
+DataExportService的任务、健康记录及PDF文件持久化由JdbcTemplate替换为显式MyBatis Mapper；接口路径、Task/Create字段、用户隐藏与管理端保留规则、请求幂等、24小时额度、PDF快照及旧Excel兼容保持不变。日期及文件BLOB采用类型化映射，锁查询保持Spring事务和禁用缓存选项。无数据库迁移或前端改动。
+
+## 社区按功能分包（2026-10-29，无HTTP契约变化）
+
+后端社区改为 `community/{message,comment,follow,reaction,profile,article,draft,tag,report,notification,recommendation,access,moderation,media,shared}/{controller,service,mapper,dto,entity,support}`，各技术层按需建立。私信、评论、关注、点赞收藏、举报和管理端评论业务有独立实现。原资讯点赞收藏接口 `/api/v1/news/{id}/actions` 由社区reaction功能承接，URL、请求和响应保持兼容；内容模块保留委托入口。只调整Java包及依赖，无数据库迁移。启动前需清理旧包编译产物，避免残留Controller重复注册。
+
+## 管理端推荐管理（2026-10-28）
+
+新增 `GET /admin/v1/community/recommendations/{userId}`，要求admin角色及user:manage权限。以该有效用户的真实阅读权限计算前20名，返回用户摘要、生成时间、候选总数、窗口起点、兴趣向量各标签原始权重/衰减后权重/归一化值、L2范数、前20篇的作者/标签/余弦相似度及兴趣/热度/新鲜度/关注四项得分和总分。每篇附标签层面的用户向量值、文章归一化值及点积贡献，供“查看计算”展示。
+
+管理端与用户端复用同一SQL评分表达式和同一兴趣向量计算函数。按同一数据库只读事务生成诊断快照，不增加浏览、点赞或收藏记录，不展示当前用户不可读、未终审发布或已隐藏的候选。用户选择复用GET /admin/v1/users搜索/分页；无有效行为时返回空兴趣向量及冷启动说明，候选不足20篇时返回实际数量，不填充模拟数据。
+
+## 社区个性化推荐（2026-10-28）
+
+`GET /api/v1/community/articles` 新增可选 `sort=RECOMMEND|LATEST`，默认RECOMMEND；following=true或keyword非空时按LATEST处理。返回原Article分页结构，标签筛选、审核发布、作者有效性、文章受众和用户隐藏偏好继续在SQL排序分页前执行；本人文章和管理员文章接口保持原顺序。非法sort返回40000。
+
+推荐V1复用community_article_view、news_user_action、community_article_tag/community_tag和community_follow，无新表或模型服务。以近30个自然日（含当天）的本人有效行为构建标签兴趣：阅读1、当前点赞3、当前收藏5；按14天半衰期衰减，保留兴趣最高的64个标签并进行L2归一化。已下架、不可读、已隐藏、作者失效文章及停用标签不参与兴趣。按文章启用标签向量计算余弦相似度；综合得分为60×相似度＋15×归一化热度＋15×7天新鲜度＋10×关注作者。热度为min(1,ln(1+点赞数+2×收藏数+0.1×去重浏览数)/ln(101))，新鲜度为1/(1+已发布小时数/168)。同分按发布时间、ID倒序；无兴趣历史时自然回落到热度/新鲜度/关注排序，无标签新文章也能入选。权重为明确规则初值，不是训练或评测结果。
+
+只查询本人行为，不使用手机号、健康档案、私信或跨用户兴趣画像。排序在数据库中对全部可读候选计算后分页，不截取最近若干篇再排序，也不改变总数。推荐根据当次请求数据更新，刷新重新排序，不保证行为变化期间跨页的固定快照；小程序沿用按文章ID去重追加。用户可通过sort=LATEST获取固定规则的最新排序。
+
+## 管理端信息管理（2026-10-28）
+
+“用户与服务 / 信息管理”读取现有 `community_message`，不新增表。两个接口均要求 `admin` 角色和 `user:manage` 权限，沿用管理端认证、ApiResponse、requestId。
+
+- `GET /admin/v1/community/messages`：PageQuery（每页1～100），可选 keyword（去空白后最多80字，按消息正文或双方昵称的字面子串查找）、senderId、recipientId（正整数）、readState（READ/UNREAD）。返回按消息ID倒序的 PageResult。
+- `GET /admin/v1/community/messages/conversation/{firstUserId}/{secondUserId}`：两个不同的正整数用户ID，PageQuery分页；返回双方互发的消息，按ID倒序。
+- 列表项：`id/senderId/recipientId:string`、`senderNickname/recipientNickname/content:string`、`createdAt`、`readAt`（可空）。账号停用或资料删除不丢弃已有消息，昵称缺失显示“用户 {id}”。不返回客户端请求编号、手机号、openid、Token。
+- 仅查询，不代用户发信、修改消息或标记已读；管理员查看不影响小程序未读数。前端支持筛选、分页、全文查看和双方对话查看，始终访问真实接口。
 
 ## 私信首次联系限制（2026-10-27）
 
@@ -676,3 +733,6 @@ snapshot格式：schemaVersion=1；sampledAt为UTC ISO时间；host={cpuPercent(
 - 误杀兜底：POST /admin/v1/community/comments/{id}/restore 仅把 is_hidden 归零，不改写 ai_verdict（保留机器判定与 ADMIN/RESTORE 日志），幂等；要求管理员角色与 content:news:edit。评论为先发后审，AI 判 REJECT 立即隐藏；ai_verdict=ERROR 的评论不隐藏（模型故障不应让社区停摆）但也不算通过，运营需按「AI 判定：异常」复查。
 - 管理端页面：文章审核沿用 GET/POST /admin/v1/community/articles 与 review/retry-ai；评论审核对应「社区评论管理」页，数据来自上述列表接口。
 - C 端补「我的评论」：GET /api/v1/community/comments/mine 分页返回本人发出的评论与回复（pageNum/pageSize，上限50），新的在前。刻意不过公开可见性过滤：被 AI 隐藏（is_hidden=1）的评论本人仍可见并由前端标注「已被系统隐藏」，避免用户以为没发出去；文章被删除或下架时记录仍返回、由 articleAvailable=false 表达，不整条吞掉。返回 id/newsId/articleTitle/articleAvailable/content/createdAt/rootCommentId/replyToCommentId/hidden/replyCount/likeCount。本人主动删除（is_deleted=1）的评论不返回。点击条目按 news-detail?id=&comments=1&commentId= 定位高亮。
+# 社区内部结构与持久化统一（2026-10-28）
+
+community 按 `controller / dto / entity / mapper / service / support` 分类；原平铺类的 Java 包引用同步迁移。API 请求路径、HTTP 方法、JSON 字段、鉴权规则、错误码及分页格式不变，小程序与管理端无需改接口调用。原 Service 内的请求/响应 record 移入 dto；数据库访问统一使用现有 MyBatis-Plus 和 Spring 事务，查询参数使用命名绑定，复杂列表条件通过类型化查询对象传递。保留评论/私信请求幂等、回复线程、可见范围、举报通知、事务行锁、审核版本校验及 `FOR UPDATE SKIP LOCKED`。不新增或修改数据库迁移。

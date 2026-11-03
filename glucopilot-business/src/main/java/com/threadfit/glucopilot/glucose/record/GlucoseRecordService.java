@@ -11,13 +11,15 @@ import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.mybatis.SoftDeletes;
+import com.threadfit.glucopilot.file.service.MediaFileService;
 import com.threadfit.glucopilot.glucose.dto.GlucoseDtos;
 import com.threadfit.glucopilot.glucose.entity.GlucoseNode;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
 import com.threadfit.glucopilot.glucose.mapper.GlucoseRecordMapper;
 import com.threadfit.glucopilot.glucose.period.GlucosePeriodService;
-import com.threadfit.glucopilot.file.service.MediaFileService;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -30,8 +32,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 血糖记录：按 (recordDate, nodeCode) 覆盖写入、查询、修改、逻辑删除与日看板。
- * 设备同步（device 模块）也走本服务的 upsertByNode，保证唯一键语义只有一处实现。
+ * 血糖记录：按 (recordDate, nodeCode) 覆盖写入、查询、修改、逻辑删除与日看板。 设备同步（device 模块）也走本服务的
+ * upsertByNode，保证唯一键语义只有一处实现。
  */
 @Service
 @RequiredArgsConstructor
@@ -48,16 +50,23 @@ public class GlucoseRecordService {
     /** C 端覆盖写入：sourceType 缺省按手动。 */
     @Transactional
     public GlucoseDtos.UpsertResult upsertByNode(Long userId, GlucoseDtos.UpsertRequest request) {
-        Integer sourceType = request.getSourceType() == null
-                ? CodeEnum.GlucoseSourceType.MANUAL.getCode()
-                : request.getSourceType();
-        return upsertByNode(userId, request.getRecordDate(), request.getNodeCode(), request.getGlucoseValue(),
-                sourceType, request.getRemark(), request.getMediaId(), null, null);
+        Integer sourceType =
+                request.getSourceType() == null
+                        ? CodeEnum.GlucoseSourceType.MANUAL.getCode()
+                        : request.getSourceType();
+        return upsertByNode(
+                userId,
+                request.getRecordDate(),
+                request.getNodeCode(),
+                request.getGlucoseValue(),
+                sourceType,
+                request.getRemark(),
+                request.getMediaId(),
+                null,
+                null);
     }
 
-    /**
-     * 覆盖写入并返回主键与是否为新建。设备侧 externalKey 非空时追加到备注，便于对账。
-     */
+    /** 覆盖写入并返回主键与是否为新建。设备侧 externalKey 非空时追加到备注，便于对账。 */
     @Transactional
     public GlucoseDtos.UpsertResult upsertByNode(
             Long userId,
@@ -79,12 +88,14 @@ public class GlucoseRecordService {
             throw new BizException(ErrorCode.BIZ_REJECTED, "nodeCode 必须是非餐点血糖节点");
         }
         assertValueInRange(glucoseValue);
-        int resolvedSource = sourceType == null ? CodeEnum.GlucoseSourceType.MANUAL.getCode() : sourceType;
+        int resolvedSource =
+                sourceType == null ? CodeEnum.GlucoseSourceType.MANUAL.getCode() : sourceType;
         CodeEnum.of(CodeEnum.GlucoseSourceType.class, resolvedSource);
         if (resolvedSource == CodeEnum.GlucoseSourceType.OCR.getCode() && mediaId == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "OCR 血糖记录必须关联原始图片");
         }
-        if (mediaId != null && mediaFileService.findOwnedMedia(mediaId, userId, MediaBizType.GLUCOSE) == null) {
+        if (mediaId != null
+                && mediaFileService.findOwnedMedia(mediaId, userId, MediaBizType.GLUCOSE) == null) {
             throw new BizException(ErrorCode.NOT_FOUND, "血糖图片不存在或不可用");
         }
 
@@ -93,7 +104,15 @@ public class GlucoseRecordService {
             merged = (merged == null ? "" : merged + " ") + "[ext:" + externalKey + "]";
         }
 
-        return write(userId, recordDate, nodeCode, glucoseValue, resolvedSource, mediaId, merged, recordedAt);
+        return write(
+                userId,
+                recordDate,
+                nodeCode,
+                glucoseValue,
+                resolvedSource,
+                mediaId,
+                merged,
+                recordedAt);
     }
 
     /** 内部写入：按 (userId, recordDate, nodeCode) 唯一键判断新增或覆盖。 */
@@ -106,11 +125,13 @@ public class GlucoseRecordService {
             Long mediaId,
             String remark,
             LocalDateTime recordedAt) {
-        GlucoseRecord existing = glucoseRecordMapper.selectOne(new LambdaQueryWrapper<GlucoseRecord>()
-                .eq(GlucoseRecord::getUserId, userId)
-                .eq(GlucoseRecord::getRecordDate, recordDate)
-                .eq(GlucoseRecord::getNodeCode, nodeCode)
-                .last("LIMIT 1"));
+        GlucoseRecord existing =
+                glucoseRecordMapper.selectOne(
+                        new LambdaQueryWrapper<GlucoseRecord>()
+                                .eq(GlucoseRecord::getUserId, userId)
+                                .eq(GlucoseRecord::getRecordDate, recordDate)
+                                .eq(GlucoseRecord::getNodeCode, nodeCode)
+                                .last("LIMIT 1"));
 
         String trimmed = trimRemark(remark);
         LocalDateTime at = recordedAt == null ? LocalDateTime.now() : recordedAt;
@@ -146,18 +167,23 @@ public class GlucoseRecordService {
 
     public PageResult<GlucoseDtos.RecordItem> page(
             Long userId, LocalDate startDate, LocalDate endDate, String nodeCode, PageQuery query) {
-        Page<GlucoseRecord> page = glucoseRecordMapper.selectPage(
-                new Page<>(query.getPageNum(), query.getPageSize()),
-                new LambdaQueryWrapper<GlucoseRecord>()
-                        .eq(GlucoseRecord::getUserId, userId)
-                        .ge(startDate != null, GlucoseRecord::getRecordDate, startDate)
-                        .le(endDate != null, GlucoseRecord::getRecordDate, endDate)
-                        .eq(StringUtils.hasText(nodeCode), GlucoseRecord::getNodeCode, nodeCode)
-                        .orderByDesc(GlucoseRecord::getRecordDate)
-                        .orderByDesc(GlucoseRecord::getId));
+        Page<GlucoseRecord> page =
+                glucoseRecordMapper.selectPage(
+                        new Page<>(query.getPageNum(), query.getPageSize()),
+                        new LambdaQueryWrapper<GlucoseRecord>()
+                                .eq(GlucoseRecord::getUserId, userId)
+                                .ge(startDate != null, GlucoseRecord::getRecordDate, startDate)
+                                .le(endDate != null, GlucoseRecord::getRecordDate, endDate)
+                                .eq(
+                                        StringUtils.hasText(nodeCode),
+                                        GlucoseRecord::getNodeCode,
+                                        nodeCode)
+                                .orderByDesc(GlucoseRecord::getRecordDate)
+                                .orderByDesc(GlucoseRecord::getId));
 
         Map<String, GlucoseNode> nodes = glucosePeriodService.nodeMap();
-        Page<GlucoseDtos.RecordItem> mapped = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
+        Page<GlucoseDtos.RecordItem> mapped =
+                new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
         mapped.setRecords(page.getRecords().stream().map(r -> toItem(r, nodes)).toList());
         return PageResult.of(mapped);
     }
@@ -166,13 +192,14 @@ public class GlucoseRecordService {
         return toItem(requireOwned(userId, recordId), glucosePeriodService.nodeMap());
     }
 
-    /**
-     * 部分修改。remark 传空串表示清空、传 null/省略表示不改（Jackson 无法区分省略与显式 null）。
-     */
+    /** 部分修改。remark 传空串表示清空、传 null/省略表示不改（Jackson 无法区分省略与显式 null）。 */
     @Transactional
-    public GlucoseDtos.RecordItem patch(Long userId, Long recordId, GlucoseDtos.PatchRequest request) {
+    public GlucoseDtos.RecordItem patch(
+            Long userId, Long recordId, GlucoseDtos.PatchRequest request) {
         GlucoseRecord row = requireOwned(userId, recordId);
-        if (request.getGlucoseValue() == null && request.getRemark() == null && request.getRecordedAt() == null) {
+        if (request.getGlucoseValue() == null
+                && request.getRemark() == null
+                && request.getRecordedAt() == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "至少提交一个待修改字段");
         }
         if (request.getGlucoseValue() != null) {
@@ -192,8 +219,13 @@ public class GlucoseRecordService {
     @Transactional
     public void remove(Long userId, Long recordId) {
         GlucoseRecord row = requireOwned(userId, recordId);
-        SoftDeletes.mark(glucoseRecordMapper, GlucoseRecord::getId, row.getId(),
-                GlucoseRecord::getIsDeleted, GlucoseRecord::getDeletedAt, GlucoseRecord::getDeletedBy);
+        SoftDeletes.mark(
+                glucoseRecordMapper,
+                GlucoseRecord::getId,
+                row.getId(),
+                GlucoseRecord::getIsDeleted,
+                GlucoseRecord::getDeletedAt,
+                GlucoseRecord::getDeletedBy);
     }
 
     /**
@@ -209,22 +241,25 @@ public class GlucoseRecordService {
 
     /** 区间记录（含首尾），升序，供统计、趋势与分时段复用。 */
     public List<GlucoseRecord> listRange(Long userId, LocalDate from, LocalDate to) {
-        return glucoseRecordMapper.selectList(new LambdaQueryWrapper<GlucoseRecord>()
-                .eq(GlucoseRecord::getUserId, userId)
-                .ge(GlucoseRecord::getRecordDate, from)
-                .le(GlucoseRecord::getRecordDate, to)
-                .orderByAsc(GlucoseRecord::getRecordDate)
-                .orderByAsc(GlucoseRecord::getId));
+        return glucoseRecordMapper.selectList(
+                new LambdaQueryWrapper<GlucoseRecord>()
+                        .eq(GlucoseRecord::getUserId, userId)
+                        .ge(GlucoseRecord::getRecordDate, from)
+                        .le(GlucoseRecord::getRecordDate, to)
+                        .orderByAsc(GlucoseRecord::getRecordDate)
+                        .orderByAsc(GlucoseRecord::getId));
     }
 
     /** 区间内有记录的业务日期（去重、倒序），用于打卡天数与连续打卡计算。 */
     public List<LocalDate> recordedDatesDesc(Long userId, LocalDate from, LocalDate to) {
-        return glucoseRecordMapper.selectObjs(new QueryWrapper<GlucoseRecord>()
-                        .select("DISTINCT record_date")
-                        .eq("user_id", userId)
-                        .ge("record_date", from)
-                        .le("record_date", to)
-                        .orderByDesc("record_date"))
+        return glucoseRecordMapper
+                .selectObjs(
+                        new QueryWrapper<GlucoseRecord>()
+                                .select("DISTINCT record_date")
+                                .eq("user_id", userId)
+                                .ge("record_date", from)
+                                .le("record_date", to)
+                                .orderByDesc("record_date"))
                 .stream()
                 .map(GlucoseRecordService::toLocalDate)
                 .toList();
@@ -242,26 +277,27 @@ public class GlucoseRecordService {
     }
 
     /**
-     * 血糖日看板：9 个节点全部返回，未记录节点 hasRecord=false。
-     * 餐点记录由 /api/v1/meal-records 独立查询，因此本接口的餐点节点不混入饮食数据。
-     * <p>
-     * <b>口径提醒（2026-10-14 现场核对后补）</b>：{@code recordedCount} 只数<b>血糖</b>记录，
-     * 而 {@code totalNodes} 是全部启用节点（当前 6 血糖 + 3 餐点 = 9）。也就是说
-     * {@code recordedCount/totalNodes} <b>不是同一个口径</b>，直接显示成「已记 X/9」会让用户
-     * 以为还差 3 个时段。为此额外返回 {@code glucoseTotalNodes} 与 {@code mealTotalNodes}：
-     * 端上要显示进度就用 {@code recordedCount/glucoseTotalNodes}（6 段血糖），餐点另有入口。
-     * <p>
-     * 刻意不改 {@code totalNodes} 的含义——它已被既有调用方当"节点总数"使用，改语义会静默影响别处。
+     * 血糖日看板：9 个节点全部返回，未记录节点 hasRecord=false。 餐点记录由 /api/v1/meal-records 独立查询，因此本接口的餐点节点不混入饮食数据。
+     *
+     * <p><b>口径提醒（2026-10-14 现场核对后补）</b>：{@code recordedCount} 只数<b>血糖</b>记录， 而 {@code totalNodes}
+     * 是全部启用节点（当前 6 血糖 + 3 餐点 = 9）。也就是说 {@code recordedCount/totalNodes} <b>不是同一个口径</b>，直接显示成「已记
+     * X/9」会让用户 以为还差 3 个时段。为此额外返回 {@code glucoseTotalNodes} 与 {@code mealTotalNodes}： 端上要显示进度就用
+     * {@code recordedCount/glucoseTotalNodes}（6 段血糖），餐点另有入口。
+     *
+     * <p>刻意不改 {@code totalNodes} 的含义——它已被既有调用方当"节点总数"使用，改语义会静默影响别处。
      */
     public GlucoseDtos.DayBoard dayBoard(Long userId, LocalDate recordDate) {
         List<GlucoseNode> nodes = glucosePeriodService.listEnabledNodes();
-        Map<String, GlucoseRecord> glucoseByNode = glucoseRecordMapper.selectList(
-                        new LambdaQueryWrapper<GlucoseRecord>()
-                                .eq(GlucoseRecord::getUserId, userId)
-                                .eq(GlucoseRecord::getRecordDate, recordDate))
-                .stream()
-                .collect(java.util.stream.Collectors.toMap(
-                        GlucoseRecord::getNodeCode, r -> r, (a, b) -> a));
+        Map<String, GlucoseRecord> glucoseByNode =
+                glucoseRecordMapper
+                        .selectList(
+                                new LambdaQueryWrapper<GlucoseRecord>()
+                                        .eq(GlucoseRecord::getUserId, userId)
+                                        .eq(GlucoseRecord::getRecordDate, recordDate))
+                        .stream()
+                        .collect(
+                                java.util.stream.Collectors.toMap(
+                                        GlucoseRecord::getNodeCode, r -> r, (a, b) -> a));
 
         List<GlucoseDtos.NodeSlot> slots = new ArrayList<>();
         List<GlucoseDtos.ChartPoint> chartPoints = new ArrayList<>();
@@ -279,23 +315,28 @@ public class GlucoseRecordService {
             boolean hasRecord = !isMeal && row != null;
             if (hasRecord) {
                 recorded++;
-                chartPoints.add(GlucoseDtos.ChartPoint.builder()
-                        .nodeCode(node.getNodeCode())
-                        .value(row.getGlucoseValue())
-                        .build());
+                chartPoints.add(
+                        GlucoseDtos.ChartPoint.builder()
+                                .nodeCode(node.getNodeCode())
+                                .value(row.getGlucoseValue())
+                                .build());
             }
-            slots.add(GlucoseDtos.NodeSlot.builder()
-                    .nodeCode(node.getNodeCode())
-                    .nodeName(node.getNodeName())
-                    .isMeal(isMeal)
-                    .hasRecord(hasRecord)
-                    .recordKind(hasRecord ? "glucose" : null)
-                    .glucose(hasRecord ? GlucoseDtos.GlucoseBrief.builder()
-                            .glucoseValue(row.getGlucoseValue())
-                            .sourceType(row.getSourceType())
-                            .remark(row.getRemark())
-                            .build() : null)
-                    .build());
+            slots.add(
+                    GlucoseDtos.NodeSlot.builder()
+                            .nodeCode(node.getNodeCode())
+                            .nodeName(node.getNodeName())
+                            .isMeal(isMeal)
+                            .hasRecord(hasRecord)
+                            .recordKind(hasRecord ? "glucose" : null)
+                            .glucose(
+                                    hasRecord
+                                            ? GlucoseDtos.GlucoseBrief.builder()
+                                                    .glucoseValue(row.getGlucoseValue())
+                                                    .sourceType(row.getSourceType())
+                                                    .remark(row.getRemark())
+                                                    .build()
+                                            : null)
+                            .build());
         }
 
         return GlucoseDtos.DayBoard.builder()

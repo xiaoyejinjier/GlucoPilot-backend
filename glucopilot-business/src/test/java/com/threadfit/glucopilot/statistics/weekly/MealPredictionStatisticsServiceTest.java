@@ -1,5 +1,10 @@
 package com.threadfit.glucopilot.statistics.weekly;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import com.threadfit.glucopilot.common.mybatis.MyBatisTestMappers;
+import com.threadfit.glucopilot.statistics.mapper.MealPredictionStatisticsMapper;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -9,8 +14,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
-
 class MealPredictionStatisticsServiceTest {
     private JdbcTemplate jdbc;
     private MealPredictionStatisticsService service;
@@ -18,13 +21,22 @@ class MealPredictionStatisticsServiceTest {
 
     @BeforeEach
     void setUp() {
-        jdbc = new JdbcTemplate(new DriverManagerDataSource("jdbc:h2:mem:meal_prediction_"
-                + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", ""));
-        jdbc.execute("""
+        jdbc =
+                new JdbcTemplate(
+                        new DriverManagerDataSource(
+                                "jdbc:h2:mem:meal_prediction_"
+                                        + UUID.randomUUID()
+                                        + ";MODE=MySQL;DB_CLOSE_DELAY=-1",
+                                "sa",
+                                ""));
+        jdbc.execute(
+                """
                 CREATE TABLE meal_record (user_id BIGINT, record_date DATE, node_code VARCHAR(32),
                   predict_now DECIMAL(4,1), predict_suggest DECIMAL(4,1), is_deleted TINYINT)
                 """);
-        service = new MealPredictionStatisticsService(jdbc);
+        service =
+                new MealPredictionStatisticsService(
+                        MyBatisTestMappers.mapper(jdbc, MealPredictionStatisticsMapper.class));
     }
 
     @Test
@@ -67,7 +79,15 @@ class MealPredictionStatisticsServiceTest {
         assertTrue(service.dailySeries(1L, day, day.plusDays(1)).isEmpty());
     }
 
-    private void insert(long userId, LocalDate date, String node, String now, String suggested, int deleted) {
-        jdbc.update("INSERT INTO meal_record VALUES (?, ?, ?, ?, ?, ?)", userId, date, node, now, suggested, deleted);
+    private void insert(
+            long userId, LocalDate date, String node, String now, String suggested, int deleted) {
+        jdbc.update(
+                "INSERT INTO meal_record VALUES (?, ?, ?, ?, ?, ?)",
+                userId,
+                date,
+                node,
+                now,
+                suggested,
+                deleted);
     }
 }

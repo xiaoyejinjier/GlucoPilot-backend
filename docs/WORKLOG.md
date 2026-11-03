@@ -1,5 +1,60 @@
 # 拆仓工作记录
 
+## 2026-11-03 单字找糖友与同账号单会话登录
+
+- 负责人：Codex（用户授权）。先更新API-CONTRACT：昵称搜索允许去空白后1～32字，保留字面包含、分页和隐私隔离；C端后登录替换旧会话，管理端登录不变。
+- 实现：CommunityProfileService放开最小长度，小程序同步校验、单字条件返回重载与提示。AuthService三种登录共用createSession，事务内用UserSessionMapper锁定账号、失效旧会话并创建新会话；失败回滚保留旧令牌。复用user_session，不新增表或迁移；鉴权区分40101异地登录替换和普通40100过期。
+- 小程序：统一请求层处理当前令牌的401，停止轮询、清理账号缓存并返回登录页；原始40101保留在body，页面错误仍按40100兼容。用令牌隔离迟到的请求和资料加载，防止旧请求退出新登录；提示中英文同步。
+- 验证：51项后端专项通过，新增6项真实MyBatis/事务测试覆盖跨服务实例、三种登录互相替换、两线程并发、失败回滚、旧令牌退出不影响新令牌、鉴权过滤器HTTP401与requestId。九模块隔离Maven verify共906项，902通过、4条件跳过，0失败/错误；全部468项小程序测试通过。编译源与工作区Java逐文件哈希一致，Git空白检查通过。
+- 交付：日志.tmp/search-single-session-backend-targeted.log、.tmp/search-single-session-full-verify.log、.tmp/search-single-session-frontend-full.log，统计.tmp/search-single-session-verification.json。未启停IDEA、未改私密配置或真实业务数据、未上传GitHub；需重启/部署目标后端并重新编译小程序。离线旧端在恢复请求后退出，未声称真机现场验收或即时离线推送。
+
+## 2026-11-03 私信讲解关键注释
+
+- 负责人：Codex（用户授权）。CommunityMessageService 标注事务、校验、账号行锁、幂等、发送额度、唯一键兜底、结果核对，以及历史游标、已读与未读提醒；CommunityMessageMapper 补关键 SQL 用途说明。
+- 验证：与修改前副本去除注释/空白比较，Java 代码与 SQL 保持一致；仅注释变更，不重复运行业务测试。
+
+## 2026-11-03 私信 Mapper SQL 多行整理
+
+- 负责人：Codex（用户授权）。仅整理 CommunityMessageMapper 的 SQL：改用 Java 文本块，按 SELECT/FROM/WHERE/ORDER BY/FOR UPDATE 等分行，统一缩进；修正手工换行产生的普通字符串语法问题，保留原查询条件、参数绑定和锁选项。
+- 验收：隔离构建现有社区业务与 Mapper 注册测试 35 项全部通过，覆盖私信幂等、首条额度并发、分页和已读；无需改表或调整前端。日志 .tmp/message-sql-format-verify.log。
+
+## 2026-11-02 个人负责功能剩余 JDBC 统一为 MyBatis
+
+- 负责人：Codex（用户授权）。范围为记录/统计、社区私信/推荐/举报、食品营养库、反馈、用户管理、导出和对应管理端；先更新 API-CONTRACT。本次不改 HTTP 契约和数据库结构，不触碰私密配置，不启停 IDEA 服务。
+- 迁移：新增 GlucoseAlertMapper、MealPhotoMapper、AvatarMediaMapper、MealPredictionStatisticsMapper、AdminWorkReminderMapper、LocalizationMapper，SQL、查询参数和类型映射分别放到 mapper/entity。GlucoseAlertRepository 保留 DTO 转换，其余业务入口改为注入 Mapper；补齐独立启动时统计、提醒和翻译的扫描包。
+- 保留：异常审批的源记录行锁、测量快照/版本和同事务审计；图片归属/桶/原始 storage_key；推荐吃法预测值聚合与实测分离；提醒权限；翻译原文授权、哈希、租约、续期和失败重试。预测计算本身未变。
+- 验证：62 项真实 MyBatis/H2 专项全部通过。九模块隔离 Maven verify 共 900 项，896 通过、4 条件跳过，0 失败/错误；包含真实 Redis 食品缓存和 FFmpeg 回归。新增大 ID、空值、毫秒时间精度、空正文和 Mapper 注册检查；扫描 227 个个人功能生产 Java 文件，无直接 JDBC 查询。测试 JDBC 仅用于临时数据准备/断言，保留日期兼容转换。
+- 交付：代码位置见 docs/MYBATIS-PERSONAL-FEATURES.md；日志 .tmp/owned-mybatis-targeted.log、.tmp/owned-mybatis-full-verify.log，统计 .tmp/owned-mybatis-verification.json。未提交或上传 GitHub；重启后端加载本次实现即可。
+
+## 2026-11-02 食品分类与食品详情Redis读缓存
+
+- 负责人：Codex（用户授权增加Redis并标出对应代码）。先更新API-CONTRACT，范围为食品分类和单食品详情；HTTP、DTO、分页与照片读取链路保持兼容。
+- 实现：FoodService通过FoodCatalogCache执行版本检查、Redis JSON命中/未命中、MyBatis回源、默认10分钟TTL、损坏JSON重建和Redis故障5秒退避。事务内查询绕过共享缓存，避免未提交值污染Redis。
+- 一致性：V52新增单行目录版本表；AdminFoodService四个写入口同事务推进版本，覆盖分类改名/图片、食品审核上架、下架、换图和删除。提交后使用新版本键，回滚保留旧版本；并发旧请求回填不能覆盖新版本。每次缓存读取保留一条轻量版本SQL；旧版本条目按TTL回收，不扫描Redis键。
+- 配置：复用现有Redis连接，新增FOOD_CACHE_ENABLED、FOOD_CACHE_TTL、FOOD_CACHE_KEY_PREFIX可选配置，未修改.env或.env.example。复制数据库共享Redis、备份恢复及直接SQL维护的版本处理见food/README.md。
+- 验证：30项食品专项全部通过，含真实Redis GET/SET、TTL、空列表、失效重载；真实MyBatis和Spring事务验证换图、上下架、删除、分类名称联动及回滚；并发回填、故障回源和损坏缓存回归通过。九模块Maven verify成功，896项测试，0失败/错误、4项条件跳过。
+- 验证使用隔离H2数据库与随机Redis测试前缀，明确删除测试键，未扫描或清空业务Redis，未改运行MySQL。实际服务需重启加载类和Flyway V52后生效。实现入口已整理在glucopilot-business/src/main/java/com/threadfit/glucopilot/food/README.md。
+
+## 2026-11-02 同步远端并保留本地功能分包
+
+- 合入main的29个远端提交（6280e0b），保留本地社区功能分包、私信、推荐、媒体读取和导出MyBatis改造。
+- 处理旧社区Service删除与远端新增方法的冲突：官方文章标签迁入article功能；账号注销的社区清理迁入shared独立Service及MyBatis Mapper；导出注销清理经Mapper先删文件再删任务。注销编排及测试改用新包名。
+- 远端包含账号注销、视频流式读取、血糖输入校验和AI模型能力/场景路由更新，新增V45至V51迁移。当前仅同步代码，未连接或修改运行数据库，未重启IDEA服务。
+- 验证：九模块Maven verify成功；883项测试，879通过、4项条件跳过，0失败/错误。新增真实MyBatis测试覆盖社区注销仅清理本人偏好、保留公开内容/互动/私信，以及导出任务和PDF按用户清理、重复清理安全。
+- 本地源码及未跟踪文件已保留备份；.env及含本机值的.env.example保持原字节，不写入提交。启用更新前请在IDEA Rebuild Project，再启动后端加载新包和迁移。
+
+## 2026-10-28 社区个性化文章推荐
+
+- 负责人：Codex（用户明确要求实现）。先更新API-CONTRACT，社区GET articles增加RECOMMEND/LATEST排序。通过MyBatis读取本人近30天有效浏览、当前点赞和收藏，使用阅读1/点赞3/收藏5、14天半衰期形成最多64维归一化标签兴趣；SQL计算文章标签余弦相似度并结合热度、新鲜度、关注作者排序，再分页。搜索、关注、本人文章及管理端列表维持最新规则。
+- 边界：复用原有表，不引入模型或迁移；兴趣来源和候选均执行现有审核、作者有效性、受众与隐藏过滤。没有历史或没有标签的文章均有兜底排序，不截断候选，不改分页总数；排序随当前行为更新，固定快照分页不在本版承诺内，前端继续按ID去重。
+- 验证：隔离目录9模块Maven verify成功，809项测试，0失败/错误、2条件跳过；新增12项后端测试覆盖两账号不同偏好、半衰期/归一化、点赞收藏取消、冷启动、禁用标签、权限、旧文章召回和全分页覆盖。真实MySQL只读验证5个账号（含2个有兴趣历史的账号）及非空向量SQL分支，推荐与最新的可见总数相同、排名不同，未写数据库。小程序443项测试通过。未启停IDEA服务；需重启后端、重编小程序生效。
+
+## 2026-10-28 管理端信息管理
+
+- 负责人：Codex（用户明确授权）。先更新 API-CONTRACT；在“用户与服务”增加“信息管理”，通过 MyBatis 读取现有 community_message 私信表。展示发送人/接收人、用户ID、正文、发送时间和已读状态，支持关键词/双方ID/已读状态筛选、分页、全文及双方对话查看。
+- 权限：两个管理接口要求 admin 角色和 user:manage 权限，菜单与路由执行同样限制；只读查询不修改用户未读数，不返回微信身份、手机号、客户端请求编号。不新增迁移、不改业务数据库。
+- 验证：9模块 Maven verify 成功，797项测试，0失败/错误、2条件跳过；新增真实MyBatis查询、分页、参数校验、双方会话、只读及HTTP权限测试。管理端52项测试、类型检查和生产构建通过；真实Vue/Element Plus浏览器预览验证8条列表及8条会话，布局无溢出、无浏览器异常。未启停IDEA后端；重启后端并刷新管理端加载新接口和页面。
+
 ## 2026-10-27 管理员食品换图优先级修复
 
 - 负责人：Codex（用户反馈）。核对已保存的管理员配图与识别来源实拍优先级，修复更换已登记配图后用户端仍选择来源照片的问题；保留来源媒体供审核，不变更原图片文件。先更新契约，隔离验证，不修改运行中IDEA产物或私密环境。
@@ -426,3 +481,45 @@
 
 - 负责人：Codex。用户授权上传当前修改；保留私信首次联系权限、40301错误码和幂等/并发校验，合入远端 main 1daab6b（评论主动隐藏/恢复、父模块版本引用、AI单飞锁释放修复），无代码冲突、无新增迁移。私密 .env.example 排除在提交外。
 - 最终验证：隔离目录9模块 Maven verify 全部成功，790项测试，0失败/错误、2条件跳过。小程序431项测试及全量原生编译通过；管理端同步远端6239a3e后47项测试、类型检查和生产构建通过。未重启IDEA服务、未改业务数据库。
+## 2026-10-28 社区模块分类与 MyBatis 统一
+
+- 负责人：Codex（用户明确授权重构 community）。按 controller/dto/entity/mapper/service/support 分类，9 个数据库访问类移除生产 JDBC/ResultSet，使用命名 Mapper 和 Spring 事务，所有请求/响应保持 API-CONTRACT 兼容。原有用户配置保持本地，不改数据库迁移及业务数据。
+- 已完成：174 处持久化操作迁移为命名参数 Mapper；评论/私信和审核命中使用实体映射，复杂列表使用类型化查询条件；复合主键媒体关联使用显式 MyBatis Mapper，两种启动入口的扫描规则均支持，并补充真实扫描注册测试。
+- 验证：隔离目录9模块 Maven clean verify 成功，791项测试，0失败/错误、2条件跳过，其中136项社区测试全部通过。现有社区业务/HTTP/并发测试通过真实 MyBatis 执行，覆盖评论线程、幂等、权限、草稿、标签、举报、通知和审核；独立真实MySQL在默认可重复读隔离下验证首条私信竞争、重复请求、回复/互关解锁通过，测试库已清理，业务数据库未改。IDEA运行目录未变，需 Rebuild Project 并重启后端加载新包结构。
+
+## 2026-10-28 食品及文章媒体读取排查
+
+- 用户反馈管理端食品图、文章图片/视频和小程序食品图不可用。真实 MySQL/MyBatis 只读核对67条有效媒体登记无缺失，文章媒体ID有效；运行接口返回50000文件存储暂不可用。MinIO已在本机运行，但本机私密endpoint指向旧局域网地址。
+- 已备份私密配置，仅将根.env的MINIO_ENDPOINT改为本机回环地址，其余键不变；未改数据库、桶内容、权限或业务代码。67个对象均验证存在，以真实MyBatis及修正存储配置只读验证35张食品配图、6张实拍及其公开读取、文章图片/视频各1项及视频封面生成成功。日志.tmp/community-photo-mapping-audit.log、.tmp/media-local-storage-verification.log、.tmp/corrected-local-media-read.log。尚需用户重启IDEA后端以加载地址，再核对实际HTTP；未替用户启停服务。
+
+## 2026-10-28 推荐管理与批量待审核科普文章
+
+- 负责人：Codex（用户授权跨端实现）。依赖已更新的 API-CONTRACT；在用户与服务增加推荐管理，管理员按用户查看实际可读文章前20名、兴趣向量、分项分数和点积计算过程，复用真实推荐排序，不制造推荐分或阅读行为。
+- 后端只读接口要求管理员角色及 user:manage，所有候选沿用目标用户可见性；修正真实 MySQL 新鲜度中间 DECIMAL 舍入，统一 DOUBLE 计算，分项与总分核对一致。无数据库迁移。
+- 用户确认18篇进入待审核，已准备六类原创科普素材并附公开权威来源；核对账号后备份六张相关表，事务导入该账号的我的文章。真实审核队列处理后18篇均为 PENDING_ADMIN、publish_status=0，原文章保留。通用素材和导入工具不包含个人手机号；备份仅留本机。
+- 验证：隔离9模块 Maven verify 共812项测试，0失败/错误、2项条件跳过；管理端55项测试、类型检查与生产构建通过。真实 MySQL 只读核对兴趣向量3维、现有推荐18篇、每篇分项及标签点积贡献均一致；实际Vue/Element Plus页面与计算弹窗无横向溢出或浏览器错误。
+- 加载方式：重启IDEA后端并刷新管理端。新批量文章需管理员终审发布后才进入公开推荐；用户行为变化后刷新重算。未替用户重启后端，未上传GitHub。
+
+## 2026-10-29 推荐算法中文阅读注释
+
+- 负责人：Codex（用户授权）。在推荐SQL与兴趣向量Service中增加中文步骤标签，对应行为权重、时间衰减、标签累加、L2归一化、相似度、热度、新鲜度、关注、总分及排序，并标明管理端解释字段的含义。
+- 验证：与修改前源码逐个比较去除注释后的Java词法单元，两个文件完全一致，SQL字符串保持原样；本次仅增加阅读注释，无接口、数据库或运行行为变更，不需要重启。
+
+## 2026-10-29 社区按功能拆分技术层
+
+- 负责人：Codex（用户明确授权）。社区改为message、comment、follow、reaction、profile、article、draft、tag、report、notification、recommendation、access、moderation、media、shared各功能下再分controller/service/mapper/dto/entity。私信、评论、关注从原综合Service/Mapper/Controller实际提取；点赞收藏写入、请求响应和用户互动实体/Mapper从资讯模块归入reaction；举报和管理端评论实现也单独归类。
+- 共用边界：shared保留薄协调入口和参数/投影工具；各功能Controller直接依赖对应Service。保持原接口与JSON、行锁/缓存选项、事务、幂等、审核和媒体鉴权；两个启动入口覆盖新包，普通业务接口不注册成Mapper。测试按功能分包，共享数据库夹具归shared/support。
+- 验证：9模块隔离目录clean verify成功，813项测试，0失败/错误、2项条件跳过；原60个社区HTTP路由完整保留，原资讯点赞收藏路由迁移后地址不变；57个原互动Mapper方法的SQL及锁注解逐项比较一致。新增Spring依赖装配/真实事务代理测试，确认无循环依赖且私信插入时事务有效；既有真实MyBatis并发、幂等、权限、举报审核、推荐、翻译及媒体回归通过。
+- 数据和配置：未修改现有数据库、迁移脚本、存储桶或私密配置；未替用户重启IDEA，未上传GitHub。原社区源码及测试已在工作区.tmp备份。用户加载新结构时先停止后端并Rebuild Project清理旧包产物，再运行，避免残留Controller重复映射。
+
+## 2026-10-29 导出模块JDBC替换为MyBatis
+
+- 负责人：Codex（用户明确授权）。以backend正式源码为准，将DataExportService全部任务查询/写入、用户/任务行锁、记录读取和文件BLOB操作迁至DataExportMapper；新增类型化任务投影、文件投影和查询条件。业务Service保留原Create/Task契约及PDF、旧Excel快照逻辑；单独配置export.mapper在独立启动入口注册，若依适配入口沿用既有显式@Mapper扫描。
+- 保留：用户移除仅隐藏本人入口、管理员继续查看及生成；24小时20次限额与请求幂等；行锁禁用缓存并共享Spring事务；已完成导出快照不随健康记录改变；历史Excel只从保存的原快照转换。无需数据库迁移，未改实际业务库、私密配置或前端。
+- 验证：原导出测试切换为真实MyBatis执行，JDBC仅保留隔离数据库夹具/断言；新增类型化日期/旧范围兼容、字面关键词/分页/跨用户隔离、并发幂等与最后额度竞争测试。13项专项测试全部通过；隔离9模块Maven verify成功，815项测试0失败/错误，2项条件跳过。
+- 同步：用户指定.tmp/backend-upload-check中的源码已更新，并通过SHA-256确认DataExportService与正式文件一致。旧验证目录构建清理受文件占用影响，改用全新.tmp/export-mybatis-build完成最终构建；未替用户重启服务。原Service和测试保存在.tmp/export-mybatis-before，未提交或上传GitHub。
+
+## 2026-10-29 常用实现代码展开排版
+
+- 负责人：Codex（用户要求代码便于逐段阅读）。整理私信、血糖记录、正餐记录、管理端九时段与异常血糖、导出Controller/Service/PDF共8个文件：方法和注解分行，长调用与链式调用换行，简单控制语句补完整大括号。后续沿用展开书写风格，避免整段方法压在一行。
+- 验证：逐个比较原始与调整后的导入集合及语句词法单元，仅有格式、导入排序和控制块大括号变化，字符串与SQL保持一致；隔离编译通过，8个类的javap指令/方法签名输出与修改前完全一致，确认运行逻辑不变。仅排版，无需数据库或服务重启；原文件保存在.tmp/readable-backend-before，验证副本已同步。

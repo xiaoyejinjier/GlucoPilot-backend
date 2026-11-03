@@ -2,8 +2,8 @@ package com.threadfit.glucopilot.food.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
@@ -15,7 +15,9 @@ import com.threadfit.glucopilot.food.entity.FoodCategory;
 import com.threadfit.glucopilot.food.entity.FoodNutrition;
 import com.threadfit.glucopilot.food.mapper.FoodCategoryMapper;
 import com.threadfit.glucopilot.food.mapper.FoodNutritionMapper;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -30,9 +32,7 @@ import java.util.stream.Collectors;
 /**
  * 管理后台食品营养库业务层。
  *
- * <p>负责食品分类和食品的查询、新增、修改与逻辑删除，并集中处理
- * “分类必须存在”“分类下有食品时不能删除”等业务规则。写操作使用事务，
- * 确保一次业务操作要么全部成功，要么全部回滚。</p>
+ * <p>负责食品分类和食品的查询、新增、修改与逻辑删除，并集中处理 “分类必须存在”“分类下有食品时不能删除”等业务规则。写操作使用事务， 确保一次业务操作要么全部成功，要么全部回滚。
  */
 @Service
 @RequiredArgsConstructor
@@ -47,25 +47,29 @@ public class AdminFoodService {
     /** 访问 food_nutrition 表。 */
     private final FoodNutritionMapper foodNutritionMapper;
 
+    /** 分类或食品修改成功时，在同一数据库事务中切换缓存版本。 */
+    private final FoodCatalogCache cache;
+
     /** 查询全部未逻辑删除分类，并转换成管理端分类 DTO。 */
     public List<AdminFoodDtos.FoodCategoryItem> listCategories() {
-        return foodCategoryMapper.selectList(new LambdaQueryWrapper<FoodCategory>()
-                        .orderByAsc(FoodCategory::getSortNo)
-                        .orderByAsc(FoodCategory::getId))
+        return foodCategoryMapper
+                .selectList(
+                        new LambdaQueryWrapper<FoodCategory>()
+                                .orderByAsc(FoodCategory::getSortNo)
+                                .orderByAsc(FoodCategory::getId))
                 .stream()
-                .map(c -> AdminFoodDtos.FoodCategoryItem.builder()
-                        .id(c.getId())
-                        .name(c.getCategoryName())
-                        .image(c.getImageUrl() == null ? "" : c.getImageUrl())
-                        .sort(c.getSortNo())
-                        .build())
+                .map(
+                        c ->
+                                AdminFoodDtos.FoodCategoryItem.builder()
+                                        .id(c.getId())
+                                        .name(c.getCategoryName())
+                                        .image(c.getImageUrl() == null ? "" : c.getImageUrl())
+                                        .sort(c.getSortNo())
+                                        .build())
                 .toList();
     }
 
-    /**
-     * 新增或修改食品分类。
-     * 请求没有 id 时执行新增；请求带 id 时先确认分类存在，再执行修改。
-     */
+    /** 新增或修改食品分类。 请求没有 id 时执行新增；请求带 id 时先确认分类存在，再执行修改。 */
     @Transactional
     public AdminFoodDtos.FoodCategoryItem saveCategory(AdminFoodDtos.FoodCategorySaveRequest req) {
         // 新增时创建空 Entity；修改时读取原数据，避免修改不存在的分类。
@@ -95,6 +99,7 @@ public class AdminFoodService {
         if (req.getImage() != null && !req.getImage().trim().equals(saved.getImageUrl())) {
             throw new BizException(ErrorCode.INTERNAL_ERROR, "分类图片保存校验失败，请重试");
         }
+        cache.advanceCatalogVersion();
         return AdminFoodDtos.FoodCategoryItem.builder()
                 .id(saved.getId())
                 .name(saved.getCategoryName())
@@ -103,65 +108,89 @@ public class AdminFoodService {
                 .build();
     }
 
-    /**
-     * 逻辑删除食品分类。
-     * 分类下仍存在食品时拒绝删除，避免食品记录失去有效分类。
-     */
+    /** 逻辑删除食品分类。 分类下仍存在食品时拒绝删除，避免食品记录失去有效分类。 */
     @Transactional
     public void removeCategory(Long id) {
         // MyBatis-Plus 自动忽略已经逻辑删除的食品。
-        long used = foodNutritionMapper.selectCount(new LambdaQueryWrapper<FoodNutrition>()
-                .eq(FoodNutrition::getCategoryId, id));
+        long used =
+                foodNutritionMapper.selectCount(
+                        new LambdaQueryWrapper<FoodNutrition>()
+                                .eq(FoodNutrition::getCategoryId, id));
         if (used > 0) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "该分类下仍有食物，请先移动或删除食物");
         }
         // 同时写入 is_deleted、deleted_at、deleted_by，满足数据库审计约束。
-        softDelete(foodCategoryMapper, requireCategory(id).getId(),
-                FoodCategory::getId, FoodCategory::getIsDeleted, FoodCategory::getDeletedAt, FoodCategory::getDeletedBy);
+        softDelete(
+                foodCategoryMapper,
+                requireCategory(id).getId(),
+                FoodCategory::getId,
+                FoodCategory::getIsDeleted,
+                FoodCategory::getDeletedAt,
+                FoodCategory::getDeletedBy);
+        cache.advanceCatalogVersion();
     }
 
     /** 查询全部未删除食品，并补充分类名称和管理端展示字段。 */
     public List<AdminFoodDtos.FoodItem> listFoods() {
         // 先构造分类名称映射，避免每转换一条食品就查询一次分类表。
-        Map<Long, String> catNames = foodCategoryMapper.selectList(null).stream()
-                .collect(Collectors.toMap(FoodCategory::getId, FoodCategory::getCategoryName, (a, b) -> a));
+        Map<Long, String> catNames =
+                foodCategoryMapper.selectList(null).stream()
+                        .collect(
+                                Collectors.toMap(
+                                        FoodCategory::getId,
+                                        FoodCategory::getCategoryName,
+                                        (a, b) -> a));
 
         // 新创建的食品排在前面，再逐条转换为管理端 DTO。
-        return foodNutritionMapper.selectList(new LambdaQueryWrapper<FoodNutrition>()
-                        .orderByDesc(FoodNutrition::getId))
-                .stream().map(f -> toFood(f, catNames)).toList();
+        return foodNutritionMapper
+                .selectList(
+                        new LambdaQueryWrapper<FoodNutrition>().orderByDesc(FoodNutrition::getId))
+                .stream()
+                .map(f -> toFood(f, catNames))
+                .toList();
     }
 
-    /**
-     * 按管理端筛选条件分页查询食品。筛选和分页均在数据库执行，避免管理端
-     * 先拉取固定数量的数据后遗漏记录。
-     */
+    /** 按管理端筛选条件分页查询食品。筛选和分页均在数据库执行，避免管理端 先拉取固定数量的数据后遗漏记录。 */
     public PageResult<AdminFoodDtos.FoodItem> pageFoods(
-            Long categoryId, String keyword, Boolean enabled, Boolean pendingReview, PageQuery query) {
-        LambdaQueryWrapper<FoodNutrition> wrapper = new LambdaQueryWrapper<FoodNutrition>()
-                .eq(categoryId != null, FoodNutrition::getCategoryId, categoryId)
-                .like(StringUtils.hasText(keyword), FoodNutrition::getFoodName,
-                        StringUtils.hasText(keyword) ? keyword.trim() : null)
-                .eq(enabled != null, FoodNutrition::getShelfStatus,
-                        enabled == null ? null : (enabled ? 1 : 0))
-                .eq(Boolean.TRUE.equals(pendingReview), FoodNutrition::getNutritionSource, "AI_ESTIMATE")
-                .eq(Boolean.TRUE.equals(pendingReview), FoodNutrition::getShelfStatus, 0)
-                .orderByDesc(FoodNutrition::getId);
+            Long categoryId,
+            String keyword,
+            Boolean enabled,
+            Boolean pendingReview,
+            PageQuery query) {
+        LambdaQueryWrapper<FoodNutrition> wrapper =
+                new LambdaQueryWrapper<FoodNutrition>()
+                        .eq(categoryId != null, FoodNutrition::getCategoryId, categoryId)
+                        .like(
+                                StringUtils.hasText(keyword),
+                                FoodNutrition::getFoodName,
+                                StringUtils.hasText(keyword) ? keyword.trim() : null)
+                        .eq(
+                                enabled != null,
+                                FoodNutrition::getShelfStatus,
+                                enabled == null ? null : (enabled ? 1 : 0))
+                        .eq(
+                                Boolean.TRUE.equals(pendingReview),
+                                FoodNutrition::getNutritionSource,
+                                "AI_ESTIMATE")
+                        .eq(Boolean.TRUE.equals(pendingReview), FoodNutrition::getShelfStatus, 0)
+                        .orderByDesc(FoodNutrition::getId);
 
-        Page<FoodNutrition> page = foodNutritionMapper.selectPage(
-                new Page<>(query.getPageNum(), query.getPageSize()), wrapper);
-        Map<Long, String> catNames = foodCategoryMapper.selectList(null).stream()
-                .collect(Collectors.toMap(FoodCategory::getId, FoodCategory::getCategoryName, (a, b) -> a));
-        List<AdminFoodDtos.FoodItem> records = page.getRecords().stream()
-                .map(food -> toFood(food, catNames))
-                .toList();
+        Page<FoodNutrition> page =
+                foodNutritionMapper.selectPage(
+                        new Page<>(query.getPageNum(), query.getPageSize()), wrapper);
+        Map<Long, String> catNames =
+                foodCategoryMapper.selectList(null).stream()
+                        .collect(
+                                Collectors.toMap(
+                                        FoodCategory::getId,
+                                        FoodCategory::getCategoryName,
+                                        (a, b) -> a));
+        List<AdminFoodDtos.FoodItem> records =
+                page.getRecords().stream().map(food -> toFood(food, catNames)).toList();
         return PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), records);
     }
 
-    /**
-     * 新增或修改食品。
-     * 请求没有 id 时新增；请求带 id 时修改现有食品。
-     */
+    /** 新增或修改食品。 请求没有 id 时新增；请求带 id 时修改现有食品。 */
     @Transactional
     public AdminFoodDtos.FoodItem saveFood(AdminFoodDtos.FoodSaveRequest req) {
         // 食品必须属于一个真实存在、未删除的分类。
@@ -188,7 +217,8 @@ public class AdminFoodService {
         // enabled 明确为 false 时下架，其余情况默认上架。
         row.setShelfStatus(Boolean.FALSE.equals(req.getEnabled()) ? 0 : 1);
         if (row.getNutritionSource() == null) row.setNutritionSource("MANUAL");
-        if (Boolean.TRUE.equals(req.getEnabled()) && "AI_ESTIMATE".equals(row.getNutritionSource())) {
+        if (Boolean.TRUE.equals(req.getEnabled())
+                && "AI_ESTIMATE".equals(row.getNutritionSource())) {
             row.setNutritionSource("AI_REVIEWED");
         }
 
@@ -200,20 +230,25 @@ public class AdminFoodService {
         }
 
         // 重新读取保存结果，确保返回值包含数据库自动填充的审计字段。
-        return toFood(requireFood(row.getId()), Map.of(cat.getId(), cat.getCategoryName()));
+        FoodNutrition saved = requireFood(row.getId());
+        cache.advanceCatalogVersion();
+        return toFood(saved, Map.of(cat.getId(), cat.getCategoryName()));
     }
 
     /** 逻辑删除指定食品，并记录删除时间和操作人。 */
     @Transactional
     public void removeFood(Long id) {
-        softDelete(foodNutritionMapper, requireFood(id).getId(),
-                FoodNutrition::getId, FoodNutrition::getIsDeleted, FoodNutrition::getDeletedAt, FoodNutrition::getDeletedBy);
+        softDelete(
+                foodNutritionMapper,
+                requireFood(id).getId(),
+                FoodNutrition::getId,
+                FoodNutrition::getIsDeleted,
+                FoodNutrition::getDeletedAt,
+                FoodNutrition::getDeletedBy);
+        cache.advanceCatalogVersion();
     }
 
-    /**
-     * 对分类和食品复用同一套逻辑删除方法。
-     * SFunction 参数告诉公共工具每个审计字段对应哪个 Java getter。
-     */
+    /** 对分类和食品复用同一套逻辑删除方法。 SFunction 参数告诉公共工具每个审计字段对应哪个 Java getter。 */
     private static <T extends BaseEntity> void softDelete(
             BaseMapper<T> mapper,
             Long id,
@@ -230,7 +265,10 @@ public class AdminFoodService {
                 .id(f.getId())
                 .name(f.getFoodName())
                 .categoryId(f.getCategoryId())
-                .categoryName(f.getCategoryId() == null ? "" : catNames.getOrDefault(f.getCategoryId(), ""))
+                .categoryName(
+                        f.getCategoryId() == null
+                                ? ""
+                                : catNames.getOrDefault(f.getCategoryId(), ""))
                 .carbs(f.getCarbsPer100g())
                 .cal(f.getCaloriesPer100g())
                 .gi(f.getGiValue())
@@ -240,8 +278,10 @@ public class AdminFoodService {
                 .updatedAt(fmt(f.getGmtModified()))
                 .nutritionSource(f.getNutritionSource() == null ? "MANUAL" : f.getNutritionSource())
                 .sourceModel(f.getSourceModel())
-                .reviewImage(FoodReviewImageService.hasSourcePhoto(f)
-                        ? "/admin/v1/foods/" + f.getId() + "/review-image" : "")
+                .reviewImage(
+                        FoodReviewImageService.hasSourcePhoto(f)
+                                ? "/admin/v1/foods/" + f.getId() + "/review-image"
+                                : "")
                 .build();
     }
 

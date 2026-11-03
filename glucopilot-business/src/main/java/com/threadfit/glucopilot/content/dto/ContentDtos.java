@@ -7,8 +7,7 @@ import java.time.LocalDateTime;
 
 public final class ContentDtos {
 
-    private ContentDtos() {
-    }
+    private ContentDtos() {}
 
     @Data
     @Builder
@@ -48,32 +47,20 @@ public final class ContentDtos {
         private String coverUrl;
         private String videoUrl;
         private String contentBody;
-        private java.util.List<com.threadfit.glucopilot.community.PublicationDtos.ArticleImage> images;
-        private java.util.List<com.threadfit.glucopilot.community.PublicationDtos.ArticleImage> videos;
-        private java.util.List<com.threadfit.glucopilot.community.PublicationDtos.Tag> tags;
+        private java.util.List<
+                        com.threadfit.glucopilot.community.article.dto.PublicationDtos.ArticleImage>
+                images;
+        private java.util.List<
+                        com.threadfit.glucopilot.community.article.dto.PublicationDtos.ArticleImage>
+                videos;
+        private java.util.List<com.threadfit.glucopilot.community.article.dto.PublicationDtos.Tag>
+                tags;
         private LocalDateTime publishAt;
         private Integer likeCount;
         private Integer collectCount;
         private Boolean liked;
         private Boolean collected;
-        private com.threadfit.glucopilot.community.CommunityDtos.Profile author;
+        private com.threadfit.glucopilot.community.profile.dto.ProfileDtos.Profile author;
         private Long commentCount;
-    }
-
-    @Data
-    public static class NewsActionRequest {
-        /** true=点赞，false=取消；null=不改 */
-        private Boolean liked;
-        /** true=收藏，false=取消；null=不改 */
-        private Boolean collected;
-    }
-
-    @Data
-    @Builder
-    public static class NewsActionResult {
-        private Boolean liked;
-        private Boolean collected;
-        private Integer likeCount;
-        private Integer collectCount;
     }
 }

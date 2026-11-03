@@ -1,0 +1,146 @@
+[
+  {
+    "seedKey":"rec-20261028-plate",
+    "title":"把一餐装进餐盘：看懂蔬菜、主食和蛋白质的搭配",
+    "tagCodes":["diet"],
+    "body":"准备一餐时，先看结构，再看分量，比只盯着某一种食物更容易坚持。餐盘法把非淀粉类蔬菜、碳水食物和蛋白质食物放在同一餐中，帮助观察搭配是否均衡。\n\n可以先用蔬菜丰富餐盘，再为主食和鱼、蛋、瘦肉或豆制品留出位置。土豆、玉米等含淀粉较多，安排它们时也要考虑这一餐的碳水总量，而不是一律当作不占主食份额的蔬菜。\n\n记录时可以写清食物名称、大概分量和饮料，避免只留一张照片。相同外观的一餐，实际份量仍可能不同。餐盘法是观察工具，不能据此保证餐后血糖一定达标；个人分量应结合治疗方案与营养专业人员讨论。",
+    "sourceTitle":"CDC · Diabetes Meal Planning",
+    "sourceUrl":"https://www.cdc.gov/diabetes/healthy-eating/diabetes-meal-planning.html"
+  },
+  {
+    "seedKey":"rec-20261028-label",
+    "title":"买零食先看什么：从营养标签认识总碳水",
+    "tagCodes":["diet"],
+    "body":"包装上写着无蔗糖，并不等于整份食品没有碳水化合物。查看营养标签时，先确认标示的是每份还是每百克，再关注总碳水含量和自己实际吃了多少。\n\n糖和淀粉都属于需要考虑的碳水来源。饼干、麦片、乳制品等，即使口感不甜，也不能仅凭味道判断对血糖的影响。不同品牌、口味和份量的营养成分可能不同，不能把一次查询结果套用到所有同类食物。\n\n在饮食记录中保留包装名称和食用份量，复盘时会更有依据。碳水记录用于帮助理解饮食，不应根据网上统一公式自行决定胰岛素剂量；需要精细碳水计数时，应由医疗团队提供培训。",
+    "sourceTitle":"CDC · Carb Counting",
+    "sourceUrl":"https://www.cdc.gov/diabetes/healthy-eating/carb-counting-manage-blood-sugar.html"
+  },
+  {
+    "seedKey":"rec-20261028-fruit",
+    "title":"水果与果汁不完全一样：记录时别忽略形式和份量",
+    "tagCodes":["diet","daily"],
+    "body":"水果可以成为多样饮食的一部分，但需要考虑实际份量和整餐安排。记录水果时，不妨同时写下品种、数量，以及是完整水果、果汁还是加了配料的饮品。\n\n完整水果与果汁的纤维、进食速度和容易摄入的份量可能不同。选择日常饮品时，可以留意是否额外加糖，避免因为带有水果字样，就把一杯饮料当成一份水果。\n\n也不必把水果简单划成绝对能吃与绝对不能吃两组。更有价值的做法是保留分量及身体反应，交给营养专业人员一起调整。已有特殊饮食要求或其他疾病时，应优先执行自己的个体化计划。",
+    "sourceTitle":"NIDDK · Healthy Living with Diabetes",
+    "sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/healthy-living-with-diabetes"
+  },
+  {
+    "seedKey":"rec-20261028-walk",
+    "title":"把活动放进日程：从容易坚持的散步开始",
+    "tagCodes":["exercise","daily"],
+    "body":"增加活动不一定要从高强度训练开始。对适合步行的人来说，把一段轻松散步安排进固定日程，往往比偶尔一次很累的锻炼更容易形成习惯。\n\n可以选择熟悉、安全的路线，记录开始时间、持续多久和主观感受。先建立规律，再与专业人员讨论怎样逐步增加活动。不要把出汗多少当作是否有效的唯一标准，也不要为了完成打卡勉强运动。\n\n活动形式应考虑心血管状况、足部情况及其他并发症。使用可能引起低血糖的药物时，还需要提前了解运动相关注意事项。出现不适时应停止活动并寻求帮助，适合别人的运动安排不一定适合自己。",
+    "sourceTitle":"CDC · Get Active",
+    "sourceUrl":"https://www.cdc.gov/diabetes/living-with/physical-activity.html"
+  },
+  {
+    "seedKey":"rec-20261028-sitting",
+    "title":"忙碌工作日也能动一动：减少连续久坐的小办法",
+    "tagCodes":["exercise"],
+    "body":"运动习惯除了专门安排锻炼，也包括减少长时间一动不动。读书、开会或使用电脑时，给自己安排短暂的起身活动，可以让一天中的活动更分散。\n\n可以把活动和已有任务连接起来，例如接水时走几步、在休息时舒展身体，或在安全条件下做轻量活动。选择动作时以稳定、舒适和适合自身能力为前提，不必与别人比较次数。\n\n简单记录当天长时间坐着的时段，有助于发现最容易调整的地方。短暂活动不能替代完整的个体化运动计划；若有行动限制、眩晕或足部问题，应先询问专业人员适合的方式。",
+    "sourceTitle":"ADA · Breaking Sitting Streaks",
+    "sourceUrl":"https://diabetes.org/health-wellness/fitness/break-sitting-streak"
+  },
+  {
+    "seedKey":"rec-20261028-activity-log",
+    "title":"运动记录别只写步数：把时间、强度和血糖放在一起看",
+    "tagCodes":["exercise","daily"],
+    "body":"同样是运动，不同持续时间和强度，身体反应可能不同。只记录总步数，往往看不出活动发生在什么时候，以及与进餐、用药之间的关系。\n\n一条有用的运动记录可以包含活动类型、开始时间、持续多久、主观强度和有无不适。是否需要在运动前后或过程中监测血糖，应按自己的医疗计划执行，并把结果放在同一份记录中。\n\n运动可能影响之后一段时间的血糖，使用胰岛素等药物的人尤其需要了解低血糖风险。不要根据一次运动后的读数，自行停药或加减剂量；把重复出现的模式带给医疗团队讨论，比单次猜测更有帮助。",
+    "sourceTitle":"ADA · Blood Glucose and Exercise",
+    "sourceUrl":"https://diabetes.org/health-wellness/fitness/blood-glucose-and-exercise"
+  },
+  {
+    "seedKey":"rec-20261028-visit",
+    "title":"复诊前的一张清单：让记录真正帮助沟通",
+    "tagCodes":["daily"],
+    "body":"复诊时需要回忆的事情很多，提前整理记录可以减少遗漏。与其只挑看起来满意的数字，不如把近期有代表性的记录和最想问的问题放在一起。\n\n可以准备近期血糖记录、正在使用的药物清单，以及饮食、活动或身体状况的明显变化。若发生过低血糖或其他不适，也应注明时间和当时的情况。检查与复诊频率并非人人相同，应以医疗团队安排为准。\n\n把问题按优先级写下来，例如哪些变化需要联系医生、怎样监测、下次复诊前要关注什么。清晰的记录帮助共同决定下一步，但不能替代眼、肾、足部等必要的专业检查。",
+    "sourceTitle":"CDC · Your Diabetes Care Schedule",
+    "sourceUrl":"https://www.cdc.gov/diabetes/treatment/your-diabetes-care-schedule.html"
+  },
+  {
+    "seedKey":"rec-20261028-logbook",
+    "title":"一份看得懂的血糖日记，需要留下哪些背景",
+    "tagCodes":["daily"],
+    "body":"一个血糖数字只有放在具体时间和情境里，才更容易解释。记录时可以注明日期、测量时间，以及与进餐之间的关系，保持单位和记录方式一致。\n\n如果当天有与平常不同的饮食、活动、生病或用药情况，可以补充简短备注。不要为了让曲线漂亮而删除异常读数，也不要把不同测量条件下的结果直接当作完全相同的比较。\n\n监测频率和个人目标应由医疗团队确定。记录的用途是帮助发现模式并支持沟通，不是仅凭一个数字自行诊断、调药或判断治疗成败。遇到明显不适或异常情况，应按既定应对方案及时联系专业人员。",
+    "sourceTitle":"CDC · Manage Blood Sugar",
+    "sourceUrl":"https://www.cdc.gov/diabetes/treatment/"
+  },
+  {
+    "seedKey":"rec-20261028-stress",
+    "title":"控糖也要照顾情绪：把压力当成值得记录的信息",
+    "tagCodes":["daily"],
+    "body":"长期管理需要不断做决定，觉得累并不代表不够努力。压力和情绪也可能影响饮食、睡眠、活动与执行治疗计划的能力，值得像其他生活信息一样被认真对待。\n\n可以在记录中简单标记压力较大的日子，尝试把目标缩小成一两件能完成的事，例如按计划记录或准备下一次复诊问题。与理解自己的人交流，也是一种支持。\n\n持续焦虑、低落或感到难以应付时，可以主动告诉医疗团队，必要时寻求心理专业支持。情绪问题与身体问题都值得获得帮助，社区交流可以提供陪伴，但不能替代专业评估和治疗。",
+    "sourceTitle":"CDC · Diabetes and Mental Health",
+    "sourceUrl":"https://www.cdc.gov/diabetes/living-with/mental-health.html"
+  },
+  {
+    "seedKey":"rec-20261028-type1-basics",
+    "title":"认识1型糖尿病：理解胰岛素在日常管理中的角色",
+    "tagCodes":["type1"],
+    "body":"1型糖尿病与身体无法制造足够胰岛素有关，日常管理通常需要胰岛素治疗和规律监测。它不能简单归因于某个人吃了太多糖，也不应因此给患者贴上自律不足的标签。\n\n管理不仅涉及药物，还包括饮食、活动、监测以及遇到异常情况时的应对准备。不同人的生活节奏与治疗方案不同，适合的监测安排应与医疗团队共同确定。\n\n向家人和同伴介绍自己的需求，例如需要携带哪些用品、哪些情况应寻求帮助，可以减少误解。不要用网络经验替代自己的胰岛素方案，也不要因短期数字变化自行中断治疗。",
+    "sourceTitle":"CDC · Type 1 Diabetes",
+    "sourceUrl":"https://www.cdc.gov/diabetes/about/about-type-1-diabetes.html"
+  },
+  {
+    "seedKey":"rec-20261028-cgm",
+    "title":"连续血糖监测怎么看：读数之外，也关注趋势和情境",
+    "tagCodes":["type1","daily"],
+    "body":"连续血糖监测设备可以提供更连续的葡萄糖变化信息，帮助观察一天中的趋势。它通常监测皮下组织间液，与传统指尖血糖检测的测量方式不同。\n\n查看曲线时，可以联系进餐、活动、休息和用药时间理解变化。学习设备的佩戴、报警和数据解释方法，应遵循设备说明及医疗团队指导。若读数与身体感受不一致，应按设备说明与个人方案确认，不能只看屏幕就忽视不适。\n\n设备是否适合、如何设置目标与报警，都需要个体化讨论。连续监测是辅助管理工具，不代表可以省略必要的随访，也不能把别人的曲线目标直接当成自己的治疗标准。",
+    "sourceTitle":"CDC · Continuous Glucose Monitors",
+    "sourceUrl":"https://www.cdc.gov/diabetes/treatment/continuous-glucose-monitors.html"
+  },
+  {
+    "seedKey":"rec-20261028-sick-plan",
+    "title":"生病日提前准备：把联系信息和应对计划写清楚",
+    "tagCodes":["type1","daily"],
+    "body":"感冒、发热或进食减少时，血糖管理可能与平时不同。提前与医疗团队讨论生病日计划，比临时依靠零散网络建议更稳妥。\n\n一份计划可以写明监测安排、补液与进食注意事项、需要准备的用品，以及何时联系医生。是否需要检测酮体、药物怎样处理，都应由专业人员结合个人情况说明，不应套用一份通用调整表。\n\n把联系人和计划放在自己及照护者容易找到的地方。出现持续呕吐、无法补液、意识改变或呼吸困难等情况时，应及时寻求医疗帮助。生病时的重点是按既定计划行动，不自行用运动或停药代替处理。",
+    "sourceTitle":"CDC · Managing Sick Days",
+    "sourceUrl":"https://www.cdc.gov/diabetes/living-with/managing-sick-days.html"
+  },
+  {
+    "seedKey":"rec-20261028-type2-basics",
+    "title":"认识2型糖尿病：从胰岛素抵抗理解长期管理",
+    "tagCodes":["type2"],
+    "body":"2型糖尿病涉及身体对胰岛素反应下降，以及胰岛素供应不能满足需要等变化。它与多种因素有关，不能只用是否吃甜食或体型来判断一个人的情况。\n\n日常管理可能包括饮食、身体活动、监测及药物治疗。不同人在不同阶段需要的支持并不相同，使用药物或胰岛素也不应被理解为个人努力失败。\n\n没有明显不适，并不等于可以忽略复诊。按计划保留记录、了解自己的治疗目标，并把生活中的困难告诉医疗团队，有助于调整一个能够长期执行的方案。诊断及治疗选择需要专业评估，不能只凭社区文章自行确定。",
+    "sourceTitle":"CDC · Type 2 Diabetes",
+    "sourceUrl":"https://www.cdc.gov/diabetes/about/about-type-2-diabetes.html"
+  },
+  {
+    "seedKey":"rec-20261028-type2-trends",
+    "title":"2型糖尿病复盘：一次读数和一段时间的变化都值得看",
+    "tagCodes":["type2","daily"],
+    "body":"一次测量反映的是某个时点的信息，长期管理还需要结合一段时间的记录和专业检查。面对波动时，先把背景记清楚，比立即用单个数字评价自己更有帮助。\n\n复盘可以围绕几个问题：测量条件是否一致，饮食或活动是否改变，是否遇到生病、压力或用药方面的困难。把这些信息带给医疗团队，能让讨论更具体。\n\n个人目标与管理措施还会受到其他疾病、生活条件和治疗方案影响。即使感觉良好，也应按医嘱使用药物并完成必要随访。记录和统计用于支持共同决策，不应成为自行停药、加药或延迟就诊的依据。",
+    "sourceTitle":"NIDDK · Managing Diabetes",
+    "sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/managing-diabetes"
+  },
+  {
+    "seedKey":"rec-20261028-feet",
+    "title":"足部观察也属于日常管理：留意那些不一定会疼的小变化",
+    "tagCodes":["type2","daily"],
+    "body":"糖尿病相关的神经和血流变化，可能让足部小伤口不容易被及时发现。有时没有明显疼痛，也不代表完全没有问题。\n\n日常观察可以关注皮肤是否破损、红肿、水疱，以及颜色或温度是否出现变化。看不清脚底时，可以借助镜子或请家人协助。选择合适的鞋袜，避免赤脚，也有助于减少受伤机会。\n\n发现伤口、感染迹象或其他新的异常，应及时联系专业人员，不自行切除鸡眼、处理溃疡或用刺激性产品尝试治疗。家庭观察与专业足部检查各有作用，不能用手机照片替代必要的面对面评估。",
+    "sourceTitle":"CDC · Your Feet and Diabetes",
+    "sourceUrl":"https://www.cdc.gov/diabetes/diabetes-complications/diabetes-and-your-feet.html"
+  },
+  {
+    "seedKey":"rec-20261028-medicine-list",
+    "title":"整理一份用药清单：复诊时不用只靠记忆",
+    "tagCodes":["medication","daily"],
+    "body":"当用药种类较多时，一份更新及时的清单可以帮助自己、医生和药师沟通。清单可以记录通用名、商品名、医嘱用法，以及由哪位医生开具。\n\n非处方药、保健品和补充剂也应告知医疗团队。发生不适、忘记服药、生活安排改变或支付困难时，可以直接说明原因，共同寻找可执行的办法，而不是自己长期省略药物。\n\n清单是对现有医嘱的记录，不是自行制定处方的工具。药品名称相近也不代表可以相互替换；不清楚的地方应向医生或药师核实。每次方案调整后及时更新，能减少新旧用法混淆。",
+    "sourceTitle":"CDC · Take Charge of Your Diabetes Medicines",
+    "sourceUrl":"https://www.cdc.gov/diabetes/articles/diabetes-and-your-medicines.html"
+  },
+  {
+    "seedKey":"rec-20261028-insulin-basics",
+    "title":"胰岛素与其他降糖药：先了解用途，再理解个人方案",
+    "tagCodes":["medication"],
+    "body":"糖尿病治疗药物有不同作用方式和使用形式。胰岛素与其他降糖药的选择，需要结合糖尿病类型、血糖情况、其他疾病以及生活条件等因素综合考虑。\n\n因此，同样的诊断名称，并不意味着每个人都应使用相同药物。拿到处方时，可以询问药物名称、用途、使用时间、可能的不良反应，以及忘记使用时应该怎样联系或处理。\n\n一般科普可以帮助提出问题，但不能提供适用于所有人的剂量表。不要自行借用他人的药物，也不要根据社区里的个体经验改变自己的用法。需要调整方案时，应由医疗团队结合完整资料作出决定。",
+    "sourceTitle":"NIDDK · Insulin, Medicines, and Other Diabetes Treatments",
+    "sourceUrl":"https://www.niddk.nih.gov/health-information/diabetes/overview/insulin-medicines-treatments"
+  },
+  {
+    "seedKey":"rec-20261028-drug-reactions",
+    "title":"怀疑药物引起不适，怎样把情况记录清楚",
+    "tagCodes":["medication","daily"],
+    "body":"使用药物后出现不适，值得认真记录并向专业人员反馈，但时间上先后发生，并不一定就能确定因果关系。完整的信息可以帮助医生或药师进一步判断。\n\n可以写下药物名称、开始使用或调整的时间、不适出现的时间和表现，以及同期使用的其他药物或补充剂。保留药品包装或说明书，也有助于核对信息。\n\n出现严重或迅速加重的症状时，应及时寻求医疗帮助。对一般疑问，可以联系开药医生或药师确认下一步，不根据网络猜测长期停药、重复补服或随意替换。药物安全需要结合个人情况评估，记录本身不能完成诊断。",
+    "sourceTitle":"MedlinePlus · Drug Safety",
+    "sourceUrl":"https://medlineplus.gov/drugsafety.html"
+  }
+]

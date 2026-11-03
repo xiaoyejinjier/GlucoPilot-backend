@@ -352,6 +352,13 @@ glucopilot:
   mail:
     from: ${MAIL_FROM:}
 
+# 食品读缓存复用spring.data.redis；版本在MySQL事务中更新，Redis故障自动回源。
+food:
+  catalog-cache:
+    enabled: ${FOOD_CACHE_ENABLED:true}
+    ttl: ${FOOD_CACHE_TTL:10m}
+    key-prefix: ${FOOD_CACHE_KEY_PREFIX:glucopilot:food:v1}
+
 # 账号注销异步清理 worker（方案 §6.4）
 # enabled=false 时不做任何清理：只影响后台执行，C 端提交注销仍然生效并立即失效会话
 account:

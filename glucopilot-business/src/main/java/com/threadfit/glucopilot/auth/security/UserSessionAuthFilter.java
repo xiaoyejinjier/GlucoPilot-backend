@@ -7,12 +7,16 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.constant.HttpHeaderNames;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
+import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.JsonUtils;
+
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -25,8 +29,8 @@ import java.io.IOException;
 import java.util.Collections;
 
 /**
- * 解析 C 端 Bearer，校验 user_session，写入 RequestContext + SecurityContext。
- * 对 DISABLED(0) / CANCELLED_RECOVERABLE(4) 账号仅放行注销（恢复）白名单路径，其余 403。
+ * 解析 C 端 Bearer，校验 user_session，写入 RequestContext + SecurityContext。 对 DISABLED(0) /
+ * CANCELLED_RECOVERABLE(4) 账号仅放行注销（恢复）白名单路径，其余 403。
  */
 @Component
 @RequiredArgsConstructor
@@ -45,25 +49,43 @@ public class UserSessionAuthFilter extends OncePerRequestFilter {
     }
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+    protected void doFilterInternal(
+            HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         String header = request.getHeader(HttpHeaderNames.AUTHORIZATION);
         if (StringUtils.hasText(header) && header.startsWith("Bearer ")) {
             String token = header.substring(7).trim();
             if (StringUtils.hasText(token)) {
-                SessionPrincipal principal = authService.resolveSession(token);
+                SessionPrincipal principal;
+                try {
+                    principal = authService.resolveSession(token);
+                } catch (BizException ex) {
+                    if (ex.getErrorCode() != ErrorCode.SESSION_REPLACED) {
+                        throw ex;
+                    }
+                    SecurityContextHolder.clearContext();
+                    response.setStatus(HttpStatus.UNAUTHORIZED.value());
+                    response.setContentType("application/json;charset=UTF-8");
+                    response.getWriter()
+                            .write(json.toJson(ApiResponse.fail(ErrorCode.SESSION_REPLACED)));
+                    return;
+                }
                 if (principal != null) {
                     Integer status = principal.accountStatus();
-                    boolean restricted = status != null
-                            && (status == AccountStatus.DISABLED.getCode()
-                                || status == AccountStatus.CANCELLED_RECOVERABLE.getCode());
+                    boolean restricted =
+                            status != null
+                                    && (status == AccountStatus.DISABLED.getCode()
+                                            || status
+                                                    == AccountStatus.CANCELLED_RECOVERABLE
+                                                            .getCode());
                     if (restricted && !isCancellationWhitelist(request)) {
                         writeForbidden(response);
                         return;
                     }
                     RequestContext.setUserId(principal.userId());
                     UsernamePasswordAuthenticationToken authentication =
-                            new UsernamePasswordAuthenticationToken(principal.userId(), null, Collections.emptyList());
+                            new UsernamePasswordAuthenticationToken(
+                                    principal.userId(), null, Collections.emptyList());
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 }
             }

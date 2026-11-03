@@ -6,11 +6,17 @@ import com.threadfit.glucopilot.auth.client.WechatAuthClient;
 import com.threadfit.glucopilot.auth.dto.AuthDtos;
 import com.threadfit.glucopilot.auth.entity.AuthEmailCode;
 import com.threadfit.glucopilot.auth.entity.AuthSmsCode;
-import com.threadfit.glucopilot.auth.mail.EmailCodeMailSender;
 import com.threadfit.glucopilot.auth.entity.UserSession;
+import com.threadfit.glucopilot.auth.mail.EmailCodeMailSender;
 import com.threadfit.glucopilot.auth.mapper.AuthEmailCodeMapper;
 import com.threadfit.glucopilot.auth.mapper.AuthSmsCodeMapper;
 import com.threadfit.glucopilot.auth.mapper.UserSessionMapper;
+import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.context.RequestContext;
+import com.threadfit.glucopilot.common.enums.CodeEnum;
+import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.common.util.EmailUtils;
+import com.threadfit.glucopilot.common.util.IdUtils;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.entity.UserAccount;
@@ -19,13 +25,9 @@ import com.threadfit.glucopilot.user.entity.UserSetting;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
 import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
 import com.threadfit.glucopilot.user.mapper.UserSettingMapper;
-import com.threadfit.glucopilot.common.api.ErrorCode;
-import com.threadfit.glucopilot.common.context.RequestContext;
-import com.threadfit.glucopilot.common.enums.CodeEnum;
-import com.threadfit.glucopilot.common.exception.BizException;
-import com.threadfit.glucopilot.common.util.EmailUtils;
-import com.threadfit.glucopilot.common.util.IdUtils;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,16 +58,20 @@ public class AuthService {
 
     /** 短信发送冷却：phone -> 上次发送时间戳（进程内内存，重启清空） */
     private final ConcurrentHashMap<String, AtomicLong> smsCooldown = new ConcurrentHashMap<>();
+
     /** 邮箱发送冷却：email -> 上次发送时间戳（进程内内存，重启清空） */
     private final ConcurrentHashMap<String, AtomicLong> emailCooldown = new ConcurrentHashMap<>();
+
     private final SecureRandom random = new SecureRandom();
 
     @Transactional
     public AuthDtos.SessionResponse loginByWechat(AuthDtos.WechatLoginRequest request) {
         WechatAuthClient.WechatIdentity identity = wechatAuthClient.exchangeCode(request.getCode());
-        UserAccount account = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
-                .eq(UserAccount::getOpenid, identity.openid())
-                .last("LIMIT 1"));
+        UserAccount account =
+                userAccountMapper.selectOne(
+                        new LambdaQueryWrapper<UserAccount>()
+                                .eq(UserAccount::getOpenid, identity.openid())
+                                .last("LIMIT 1"));
         boolean isNew = false;
         if (account == null) {
             account = createUserWithOpenid(identity.openid(), identity.unionId());
@@ -79,7 +85,10 @@ public class AuthService {
 
     public AuthDtos.SmsCodeResponse sendSmsCode(AuthDtos.SmsCodeRequest request) {
         String scene = request.getScene().trim().toLowerCase();
-        if (!"login".equals(scene) && !"bind".equals(scene) && !"cancel".equals(scene) && !"recover".equals(scene)) {
+        if (!"login".equals(scene)
+                && !"bind".equals(scene)
+                && !"cancel".equals(scene)
+                && !"recover".equals(scene)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind/cancel/recover");
         }
         long now = System.currentTimeMillis();
@@ -112,9 +121,11 @@ public class AuthService {
     @Transactional
     public AuthDtos.SessionResponse loginByPhone(AuthDtos.PhoneLoginRequest request) {
         consumeSmsCode(request.getPhone(), request.getSmsCode(), "login");
-        UserAccount account = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
-                .eq(UserAccount::getPhone, request.getPhone())
-                .last("LIMIT 1"));
+        UserAccount account =
+                userAccountMapper.selectOne(
+                        new LambdaQueryWrapper<UserAccount>()
+                                .eq(UserAccount::getPhone, request.getPhone())
+                                .last("LIMIT 1"));
         boolean isNew = false;
         if (account == null) {
             // 手机号登录新建：openid 占位，后续可微信绑定
@@ -132,7 +143,10 @@ public class AuthService {
 
     public AuthDtos.EmailCodeResponse sendEmailCode(AuthDtos.EmailCodeRequest request) {
         String scene = request.getScene().trim().toLowerCase();
-        if (!"login".equals(scene) && !"bind".equals(scene) && !"cancel".equals(scene) && !"recover".equals(scene)) {
+        if (!"login".equals(scene)
+                && !"bind".equals(scene)
+                && !"cancel".equals(scene)
+                && !"recover".equals(scene)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind/cancel/recover");
         }
         String email = EmailUtils.normalize(request.getEmail());
@@ -167,9 +181,11 @@ public class AuthService {
     public AuthDtos.SessionResponse loginByEmail(AuthDtos.EmailLoginRequest request) {
         String email = EmailUtils.normalize(request.getEmail());
         consumeEmailCode(email, request.getEmailCode(), "login");
-        UserAccount account = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
-                .eq(UserAccount::getEmail, email)
-                .last("LIMIT 1"));
+        UserAccount account =
+                userAccountMapper.selectOne(
+                        new LambdaQueryWrapper<UserAccount>()
+                                .eq(UserAccount::getEmail, email)
+                                .last("LIMIT 1"));
         boolean isNew = false;
         if (account == null) {
             account = createUserWithOpenid("email_" + IdUtils.uuid().substring(0, 16), null);
@@ -189,9 +205,11 @@ public class AuthService {
         if (accessToken == null || accessToken.isBlank()) {
             return;
         }
-        UserSession session = userSessionMapper.selectOne(new LambdaQueryWrapper<UserSession>()
-                .eq(UserSession::getAccessToken, accessToken)
-                .last("LIMIT 1"));
+        UserSession session =
+                userSessionMapper.selectOne(
+                        new LambdaQueryWrapper<UserSession>()
+                                .eq(UserSession::getAccessToken, accessToken)
+                                .last("LIMIT 1"));
         if (session != null && session.getIsValid() != null && session.getIsValid() == 1) {
             session.setIsValid(0);
             userSessionMapper.updateById(session);
@@ -199,11 +217,8 @@ public class AuthService {
     }
 
     public UserSession requireValidSession(String accessToken) {
-        UserSession session = userSessionMapper.selectOne(new LambdaQueryWrapper<UserSession>()
-                .eq(UserSession::getAccessToken, accessToken)
-                .eq(UserSession::getIsValid, 1)
-                .last("LIMIT 1"));
-        if (session == null || session.getExpireAt() == null || session.getExpireAt().isBefore(LocalDateTime.now())) {
+        UserSession session = activeSession(accessToken);
+        if (session == null) {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
         UserAccount account = userAccountMapper.selectById(session.getUserId());
@@ -212,19 +227,12 @@ public class AuthService {
     }
 
     /**
-     * 解析 C 端会话：token 有效且账号非注销中/已注销时返回 userId + 账号状态；
-     * 否则返回 null（无效 / 注销中 / 已注销）。状态门禁由 {@code UserSessionAuthFilter} 处理。
+     * 解析 C 端会话：token 有效且账号非注销中/已注销时返回 userId + 账号状态； 否则返回 null（无效 / 注销中 / 已注销）。状态门禁由 {@code
+     * UserSessionAuthFilter} 处理。
      */
     public AuthDtos.SessionPrincipal resolveSession(String accessToken) {
-        if (accessToken == null || accessToken.isBlank()) {
-            return null;
-        }
-        UserSession session = userSessionMapper.selectOne(new LambdaQueryWrapper<UserSession>()
-                .eq(UserSession::getAccessToken, accessToken)
-                .eq(UserSession::getIsValid, 1)
-                .last("LIMIT 1"));
-        if (session == null || session.getExpireAt() == null
-                || session.getExpireAt().isBefore(LocalDateTime.now())) {
+        UserSession session = activeSession(accessToken);
+        if (session == null) {
             return null;
         }
         UserAccount account = userAccountMapper.selectById(session.getUserId());
@@ -234,25 +242,52 @@ public class AuthService {
         Integer status = account.getAccountStatus();
         if (status != null
                 && (status == CodeEnum.AccountStatus.CANCELLING.getCode()
-                    || status == CodeEnum.AccountStatus.CANCELLED.getCode())) {
+                        || status == CodeEnum.AccountStatus.CANCELLED.getCode())) {
             return null;
         }
         return new AuthDtos.SessionPrincipal(session.getUserId(), status);
     }
 
+    private UserSession activeSession(String accessToken) {
+        if (accessToken == null || accessToken.isBlank()) {
+            return null;
+        }
+        UserSession session =
+                userSessionMapper.selectOne(
+                        new LambdaQueryWrapper<UserSession>()
+                                .eq(UserSession::getAccessToken, accessToken)
+                                .last("LIMIT 1"));
+        LocalDateTime now = LocalDateTime.now();
+        if (session == null
+                || session.getExpireAt() == null
+                || !session.getExpireAt().isAfter(now)) {
+            return null;
+        }
+        if (!Integer.valueOf(1).equals(session.getIsValid())) {
+            if (userSessionMapper.countOtherActiveSessions(session.getUserId(), accessToken, now)
+                    > 0) {
+                throw new BizException(ErrorCode.SESSION_REPLACED);
+            }
+            return null;
+        }
+        return session;
+    }
+
     /** 注销/管理员操作时，批量失效某用户的全部有效会话。 */
     public void revokeAllSessions(Long userId) {
-        userSessionMapper.update(null, new LambdaUpdateWrapper<UserSession>()
-                .eq(UserSession::getUserId, userId)
-                .eq(UserSession::getIsValid, 1)
-                .set(UserSession::getIsValid, 0));
+        userSessionMapper.update(
+                null,
+                new LambdaUpdateWrapper<UserSession>()
+                        .eq(UserSession::getUserId, userId)
+                        .eq(UserSession::getIsValid, 1)
+                        .set(UserSession::getIsValid, 0));
     }
 
     /**
      * 账号注销：清理 auth 域数据。
-     * <p>
-     * 手机号/邮箱必须由调用方在墓碑置空<b>之前</b>读出来传进来：验证码表没有 user_id，
-     * 墓碑一旦把 {@code phone/email} 置空，这两张表就再也定位不到该用户的记录了。
+     *
+     * <p>手机号/邮箱必须由调用方在墓碑置空<b>之前</b>读出来传进来：验证码表没有 user_id， 墓碑一旦把 {@code phone/email}
+     * 置空，这两张表就再也定位不到该用户的记录了。
      *
      * @param phone 注销前的手机号（可空）
      * @param email 注销前的邮箱（可空）
@@ -270,12 +305,14 @@ public class AuthService {
 
     /** 登录、绑定与注销各自消费对应 scene 的验证码，互不串用。 */
     public void consumeSmsCode(String phone, String smsCode, String scene) {
-        AuthSmsCode row = authSmsCodeMapper.selectOne(new LambdaQueryWrapper<AuthSmsCode>()
-                .eq(AuthSmsCode::getPhone, phone)
-                .eq(AuthSmsCode::getScene, scene)
-                .eq(AuthSmsCode::getIsUsed, 0)
-                .orderByDesc(AuthSmsCode::getId)
-                .last("LIMIT 1"));
+        AuthSmsCode row =
+                authSmsCodeMapper.selectOne(
+                        new LambdaQueryWrapper<AuthSmsCode>()
+                                .eq(AuthSmsCode::getPhone, phone)
+                                .eq(AuthSmsCode::getScene, scene)
+                                .eq(AuthSmsCode::getIsUsed, 0)
+                                .orderByDesc(AuthSmsCode::getId)
+                                .last("LIMIT 1"));
         // 统一 40001，防枚举
         if (row == null
                 || row.getExpireAt() == null
@@ -290,12 +327,14 @@ public class AuthService {
     /** 登录、绑定与注销各自消费对应 scene 的验证码，互不串用。 */
     public void consumeEmailCode(String email, String emailCode, String scene) {
         String normalized = EmailUtils.normalize(email);
-        AuthEmailCode row = authEmailCodeMapper.selectOne(new LambdaQueryWrapper<AuthEmailCode>()
-                .eq(AuthEmailCode::getEmail, normalized)
-                .eq(AuthEmailCode::getScene, scene)
-                .eq(AuthEmailCode::getIsUsed, 0)
-                .orderByDesc(AuthEmailCode::getId)
-                .last("LIMIT 1"));
+        AuthEmailCode row =
+                authEmailCodeMapper.selectOne(
+                        new LambdaQueryWrapper<AuthEmailCode>()
+                                .eq(AuthEmailCode::getEmail, normalized)
+                                .eq(AuthEmailCode::getScene, scene)
+                                .eq(AuthEmailCode::getIsUsed, 0)
+                                .orderByDesc(AuthEmailCode::getId)
+                                .last("LIMIT 1"));
         if (row == null
                 || row.getExpireAt() == null
                 || row.getExpireAt().isBefore(LocalDateTime.now())
@@ -306,16 +345,14 @@ public class AuthService {
         authEmailCodeMapper.updateById(row);
     }
 
-    /**
-     * 注销等敏感操作的微信身份复核：现场用 wx.login code 换取 openid，
-     * 必须与账号 openid 一致。code 一次性有效，换取即消费，天然防重放。
-     */
+    /** 注销等敏感操作的微信身份复核：现场用 wx.login code 换取 openid， 必须与账号 openid 一致。code 一次性有效，换取即消费，天然防重放。 */
     public void assertWechatIdentity(String code, String expectedOpenid) {
         if (code == null || code.isBlank()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先完成微信身份验证");
         }
         WechatAuthClient.WechatIdentity identity = wechatAuthClient.exchangeCode(code);
-        if (identity == null || identity.openid() == null
+        if (identity == null
+                || identity.openid() == null
                 || !identity.openid().equals(expectedOpenid)) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "微信身份验证失败，请重试");
         }
@@ -354,6 +391,12 @@ public class AuthService {
     }
 
     private UserSession createSession(Long userId, int loginType) {
+        // 登录事务内先锁账号，再使旧令牌失效并插入新会话；并发登录也只保留最后一次签发。
+        // 后续步骤失败会一起回滚，不会因为一次失败的登录踢掉原终端。
+        if (userSessionMapper.lockAccount(userId) == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
+        revokeAllSessions(userId);
         UserSession session = new UserSession();
         session.setUserId(userId);
         session.setAccessToken(IdUtils.uuid());
@@ -399,13 +442,17 @@ public class AuthService {
         }
     }
 
-    private AuthDtos.SessionResponse toSessionResponse(UserSession session, UserAccount account, boolean isNew) {
-        UserSetting setting = userSettingMapper.selectOne(new LambdaQueryWrapper<UserSetting>()
-                .eq(UserSetting::getUserId, account.getId())
-                .last("LIMIT 1"));
-        boolean needDisclaimer = setting == null
-                || setting.getDisclaimerAgreed() == null
-                || setting.getDisclaimerAgreed() == 0;
+    private AuthDtos.SessionResponse toSessionResponse(
+            UserSession session, UserAccount account, boolean isNew) {
+        UserSetting setting =
+                userSettingMapper.selectOne(
+                        new LambdaQueryWrapper<UserSetting>()
+                                .eq(UserSetting::getUserId, account.getId())
+                                .last("LIMIT 1"));
+        boolean needDisclaimer =
+                setting == null
+                        || setting.getDisclaimerAgreed() == null
+                        || setting.getDisclaimerAgreed() == 0;
         return AuthDtos.SessionResponse.builder()
                 .accessToken(session.getAccessToken())
                 .expiresIn(C_TOKEN_SECONDS)

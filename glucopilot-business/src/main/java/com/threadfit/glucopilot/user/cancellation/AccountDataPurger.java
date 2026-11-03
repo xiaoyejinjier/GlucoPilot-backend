@@ -4,7 +4,7 @@ import com.threadfit.glucopilot.ai.business.chat.service.ChatSessionService;
 import com.threadfit.glucopilot.ai.business.ocr.service.OcrTaskService;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 import com.threadfit.glucopilot.auth.service.AuthService;
-import com.threadfit.glucopilot.community.CommunityService;
+import com.threadfit.glucopilot.community.shared.service.CommunityService;
 import com.threadfit.glucopilot.device.service.UserDeviceService;
 import com.threadfit.glucopilot.export.DataExportService;
 import com.threadfit.glucopilot.file.service.MediaFileService;

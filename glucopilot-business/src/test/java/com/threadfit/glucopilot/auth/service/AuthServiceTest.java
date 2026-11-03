@@ -1,5 +1,14 @@
 package com.threadfit.glucopilot.auth.service;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.threadfit.glucopilot.auth.client.WechatAuthClient;
 import com.threadfit.glucopilot.auth.dto.AuthDtos;
 import com.threadfit.glucopilot.auth.entity.AuthSmsCode;
@@ -15,6 +24,8 @@ import com.threadfit.glucopilot.user.entity.UserSetting;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
 import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
 import com.threadfit.glucopilot.user.mapper.UserSettingMapper;
+
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -24,50 +35,49 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
-/**
- * 合并回归：注册建档（account/profile/health/setting 四表）、二次登录、
- * 会话失效、验证码登录与 SMS 冷却。
- */
+/** 合并回归：注册建档（account/profile/health/setting 四表）、二次登录、 会话失效、验证码登录与 SMS 冷却。 */
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
 
     private static final String OPENID = "openid-1";
 
-    @Mock
-    private WechatAuthClient wechatAuthClient;
-    @Mock
-    private UserAccountMapper userAccountMapper;
-    @Mock
-    private UserProfileMapper userProfileMapper;
-    @Mock
-    private UserHealthMapper userHealthMapper;
-    @Mock
-    private UserSettingMapper userSettingMapper;
-    @Mock
-    private UserSessionMapper userSessionMapper;
-    @Mock
-    private AuthSmsCodeMapper authSmsCodeMapper;
+    @Mock private WechatAuthClient wechatAuthClient;
+    @Mock private UserAccountMapper userAccountMapper;
+    @Mock private UserProfileMapper userProfileMapper;
+    @Mock private UserHealthMapper userHealthMapper;
+    @Mock private UserSettingMapper userSettingMapper;
+    @Mock private UserSessionMapper userSessionMapper;
+    @Mock private AuthSmsCodeMapper authSmsCodeMapper;
 
-    @InjectMocks
-    private AuthService service;
+    @InjectMocks private AuthService service;
+
+    @BeforeEach
+    void sessionAccountLock() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(
+                        new com.baomidou.mybatisplus.core.MybatisConfiguration(),
+                        "auth-session-test"),
+                UserSession.class);
+        lenient().when(userSessionMapper.lockAccount(any())).thenReturn(1L);
+        lenient()
+                .doAnswer(
+                        invocation -> {
+                            UserAccount account = invocation.getArgument(0);
+                            account.setId(1L);
+                            return 1;
+                        })
+                .when(userAccountMapper)
+                .insert(any(UserAccount.class));
+    }
 
     @Test
     void loginByWechatRegistersNewUserWithFourRows() {
-        when(wechatAuthClient.exchangeCode("js-code")).thenReturn(
-                new WechatAuthClient.WechatIdentity(OPENID, "union-1"));
+        when(wechatAuthClient.exchangeCode("js-code"))
+                .thenReturn(new WechatAuthClient.WechatIdentity(OPENID, "union-1"));
         when(userAccountMapper.selectOne(any())).thenReturn(null);
         when(userSettingMapper.selectOne(any())).thenReturn(agreedSetting());
 
-        AuthDtos.SessionResponse response =
-                service.loginByWechat(wechatLogin("js-code"));
+        AuthDtos.SessionResponse response = service.loginByWechat(wechatLogin("js-code"));
 
         assertTrue(response.getIsNewUser());
         assertTrue(response.getNeedDisclaimer());
@@ -85,13 +95,12 @@ class AuthServiceTest {
 
     @Test
     void loginByWechatSecondTimeSkipsRegistration() {
-        when(wechatAuthClient.exchangeCode("js-code")).thenReturn(
-                new WechatAuthClient.WechatIdentity(OPENID, "union-1"));
+        when(wechatAuthClient.exchangeCode("js-code"))
+                .thenReturn(new WechatAuthClient.WechatIdentity(OPENID, "union-1"));
         when(userAccountMapper.selectOne(any())).thenReturn(account(null));
         when(userSettingMapper.selectOne(any())).thenReturn(agreedSetting());
 
-        AuthDtos.SessionResponse response =
-                service.loginByWechat(wechatLogin("js-code"));
+        AuthDtos.SessionResponse response = service.loginByWechat(wechatLogin("js-code"));
 
         assertEquals(false, response.getIsNewUser());
         // 已有账号不再重复建档，仅刷新登录信息
@@ -127,8 +136,9 @@ class AuthServiceTest {
     void loginByPhoneRejectsWrongCode() {
         when(authSmsCodeMapper.selectOne(any())).thenReturn(smsCode("123456", 0));
 
-        assertThrows(BizException.class, () ->
-                service.loginByPhone(phoneLogin("13800000000", "000000")));
+        assertThrows(
+                BizException.class,
+                () -> service.loginByPhone(phoneLogin("13800000000", "000000")));
 
         verify(userAccountMapper, never()).insert(any(UserAccount.class));
         verify(userHealthMapper, never()).insert(any(UserHealth.class));
@@ -138,8 +148,9 @@ class AuthServiceTest {
     void loginByPhoneRejectsExpiredCode() {
         when(authSmsCodeMapper.selectOne(any())).thenReturn(smsCode("123456", -300));
 
-        assertThrows(BizException.class, () ->
-                service.loginByPhone(phoneLogin("13800000000", "123456")));
+        assertThrows(
+                BizException.class,
+                () -> service.loginByPhone(phoneLogin("13800000000", "123456")));
 
         verify(userAccountMapper, never()).insert(any(UserAccount.class));
     }

@@ -1,12 +1,16 @@
 package com.threadfit.glucopilot.content.service;
 
-import com.threadfit.glucopilot.community.CommunityService;
-import com.threadfit.glucopilot.community.PublicationDtos;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.when;
+
+import com.threadfit.glucopilot.community.article.dto.PublicationDtos;
+import com.threadfit.glucopilot.community.reaction.mapper.NewsUserActionMapper;
+import com.threadfit.glucopilot.community.shared.service.CommunityService;
 import com.threadfit.glucopilot.content.dto.ContentDtos;
 import com.threadfit.glucopilot.content.entity.CmsNews;
 import com.threadfit.glucopilot.content.mapper.CmsBannerMapper;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
-import com.threadfit.glucopilot.content.mapper.NewsUserActionMapper;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -15,9 +19,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class ContentServiceDetailTagsTest {
@@ -43,7 +44,8 @@ class ContentServiceDetailTagsTest {
         when(newsMapper.selectById(9L)).thenReturn(news);
         when(community.articleImages(9L)).thenReturn(List.of());
         when(community.articleVideos(9L)).thenReturn(List.of());
-        when(community.articleTags(9L)).thenReturn(List.of(new PublicationDtos.Tag("diet", "饮食控糖")));
+        when(community.articleTags(9L))
+                .thenReturn(List.of(new PublicationDtos.Tag("diet", "饮食控糖")));
         when(community.newsAuthor(null, 9L)).thenReturn(null);
         when(community.commentCount(9L)).thenReturn(0L);
 

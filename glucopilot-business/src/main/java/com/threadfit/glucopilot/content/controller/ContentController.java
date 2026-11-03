@@ -41,12 +41,4 @@ public class ContentController {
     public ApiResponse<ContentDtos.NewsDetail> newsDetail(@PathVariable("id") Long id) {
         return ApiResponse.ok(contentService.getNewsDetail(id, RequestContext.getUserId()));
     }
-
-    @PutMapping("/news/{id}/actions")
-    public ApiResponse<ContentDtos.NewsActionResult> newsActions(
-            @PathVariable("id") Long id,
-            @RequestBody ContentDtos.NewsActionRequest request) {
-        Long userId = RequestContext.requireUserId();
-        return ApiResponse.ok(contentService.updateNewsAction(userId, id, request));
-    }
 }

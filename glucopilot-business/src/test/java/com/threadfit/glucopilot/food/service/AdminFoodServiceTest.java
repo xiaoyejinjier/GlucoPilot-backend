@@ -35,6 +35,9 @@ class AdminFoodServiceTest {
     @Mock
     private FoodNutritionMapper foodNutritionMapper;
 
+    @Mock
+    private FoodCatalogCache cache;
+
     @InjectMocks
     private AdminFoodService service;
 

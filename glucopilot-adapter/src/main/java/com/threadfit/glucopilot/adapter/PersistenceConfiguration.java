@@ -37,6 +37,7 @@ public class PersistenceConfiguration {
   @MapperScan(
       basePackages = "com.threadfit.glucopilot",
       markerInterface = com.baomidou.mybatisplus.core.mapper.BaseMapper.class,
+      annotationClass = org.apache.ibatis.annotations.Mapper.class,
       sqlSessionFactoryRef = "glucoSqlSessionFactory",
       nameGenerator = FullyQualifiedAnnotationBeanNameGenerator.class)
   static class BusinessMappers {}

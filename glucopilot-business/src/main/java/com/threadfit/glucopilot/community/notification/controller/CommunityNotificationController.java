@@ -1,0 +1,36 @@
+package com.threadfit.glucopilot.community.notification.controller;
+
+import com.threadfit.glucopilot.common.api.*;
+import com.threadfit.glucopilot.common.context.RequestContext;
+import com.threadfit.glucopilot.community.notification.dto.CommunityNotificationDtos;
+import com.threadfit.glucopilot.community.notification.service.CommunityNotificationService;
+
+import jakarta.validation.Valid;
+
+import lombok.RequiredArgsConstructor;
+
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/api/v1/community")
+public class CommunityNotificationController {
+    private final CommunityNotificationService service;
+
+    @GetMapping("/information/summary")
+    public ApiResponse<CommunityNotificationDtos.Summary> summary() {
+        return ApiResponse.ok(service.summary(RequestContext.requireUserId()));
+    }
+
+    @GetMapping("/notifications")
+    public ApiResponse<PageResult<CommunityNotificationDtos.Notice>> list(
+            @RequestParam String kind, @Valid PageQuery q) {
+        return ApiResponse.ok(service.list(RequestContext.requireUserId(), kind, q));
+    }
+
+    @PutMapping("/notifications/read")
+    public ApiResponse<Void> read(@RequestBody CommunityNotificationDtos.Read p) {
+        service.read(RequestContext.requireUserId(), p);
+        return ApiResponse.ok();
+    }
+}

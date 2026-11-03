@@ -19,6 +19,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 class FoodRepeatedDeletionSqlTest {
     @Test
@@ -52,8 +53,13 @@ class FoodRepeatedDeletionSqlTest {
                 var category = new com.threadfit.glucopilot.food.entity.FoodCategory(); category.setId(1L); category.setCategoryName("主食类");
                 when(categories.selectById(1L)).thenReturn(category);
                 when(categories.selectList(null)).thenReturn(java.util.List.of(category));
-                var service = new AdminFoodService(categories, mapper);
-                var clientFoods = new FoodService(categories, mapper);
+                var cache = mock(FoodCatalogCache.class);
+                when(cache.foodDetail(any(), any())).thenAnswer(invocation -> {
+                    java.util.function.Supplier<?> query = invocation.getArgument(1);
+                    return query.get();
+                });
+                var service = new AdminFoodService(categories, mapper, cache);
+                var clientFoods = new FoodService(categories, mapper, cache);
                 RequestContext.setOpsId(9L);
                 for (int version = 0; version < 3; version++) {
                     var food = new FoodNutrition(); food.setFoodName("小笼包"); food.setCategoryCode(1);

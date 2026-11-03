@@ -1,4 +1,5 @@
 package com.threadfit.glucopilot.ai.prompt.mapper;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;

@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.prompt.service;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import org.junit.jupiter.api.BeforeEach;

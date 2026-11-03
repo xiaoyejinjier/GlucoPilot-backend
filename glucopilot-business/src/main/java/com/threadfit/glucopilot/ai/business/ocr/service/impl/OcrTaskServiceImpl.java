@@ -6,7 +6,7 @@ import com.threadfit.glucopilot.ai.business.ocr.dto.OcrDtos.GlucoseResult;
 import com.threadfit.glucopilot.ai.business.ocr.dto.OcrDtos.TaskView;
 import com.threadfit.glucopilot.ai.business.ocr.entity.OcrTask;
 import com.threadfit.glucopilot.ai.business.ocr.mapper.OcrTaskMapper;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.context.RequestContext;

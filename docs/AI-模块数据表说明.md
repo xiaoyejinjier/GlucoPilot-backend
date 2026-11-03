@@ -114,7 +114,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 22 | `cipher_algo` | varchar(32) | YES | — | 密钥加密算法（如 `AES-GCM`）；NULL = 明文遗留或未配置 |
 | 23 | `key_version` | int unsigned | YES | — | 加密主密钥版本，支持轮换（`AiModelCipher.currentKeyVersion()`） |
 | 24 | `top_p` | decimal(3,2) | YES | — | 核采样；NULL = 用 provider 默认 |
-| 25 | `thinking` | tinyint(1) | YES | — | 是否开推理链（DeepSeek 专有）；NULL = 不显式设置（注意这里是**可空三态**，不是 0/1）；视觉用途没有这个入参，填了不生效 |
+| 25 | `thinking` | tinyint(1) | YES | — | 是否开推理链（厂商私有扩展：DeepSeek 的 `thinking`，协议统一后走 `extraBody`）；NULL = 不显式设置（这里是**可空三态**，不是 0/1）；视觉模型没有这个入参，填了不生效 |
 | 26 | `extra_params` | json | YES | — | 厂商特有参数，避免为每家加列 |
 | 27 | `config_version` | bigint unsigned | NO | 1 | 配置版本：乐观锁 + 缓存失效判据 |
 | 28 | `last_test_at` | datetime(3) | YES | — | 最近一次连通性测试时间 |
@@ -262,6 +262,8 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 ## 6. `chat_message` — 聊天消息表
 
 **用途**：对话正文 + 多模态引用 + token 计量。`ChatMessageServiceImpl` 写，`ChatCompletionServiceImpl` 读/写。
+
+**这里也是全库唯一有真实用量数据的地方**：`prompt_tokens` / `completion_tokens` / `model_code` / `latency_ms` 只在助手消息上落库，`GET /admin/v1/ai/usage`（接口文档 4.28）就是按 `CAST(gmt_create AS DATE) × model_code` 聚合这几列。摘要、记忆抽取、内容审核、饮食识别、OCR 都只取 `.content()`，没有用量记录——所以「哪个场景花了多少」目前答不出来，这是数据缺口而不是接口缺失。
 
 **索引**：`PRIMARY(id)`、`uk_session_seq(session_id,seq_no)`、`uk_session_client_active(session_id,client_msg_id,is_deleted)`、`idx_session_seq`、`idx_session_time(session_id,gmt_create)`、`idx_reply_to(reply_to_msg_id)`
 

@@ -4,19 +4,19 @@ import com.threadfit.glucopilot.ai.business.chat.dto.ChatDtos;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
-import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
-import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
-import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
-import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
-import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryAdvisorParams;
+import com.threadfit.glucopilot.ai.business.chat.support.EnglishPreambleGuard;
+import com.threadfit.glucopilot.ai.business.chat.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
+import com.threadfit.glucopilot.ai.advisor.ChatMemoryAdvisorParams;
 import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
-import com.threadfit.glucopilot.ai.memory.assembly.TokenEstimator;
+import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.tool.AiToolContext;
-import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
+import com.threadfit.glucopilot.ai.tool.runtime.AiToolContext;
+import com.threadfit.glucopilot.ai.tool.runtime.AiToolRegistry;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
@@ -263,7 +263,7 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
                 .toolContext(toolContext)
                 .user(input.promptText());
         if (chatClientRegistry.hasOverrides(SceneCode.CHAT)) {
-            promptSpec = promptSpec.options(chatClientRegistry.optionsBuilder(SceneCode.CHAT));
+            promptSpec = promptSpec.options(chatClientRegistry.optionsFor(SceneCode.CHAT));
         }
 
         Flux<ServerSentEvent<byte[]>> deltas = promptSpec.stream()

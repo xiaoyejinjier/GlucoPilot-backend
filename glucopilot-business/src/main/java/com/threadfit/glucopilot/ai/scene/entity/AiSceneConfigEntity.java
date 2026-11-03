@@ -1,4 +1,5 @@
 package com.threadfit.glucopilot.ai.scene.entity;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;

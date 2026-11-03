@@ -7,8 +7,8 @@ import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
 import com.baomidou.mybatisplus.spring.MybatisSqlSessionFactoryBean;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
-import com.threadfit.glucopilot.ai.config.AIProperties;
-import com.threadfit.glucopilot.ai.core.SceneModelResolver;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.context.RequestContext;
@@ -21,6 +21,7 @@ import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import tools.jackson.databind.ObjectMapper;
@@ -40,6 +41,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -80,7 +82,7 @@ class UserChatMemorySelfServiceTest {
         memoryMapper = mock(ChatUserMemoryMapper.class);
         aiProperties = new AIProperties();
         service = new UserChatMemoryServiceImpl(
-                mock(ChatClient.class),
+                registryWith(mock(ChatClient.class)),
                 memoryMapper,
                 mock(ChatMessageMapper.class),
                 mock(AiPromptTemplateService.class),
@@ -305,7 +307,7 @@ class UserChatMemorySelfServiceTest {
 
     private UserChatMemoryService realServiceWith(ChatUserMemoryMapper realMapper) {
         return new UserChatMemoryServiceImpl(
-                mock(ChatClient.class),
+                registryWith(mock(ChatClient.class)),
                 realMapper,
                 mock(ChatMessageMapper.class),
                 mock(AiPromptTemplateService.class),
@@ -369,5 +371,12 @@ class UserChatMemorySelfServiceTest {
         interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.H2));
         factory.setPlugins(interceptor);
         return factory.getObject();
+    }
+    /** 把 mock 的 ChatClient 包成 registry：记忆抽取只通过 registry 取客户端。 */
+    private static AiChatClientRegistry registryWith(ChatClient client) {
+        AiChatClientRegistry registry = mock(AiChatClientRegistry.class);
+        when(registry.summaryAvailable()).thenReturn(true);
+        when(registry.summaryClient()).thenReturn(client);
+        return registry;
     }
 }

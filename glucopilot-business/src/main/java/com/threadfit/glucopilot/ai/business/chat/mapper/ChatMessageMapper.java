@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatSessionService;
 
@@ -122,6 +123,42 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
             + "</script>")
     List<java.util.Map<String, Object>> selectLastMessagePerSession(
             @Param("sessionIds") java.util.Collection<Long> sessionIds);
+
+    /**
+     * AI 用量报表：按「天 × 模型」汇总助手消息里落库的 token。
+     *
+     * <h2>为什么放在这张表的 mapper 里，而不是单开一个只读 mapper</h2>
+     * 本项目的 MyBatis 扫描以 {@code BaseMapper} 为标记（{@code PersistenceConfiguration.BusinessMappers}），
+     * 一个不继承 {@code BaseMapper} 的接口不会被注册——它只能退化成"看起来是 Mapper、启动后找不到 Bean"。
+     * 而空继承 {@code BaseMapper<ChatMessage>} 只为过扫描，会带进一整套用不到的 CRUD。
+     * 结论：按<b>表</b>归档（本表所有查询都在这里），而不是按"职责"再切一层。
+     *
+     * <h2>SQL 上的两个刻意选择</h2>
+     * <ul>
+     *   <li><b>按 {@code msg_role = 2} 过滤</b>：只有助手消息带 usage，用户消息 token 恒为 NULL，
+     *       不过滤会把调用次数算成两倍。</li>
+     *   <li><b>半开区间</b>（{@code >= from} 且 {@code < to}）：{@code to} 由服务层传"结束日期 + 1 天"，
+     *       不写 {@code DATE_ADD}/{@code DATEADD}，避开 MySQL 与 H2 的方言差异。</li>
+     * </ul>
+     *
+     * @param from 起始时刻（含）
+     * @param to   结束时刻（<b>不含</b>，服务层传结束日期次日零点）
+     */
+    @Select("""
+            SELECT CAST(gmt_create AS DATE) AS day,
+                   COALESCE(model_code, '')  AS model_code,
+                   COALESCE(SUM(prompt_tokens), 0)     AS prompt_tokens,
+                   COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                   COUNT(*)                            AS calls
+            FROM chat_message
+            WHERE is_deleted = 0
+              AND msg_role = 2
+              AND gmt_create >= #{from}
+              AND gmt_create < #{to}
+            GROUP BY CAST(gmt_create AS DATE), COALESCE(model_code, '')
+            ORDER BY day DESC, model_code ASC
+            """)
+    List<ChatUsageRow> selectDailyUsage(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 
     /**
      * 账号注销：物理删除该用户全部消息。

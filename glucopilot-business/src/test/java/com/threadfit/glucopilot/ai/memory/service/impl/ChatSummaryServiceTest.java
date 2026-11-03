@@ -1,16 +1,18 @@
 package com.threadfit.glucopilot.ai.memory.service.impl;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
-import com.threadfit.glucopilot.ai.config.AIProperties;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 
 import java.util.ArrayList;
@@ -57,11 +59,14 @@ class ChatSummaryServiceTest {
     private final AIProperties properties = new AIProperties();
 
     /** 摘要请求的 options（关思维链/输出封顶）由它给出；本测试只关心被调用。 */
-    private final com.threadfit.glucopilot.ai.core.SceneModelResolver sceneModelResolver =
-            mock(com.threadfit.glucopilot.ai.core.SceneModelResolver.class);
+    private final com.threadfit.glucopilot.ai.routing.SceneModelResolver sceneModelResolver =
+            mock(com.threadfit.glucopilot.ai.routing.SceneModelResolver.class);
 
     /** 直接在当前线程执行，便于断言"异步任务真的做了什么"。 */
     private final Executor directExecutor = Runnable::run;
+
+    /** 摘要用的「裸」文本客户端 provider：本测试只关心"能不能拿到"和"拿到的东西被怎么用"。 */
+    private AiChatClientRegistry clients;
 
     private ChatClient chatClient;
 
@@ -74,20 +79,23 @@ class ChatSummaryServiceTest {
     @BeforeEach
     void setUp() {
         chatClient = mock(ChatClient.class);
+        clients = mock(AiChatClientRegistry.class);
+        when(clients.summaryAvailable()).thenReturn(true);
+        when(clients.summaryClient()).thenReturn(chatClient);
         requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
         callSpec = mock(ChatClient.CallResponseSpec.class);
         when(chatClient.prompt()).thenReturn(requestSpec);
         when(requestSpec.system(anyString())).thenReturn(requestSpec);
         // 用 thenAnswer 而不是 thenReturn：返回类型是 ChatOptions.Builder<?>，泛型推断在 thenReturn 上过不去
         when(sceneModelResolver.summaryOptionsBuilder())
-                .thenAnswer(invocation -> org.springframework.ai.deepseek.DeepSeekChatOptions.builder());
+                .thenAnswer(invocation -> org.springframework.ai.openai.OpenAiChatOptions.builder());
         when(requestSpec.options(any(org.springframework.ai.chat.prompt.ChatOptions.Builder.class)))
                 .thenReturn(requestSpec);
         when(requestSpec.user(anyString())).thenReturn(requestSpec);
         when(requestSpec.call()).thenReturn(callSpec);
         when(promptTemplateService.systemPrompt(SceneCode.SUMMARY)).thenReturn("摘要提示词");
 
-        service = new ChatSummaryServiceImpl(chatClient, chatSessionMapper, chatMessageMapper,
+        service = new ChatSummaryServiceImpl(clients, chatSessionMapper, chatMessageMapper,
                 promptTemplateService, sceneModelResolver, properties, new ChatRoundGuard(), directExecutor);
     }
 
@@ -217,7 +225,7 @@ class ChatSummaryServiceTest {
         Executor rejecting = command -> {
             throw new RejectedExecutionException("queue full");
         };
-        ChatSummaryServiceImpl rejectingService = new ChatSummaryServiceImpl(chatClient, chatSessionMapper,
+        ChatSummaryServiceImpl rejectingService = new ChatSummaryServiceImpl(clients, chatSessionMapper,
                 chatMessageMapper, promptTemplateService, sceneModelResolver, properties, new ChatRoundGuard(), rejecting);
 
         rejectingService.maybeSummarizeAsync(USER_ID, SESSION_ID);
@@ -236,7 +244,7 @@ class ChatSummaryServiceTest {
         when(callSpec.content()).thenReturn("摘要");
         // 让任务在"执行中"卡住：用一个可控的执行器
         List<Runnable> queued = new ArrayList<>();
-        ChatSummaryService queuedService = new ChatSummaryServiceImpl(chatClient, chatSessionMapper,
+        ChatSummaryService queuedService = new ChatSummaryServiceImpl(clients, chatSessionMapper,
                 chatMessageMapper, promptTemplateService, sceneModelResolver, properties, new ChatRoundGuard(), queued::add);
 
         queuedService.maybeSummarizeAsync(USER_ID, SESSION_ID);

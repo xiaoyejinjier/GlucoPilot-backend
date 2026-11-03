@@ -1,4 +1,5 @@
 package com.threadfit.glucopilot.ai.prompt.controller;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 
 import com.threadfit.glucopilot.common.api.ApiResponse;
 import jakarta.validation.Valid;

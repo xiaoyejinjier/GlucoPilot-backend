@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.prompt.service;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.template.TemplateRenderer;
 import org.springframework.ai.template.ValidationMode;

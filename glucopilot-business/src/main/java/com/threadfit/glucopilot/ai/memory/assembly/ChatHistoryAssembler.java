@@ -1,6 +1,8 @@
 package com.threadfit.glucopilot.ai.memory.assembly;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
+import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -9,7 +11,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import com.threadfit.glucopilot.ai.prompt.advisor.DynamicPromptAdvisor;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 
 /**

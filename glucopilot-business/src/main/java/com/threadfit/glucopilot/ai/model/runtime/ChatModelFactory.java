@@ -8,15 +8,10 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.ai.deepseek.api.DeepSeekApi;
-import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.ByteArrayResource;
-import org.springframework.core.retry.RetryTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.util.StringUtils;
@@ -24,20 +19,20 @@ import org.springframework.util.StringUtils;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
  * 按运行时规格构造 {@link ChatModel}。
  * <p>
- * <b>两条构造路径，坑都在注释里：</b>
- * <ul>
- *   <li><b>DeepSeek（providerCode=1）</b>：{@code DeepSeekApi} + {@code DeepSeekChatModel}。
- *       必须把 {@code toolCallingManager} 传进去，否则这个模型不能执行工具调用；</li>
- *   <li><b>OpenAI 兼容（其余）</b>：{@code OpenAiChatModel}，<b>把 baseUrl / apiKey / timeout 全部放进
- *       {@code OpenAiChatOptions}</b>，绝不手搓 {@code OpenAIClient}——只设同步 client 会让异步 client 为 null，
- *       {@code build()} 抛 {@code At least one credential source must be specified}，
- *       而报错指向框架内部，极易误判成"配置没读到"（本项目已踩过并记录在 {@code AiVisionClientConfig} 类注释）。</li>
- * </ul>
+ * 协议统一（2026-11）之后只剩<b>一条</b>路径：{@code OpenAiChatModel}。
+ * DeepSeek 官方端点本身就是 OpenAI 兼容的，之前那套 {@code DeepSeekApi} + {@code DeepSeekChatModel}
+ * 已删除——它不能表达 timeout / maxRetries / proxy 这三个参数（连接参数不在 options 上）。
+ * <p>
+ * <b>坑都写在注释里：</b>把 baseUrl / apiKey / timeout 全部放进 {@code OpenAiChatOptions}，
+ * 绝不手搓 {@code OpenAIClient}——只设同步 client 会让异步 client 为 null，{@code build()} 抛
+ * {@code At least one credential source must be specified}，而报错指向框架内部，
+ * 极易误判成"配置没读到"（本项目已踩过并记录在 {@code AiVisionClientConfig} 类注释）。
  * <p>
  * 本类只负责"构造"，不负责缓存与失效——那是 {@link DynamicChatModel} 的事。
  */
@@ -46,10 +41,17 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class ChatModelFactory {
 
-    private final ToolCallingManager toolCallingManager;
     private final ObjectProvider<ObservationRegistry> observationRegistry;
-    private final ObjectProvider<RetryTemplate> retryTemplate;
     private final ObjectProvider<MeterRegistry> meterRegistry;
+
+    /**
+     * OpenAI 兼容协议的重试次数。
+     * <p>
+     * 必须显式给：{@code OpenAiChatModel.Builder} 上<b>没有</b> {@code retryTemplate(...)}（javap 核对过），
+     * 重试只能由 openai-java SDK 自己在 HTTP 层做，入口就是 {@code OpenAiChatOptions.maxRetries}。
+     * 值对齐原 {@code spring.ai.retry.max-attempts: 3}，切换协议时不应顺手改变重试语义。
+     */
+    private static final int OPENAI_MAX_RETRIES = 3;
 
     /** 构造一个可用的 ChatModel。密钥缺失时直接抛异常（把"配置不可用"暴露在构造阶段，而不是发请求时）。 */
     public ChatModel build(AiModelSpec spec) {
@@ -57,63 +59,11 @@ public class ChatModelFactory {
             throw new IllegalStateException("模型 " + spec.modelCode() + " 没有可用密钥"
                     + "（DB 未配置且 yaml/环境变量里也没有），请在后台上传密钥或配置环境变量");
         }
-        ChatModel model = spec.deepSeek() ? buildDeepSeek(spec) : buildOpenAiCompatible(spec);
+        ChatModel model = buildOpenAiCompatible(spec);
         // 只打非敏感字段；baseUrl 打出来是为了区分"连错端点"这类事故
         log.info("已按运行时配置构造模型 modelCode={} provider={} endpoint={} baseUrl={} source={}",
                 spec.modelCode(), spec.providerCode(), spec.modelEndpoint(), spec.baseUrl(), spec.source());
         return model;
-    }
-
-    private ChatModel buildDeepSeek(AiModelSpec spec) {
-        DeepSeekApi.Builder api = DeepSeekApi.builder().apiKey(spec.apiKey());
-        if (StringUtils.hasText(spec.baseUrl())) {
-            api.baseUrl(spec.baseUrl());
-        }
-        if (spec.timeout() != null) {
-            // DeepSeekChatOptions 里没有 timeout（连接参数不在 options 上），而 DeepSeekApi.Builder
-            // 也只有 restClientBuilder/webClientBuilder，没有 timeout()——所以后台的 timeout_ms
-            // 只能在这里装进 HTTP 客户端。不装的话：模型不返回就无限等，现象是「偶发卡住两分钟」。
-            // 只作用于非流式调用（call）；SSE 流式由客户端取消与 async request-timeout 兜底。
-            api.restClientBuilder(AiHttpTimeouts.restClientBuilder(
-                    connectTimeoutOf(spec.timeout()), spec.timeout()));
-        }
-        DeepSeekChatOptions.Builder options = DeepSeekChatOptions.builder();
-        if (StringUtils.hasText(spec.modelEndpoint())) {
-            options.model(spec.modelEndpoint());
-        }
-        if (spec.temperature() != null) {
-            options.temperature(spec.temperature());
-        }
-        if (spec.maxTokens() != null) {
-            options.maxTokens(spec.maxTokens());
-        }
-        if (spec.topP() != null) {
-            options.topP(spec.topP());
-        }
-        if (spec.thinking() != null) {
-            if (spec.thinking()) {
-                options.enableThinking();
-            } else {
-                options.disableThinking();
-            }
-        }
-
-        DeepSeekChatModel.Builder builder = DeepSeekChatModel.builder()
-                .deepSeekApi(api.build())
-                .options(options.build())
-                // 少了这一行，这个模型就不能调用工具（模型照常回答，只是永远不调工具，日志无异常）
-                .toolCallingManager(toolCallingManager);
-        observationRegistry.ifAvailable(builder::observationRegistry);
-        retryTemplate.ifAvailable(builder::retryTemplate);
-        return builder.build();
-    }
-
-    /** 连接超时：不超过调用超时本身，也不超过 10 秒（连不上通常立刻就有结论）。 */
-    private static Duration connectTimeoutOf(Duration callTimeout) {
-        if (callTimeout == null) {
-            return Duration.ofSeconds(10);
-        }
-        return callTimeout.compareTo(Duration.ofSeconds(10)) < 0 ? callTimeout : Duration.ofSeconds(10);
     }
 
     private ChatModel buildOpenAiCompatible(AiModelSpec spec) {
@@ -134,6 +84,16 @@ public class ChatModelFactory {
         }
         if (spec.timeout() != null) {
             options.timeout(spec.timeout());
+        }
+        // SDK 级重试。DeepSeek 分支靠 starter 注入的 RetryTemplate，OpenAI 分支没有那个入口。
+        options.maxRetries(OPENAI_MAX_RETRIES);
+        // 多轮对话里把上一轮的 reasoning_content 回放给模型：DeepSeek 的推理模型在 OpenAI 兼容端点上
+        // 同样依赖这个字段维持思考连贯性；不回放不会报错，但第二轮起推理质量会掉。
+        options.replayReasoningContent(true);
+        if (spec.thinking() != null) {
+            // DeepSeek 的 thinking 是<b>私有扩展</b>，OpenAI 规范里没有对应字段，只能原样塞进请求体。
+            // 视觉模型不会走到这里（yaml 的视觉规格 thinking 恒为 null），因为百炼不认这个字段。
+            options.extraBody(Map.of("thinking", Map.of("type", spec.thinking() ? "enabled" : "disabled")));
         }
 
         OpenAiChatModel.Builder builder = OpenAiChatModel.builder().options(options.build());

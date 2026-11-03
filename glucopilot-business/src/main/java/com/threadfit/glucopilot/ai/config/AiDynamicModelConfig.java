@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.ai.model.runtime.DynamicChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,10 +29,10 @@ import java.util.function.Supplier;
  * 反过来，如果为了"动态"而手搓 {@code ChatClient.builder(...)}，会静默丢掉全部工具
  * ——这是本项目已经记录过的坑（见 {@code AiChatClientConfig} 的注释）。
  *
- * <h2>不会顶掉 starter 的模型</h2>
- * {@code DeepSeekChatAutoConfiguration.deepSeekChatModel()} 上的 {@code @ConditionalOnMissingBean}
- * 是<b>按方法返回类型（{@code DeepSeekChatModel}）判定</b>的，而本委托声明为 {@code ChatModel}，
- * 类型不同，因此 starter 的模型照常创建——它正好成为"yaml 兜底"的那一份（带 RetryTemplate 与观测）。
+ * <h2>与 starter 的关系（协议统一后已不存在）</h2>
+ * 协议统一（2026-11）之后不再引入 DeepSeek starter，容器里<b>没有</b>第二个 ChatModel Bean，
+ * 因此 {@code yamlFallback} 一直是 null，yaml 规格只能由 {@link ChatModelFactory} 现造。
+ * 构造里保留这个参数，是为了「将来若有人再加一个 ChatModel Bean」时它的模型能被复用（而不是被顶掉）。
  */
 @Slf4j
 @Configuration
@@ -40,17 +41,12 @@ public class AiDynamicModelConfig {
     /**
      * 文本通道：{@code @Primary}，是自动装配 Builder 实际使用的那个 ChatModel。
      * <p>
-     * yaml 兜底用 {@code ObjectProvider} <b>懒解析</b>：本 Bean 与 starter 的模型谁先创建没有保证，
-     * 在构造期就去要可能拿到 null；真实取用发生在第一次模型调用时。
-     * <p>
-     * 条件与 {@code AiChatClientConfig} 保持一致（{@code SPRING_AI_MODEL_CHAT}）：对方在
-     * {@code spring.ai.model.chat != deepseek}（含 {@code none}，即"无 Key 部署"）时不会创建文本
-     * ChatClient，本委托自然也不该存在；而且它是 {@code @Primary ChatModel}，无条件创建会
-     * <b>盖掉</b>团队为其它 provider 选的模型。{@code matchIfMissing = true} 保证不配该属性时行为不变。
+     * yaml 兜底用 {@code ObjectProvider} <b>懒解析</b>：真实取用发生在第一次模型调用时。
      */
     @Bean
     @Primary
-    @ConditionalOnProperty(name = "spring.ai.model.chat", havingValue = "deepseek", matchIfMissing = true)
+    // 与 AiChatClientConfig 同一条件：spring.ai.model.chat=none 表示「无 Key 部署」，文本 AI 整体关闭。
+    @ConditionalOnExpression("'${spring.ai.model.chat:}' != 'none'")
     public ChatModel glucopilotTextChatModel(AiRuntimeConfigService runtimeConfig,
                                              ChatModelFactory chatModelFactory,
                                              ObjectProvider<ChatModel> allChatModels) {

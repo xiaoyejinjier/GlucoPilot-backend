@@ -1,8 +1,8 @@
 package com.threadfit.glucopilot.ai.scene.service;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
-import com.threadfit.glucopilot.ai.config.AiModelCapability;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.model.entity.AiModelConfigEntity;
 import com.threadfit.glucopilot.ai.model.mapper.AiModelConfigMapper;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
@@ -280,7 +280,7 @@ class AdminAiSceneServiceTest {
         assertEquals(7, list.getRecords().size());
         assertEquals(1, list.getModels().size());
         assertEquals("DeepSeek Flash", list.getModels().get(0).getName());
-        assertEquals("DeepSeek（自研 SDK）", list.getModels().get(0).getProviderName());
+        assertEquals("DeepSeek（OpenAI 兼容）", list.getModels().get(0).getProviderName());
         // 下拉要按能力过滤：历史行没有 capability 时按 text 兜底，前端据此只列给文本场景
         assertTrue(list.getModels().get(0).getCapability().contains("text"));
         assertTrue(list.getModels().get(0).getCapabilityText().contains("文本"));

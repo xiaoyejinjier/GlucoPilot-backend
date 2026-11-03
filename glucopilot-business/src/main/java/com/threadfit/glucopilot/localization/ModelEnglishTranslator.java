@@ -1,13 +1,12 @@
 package com.threadfit.glucopilot.localization;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.ai.deepseek.api.ResponseFormat;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.HtmlUtils;
 import reactor.core.publisher.Mono;
@@ -39,10 +38,11 @@ public class ModelEnglishTranslator implements EnglishTranslator {
         For PROFILE_NAME, return a short stable English display name or Latin transliteration of the nickname.
         Retain numbers/identifying suffixes; do not invent identity, credentials or a different person. No Chinese characters.
         """;
-    private final ObjectProvider<ChatModel> models;
+    /** 文本模型统一从 registry 取；这里只借它翻译，不需要 ChatClient 的 advisor 链。 */
+    private final com.threadfit.glucopilot.ai.client.AiChatClientRegistry clients;
     private final ObjectMapper json;
-    public ModelEnglishTranslator(@Qualifier("glucopilotTextChatModel") ObjectProvider<ChatModel> models,ObjectMapper json) {
-        this.models=models;this.json=json;
+    public ModelEnglishTranslator(com.threadfit.glucopilot.ai.client.AiChatClientRegistry clients,ObjectMapper json) {
+        this.clients=clients;this.json=json;
     }
     record Part(String value,boolean translate,boolean html) {}
     static List<Part> parts(String value,boolean body) {
@@ -104,9 +104,12 @@ public class ModelEnglishTranslator implements EnglishTranslator {
         return result;
     }
     private Map<String,String> call(String kind,Map<String,String> source) {
-        ChatModel model=models.getIfAvailable();if(model==null)throw new IllegalStateException("Translation model unavailable");
+        ChatModel model=clients.textModel();
         String data=json.writeValueAsString(source);
-        var options=DeepSeekChatOptions.builder().disableThinking().temperature(0.0).maxTokens(6000)
+        // 协议统一后只有 OpenAI 兼容一条路：thinking 是 DeepSeek 私有扩展，只能走 extraBody；
+        // JSON 输出走 OpenAI 的 response_format=json_object。
+        var options=OpenAiChatOptions.builder().temperature(0.0).maxCompletionTokens(6000)
+                .extraBody(Map.of("thinking", Map.of("type", "disabled")))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()).build();
         for(int attempt=0;attempt<2;attempt++) {
             String system=SYSTEM+"\nContent category: "+kind+(attempt==0?"":"\nThe prior response could not be validated. Return valid JSON with all requested string fields, without missing or changing any numeric values or units.");

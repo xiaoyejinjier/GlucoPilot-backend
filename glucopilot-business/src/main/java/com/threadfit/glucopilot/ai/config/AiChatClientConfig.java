@@ -1,25 +1,25 @@
 package com.threadfit.glucopilot.ai.config;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.guard.MedicalGuardAdvisor;
-import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryReadAdvisor;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.advisor.MedicalGuardAdvisor;
+import com.threadfit.glucopilot.ai.advisor.ChatMemoryReadAdvisor;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.prompt.advisor.DynamicPromptAdvisor;
-import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
+import com.threadfit.glucopilot.ai.advisor.DynamicPromptAdvisor;
+import com.threadfit.glucopilot.ai.tool.runtime.AiToolRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
-import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
 
 /**
  * AI ChatClient 装配：把提示词、Advisor 链、工具白名单一次性挂好。
@@ -51,7 +51,8 @@ import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
  */
 @Slf4j
 @Configuration
-@ConditionalOnProperty(name = "spring.ai.model.chat", havingValue = "deepseek", matchIfMissing = true)
+// 无 Key 部署可以设 spring.ai.model.chat=none 关掉文本 AI（此时不创建 ChatClient，调用会得到明确提示）。
+@ConditionalOnExpression("'${spring.ai.model.chat:}' != 'none'")
 @RequiredArgsConstructor
 public class AiChatClientConfig {
 

@@ -1,9 +1,9 @@
 package com.threadfit.glucopilot.ai.scene.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.threadfit.glucopilot.ai.config.AIProperties;
-import com.threadfit.glucopilot.ai.config.AiModelCapability;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.model.entity.AiModelConfigEntity;
 import com.threadfit.glucopilot.ai.model.mapper.AiModelConfigMapper;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
@@ -50,7 +50,7 @@ import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 public class AdminAiSceneServiceImpl implements AdminAiSceneService {
 
     private static final Map<Integer, String> PROVIDER_TEXT = Map.of(
-            1, "DeepSeek（自研 SDK）",
+            1, "DeepSeek（OpenAI 兼容）",
             2, "OpenAI 兼容",
             3, "通义千问",
             4, "文心一言",

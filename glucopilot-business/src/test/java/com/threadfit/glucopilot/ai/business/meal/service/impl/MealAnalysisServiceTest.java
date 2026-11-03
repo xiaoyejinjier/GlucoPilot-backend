@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.business.meal.service.impl;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.core.SceneModelResolver;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;

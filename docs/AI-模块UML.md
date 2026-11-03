@@ -154,7 +154,7 @@ classDiagram
 | `summaryChatClient` | `ChatClient.builder(glucopilotTextChatModel)` | ❌ | ❌ | 摘要/记忆抽取是内部任务，不该带人设、记忆、工具 |
 | `visionChatClient` | `ChatClient.builder(glucopilotVisionChatModel)` | ❌ | ❌ | 视觉通道只做单轮识别，参数由 `ai.vision.*` 烤进模型 |
 
-两个 ChatModel：`glucopilotTextChatModel` 是 `@Primary` 的 `DynamicChatModel`（委托），`glucopilotVisionChatModel` 非 Primary、`yamlFallback=null`。`@ConditionalOnMissingBean` 按**返回类型**判定，而 starter 返回的是 `DeepSeekChatModel`、委托声明的是 `ChatModel`，所以两者共存——`ChatClientAutoConfiguration` 的单值 `ChatModel` 参数因此固定拿到 `@Primary` 那个。
+两个 ChatModel：`glucopilotTextChatModel` 是 `@Primary` 的 `DynamicChatModel`（委托），`glucopilotVisionChatModel` 非 Primary、`yamlFallback=null`。2026-11 协议统一后容器里**只剩这两个**（DeepSeek starter 已移除），`ChatClientAutoConfiguration` 的单值 `ChatModel` 参数固定拿到 `@Primary` 那个；两者的 `yamlFallback` 都为 null，yaml 规格由 `ChatModelFactory` 现造。
 
 ---
 
@@ -479,7 +479,7 @@ sequenceDiagram
     participant AS as ChatHistoryAssembler
     participant A4 as ToolCallingAdvisor
     participant M as DynamicChatModel
-    participant API as DeepSeek API
+    participant API as OpenAI-compatible API
     participant DB as MySQL
     participant SM as ChatSummaryService
     participant UM as UserChatMemoryService
@@ -579,7 +579,7 @@ sequenceDiagram
 | `AiChatClientRegistry` | `SceneModelResolver` | 模型编码 / 参数 / 是否有覆盖 |
 | `SceneModelResolver` | `AiRuntimeConfigService` `AiSceneBindingService` `AIProperties` | 三层优先级解析 |
 | `DynamicChatModel` | `AiRuntimeConfigService` `ChatModelFactory` | 请求期解析 + 实例缓存 |
-| `ChatModelFactory` | `AiHttpTimeouts` | DeepSeek 的 RestClient 超时 |
+| `ChatModelFactory` | `OpenAiChatOptions` | 超时/重试/thinking 都走 OpenAI options（`AiHttpTimeouts` 已删） |
 | `AiRuntimeConfigServiceImpl` | `AiModelConfigMapper` `AiModelCipher` `AiChannelProperties` `AIProperties` | 快照加载、解密、通道凭据 |
 | `AiPromptTemplateServiceImpl` | `AiPromptTemplateMapper` `AIProperties` | DB/classpath 双源提示词 |
 | `DynamicPromptAdvisor` | `AiPromptTemplateService` | 每请求替换系统提示词 |

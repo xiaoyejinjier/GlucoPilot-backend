@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.memory.assembly;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -14,9 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
-import com.threadfit.glucopilot.ai.memory.assembly.TokenEstimator;
+import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 
 /**

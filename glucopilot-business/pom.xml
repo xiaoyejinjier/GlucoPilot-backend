@@ -68,18 +68,45 @@
         <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-quartz</artifactId><version>${project.parent.version}</version></dependency>
         <dependency><groupId>com.ruoyi</groupId><artifactId>ruoyi-generator</artifactId><version>${project.parent.version}</version></dependency>
         <!-- ==================== SpringAI ==================== -->
+        <!-- ChatClient 的自动装配（ChatClientAutoConfiguration / ChatClient.Builder）。
+             协议统一之前这条依赖是随 spring-ai-starter-model-deepseek 传递进来的；
+             现在文本也走 OpenAI 兼容协议、不再需要 DeepSeek starter，必须显式声明，
+             否则 ChatClient.Builder 不会被自动配置，AiChatClientConfig 的入参直接缺失。 -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-deepseek</artifactId>
+            <artifactId>spring-ai-autoconfigure-model-chat-client</artifactId>
         </dependency>
 
-        <!-- 视觉 provider（阿里云百炼 qwen-vl，走 OpenAI 兼容协议）。
+        <!-- ChatClient / Advisor / ChatMemory API 本身（org.springframework.ai.chat.client.*）。
+             同样原先由 DeepSeek starter 传递，去掉 starter 后要单独引，否则编译期整包找不到。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
+        </dependency>
+
+        <!-- 测试用：MockMvcWebTestClient（SSE 写出测试）依赖 spring-webflux，
+             它原先由 DeepSeek starter 传递，去掉 starter 后要显式声明。 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webflux</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ToolCallingAutoConfiguration：提供 ToolCallingManager Bean。
+             它原先同样由 DeepSeek starter 传递，而 ChatClient 的工具回环（ToolCallingAdvisor）
+             强依赖这个 Bean——少了它工具调用链路会在启动期缺依赖。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-autoconfigure-model-tool</artifactId>
+        </dependency>
+
+        <!-- 唯一的模型实现：OpenAiChatModel（协议统一后文本与视觉共用）。
              ⚠️ 刻意引**库**而不是 spring-ai-starter-model-openai，两个原因：
              1) starter 会带来第二套自动装配，而 ChatClientAutoConfiguration 是按「单个 ChatModel」
                 注入的，上下文里一旦出现第二个 ChatModel Bean 就会因候选不唯一启动失败；
-             2) 2.0.1 已不再提供 OpenAiApi，客户端要用官方 SDK 的 ClientOptions + SpringAiOpenAiHttpClient
-                手工构造（见 AiVisionClientConfig），starter 那套属性绑定反而用不上。
-             只借它的 OpenAiChatModel 实现，容器里始终只有一个 ChatModel。
+             2) starter 那套属性绑定我们用不上——模型行来自数据库（ai_model_config），
+                客户端要按行现造（见 ChatModelFactory），不是全局单例。
+             只借它的 OpenAiChatModel 实现，容器里始终只有一个 ChatModel（DynamicChatModel 委托）。
              同时必须给两个 ChatClient Bean 补 @Qualifier，否则注入点歧义。 -->
         <dependency>
             <groupId>org.springframework.ai</groupId>

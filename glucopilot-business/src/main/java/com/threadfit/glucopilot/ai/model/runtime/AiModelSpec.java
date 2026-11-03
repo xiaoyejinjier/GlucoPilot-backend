@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.model.runtime;
 
-import com.threadfit.glucopilot.ai.config.AiModelCapability;
+import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;
 
 import java.time.Duration;
 

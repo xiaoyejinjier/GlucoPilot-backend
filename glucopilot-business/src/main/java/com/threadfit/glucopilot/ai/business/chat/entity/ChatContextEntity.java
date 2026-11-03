@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.threadfit.glucopilot.common.model.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatContextRecorder;
 
 /**

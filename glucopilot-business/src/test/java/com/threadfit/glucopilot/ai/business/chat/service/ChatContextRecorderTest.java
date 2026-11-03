@@ -1,4 +1,5 @@
 package com.threadfit.glucopilot.ai.business.chat.service;
+import com.threadfit.glucopilot.ai.tool.trace.ToolCallTraceRecorder;
 
 import com.baomidou.mybatisplus.annotation.DbType;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -9,7 +10,7 @@ import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerIntercept
 import com.baomidou.mybatisplus.spring.MybatisSqlSessionFactoryBean;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatContextEntity;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatContextMapper;
-import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.common.mybatis.AuditMetaObjectHandler;
 import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
 import org.apache.ibatis.session.SqlSession;

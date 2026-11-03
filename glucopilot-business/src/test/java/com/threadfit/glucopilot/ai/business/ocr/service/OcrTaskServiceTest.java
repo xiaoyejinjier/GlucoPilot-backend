@@ -3,7 +3,7 @@ package com.threadfit.glucopilot.ai.business.ocr.service;
 import com.threadfit.glucopilot.ai.business.ocr.dto.OcrDtos;
 import com.threadfit.glucopilot.ai.business.ocr.entity.OcrTask;
 import com.threadfit.glucopilot.ai.business.ocr.mapper.OcrTaskMapper;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;

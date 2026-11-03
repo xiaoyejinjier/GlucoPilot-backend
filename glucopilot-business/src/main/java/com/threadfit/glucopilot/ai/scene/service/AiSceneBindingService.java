@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.scene.service;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import org.springframework.util.StringUtils;
 
 import java.util.Map;

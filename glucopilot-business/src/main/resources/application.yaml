@@ -257,7 +257,6 @@ ai:
       temperature: ${AI_TEXT_TEMPERATURE:}
       max-tokens: ${AI_TEXT_MAX_TOKENS:}
       timeout-seconds: ${AI_TEXT_TIMEOUT_SECONDS:60}
-      connect-timeout-seconds: ${AI_TEXT_CONNECT_TIMEOUT_SECONDS:10}
     vision:
       base-url: ${ai.vision.base-url:}
       api-key: ${ai.vision.api-key:}
@@ -265,7 +264,6 @@ ai:
       temperature: ${ai.vision.temperature:}
       max-tokens: ${ai.vision.max-tokens:}
       timeout-seconds: ${ai.vision.timeout-seconds:60}
-      connect-timeout-seconds: ${AI_VISION_CONNECT_TIMEOUT_SECONDS:10}
 
   scenes:
     # 纯文本对话（接口 2.23 / 2.24 / 2.25）：当前唯一已实现的场景

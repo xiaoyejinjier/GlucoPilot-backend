@@ -1,12 +1,11 @@
 package com.threadfit.glucopilot.ai.model.service.impl;
 
-import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.core.SceneModelResolver;
 import com.threadfit.glucopilot.ai.model.dto.AiRuntimeStatusDtos;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeStatusService;
-import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,10 +17,10 @@ import java.util.List;
 /**
  * 把「快照 + 场景绑定」翻译成一份人可读的现状，并收集可疑配置。
  *
- * <p>这里刻意<b>不</b>复用 {@code SceneModelResolver.modelCode}：那个方法每次不可用都会 WARN，
- * 而诊断接口会被反复调用（后台刷新、排障脚本），不能把日志刷爆。这边只做同样的判定、不打日志，
- * 判定规则一旦和 resolver 漂移，就会变成"接口说 binding、实际走 default"——所以两边的
- * 条件必须逐字一致：{@code bound != null && bound.vision()} / {@code contains(TEXT)}。
+ * <p>绑定是否可用的判定<b>不在本类里</b>：它与 {@code SceneModelResolver} 共用
+ * {@link com.threadfit.glucopilot.ai.core.SceneModelResolver#judgeBinding}。此前这里自己实现了一遍条件，
+ * 一旦 resolver 改了而这里没跟上，接口就会开始说谎（"说 binding、实际走 default"）。
+ * 那个方法刻意不打日志，正好满足"诊断接口会被反复调用"的要求。
  */
 @Slf4j
 @Service
@@ -29,7 +28,7 @@ import java.util.List;
 public class AiRuntimeStatusServiceImpl implements AiRuntimeStatusService {
 
     private final AiRuntimeConfigService runtimeConfig;
-    private final AiSceneBindingService sceneBindings;
+    private final SceneModelResolver sceneModelResolver;
 
     @Override
     public AiRuntimeStatusDtos.Status status() {
@@ -76,24 +75,18 @@ public class AiRuntimeStatusServiceImpl implements AiRuntimeStatusService {
     private AiRuntimeStatusDtos.SceneStatus sceneStatus(SceneCode scene,
                                                         AiRuntimeConfigService.Snapshot snapshot,
                                                         List<String> issues) {
-        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
-        String boundModelCode = binding.hasModel() ? binding.modelCode() : null;
-        boolean bound = false;
-        AiModelSpec boundSpec = null;
-        if (boundModelCode != null) {
-            boundSpec = runtimeConfig.specByModelCode(boundModelCode);
-            bound = boundSpec != null
-                    && (scene.isRequiresVision() ? boundSpec.vision() : boundSpec.capability().contains(AiModelCapability.TEXT));
-            if (!bound) {
-                issues.add("场景 " + scene.getCode() + " 绑定的模型 " + boundModelCode
-                        + " 不可用（不存在、已停用，或能力不匹配），实际回落到通道默认");
-            }
+        SceneModelResolver.BindingJudgement judgement = sceneModelResolver.judgeBinding(scene);
+        String boundModelCode = judgement.modelCode();
+        boolean bound = judgement.usable();
+        if (boundModelCode != null && !bound) {
+            issues.add("场景 " + scene.getCode() + " 绑定的模型 " + boundModelCode
+                    + " 不可用（不存在、已停用，或能力不匹配），实际回落到通道默认");
         }
 
         AiModelSpec effective;
         String source;
         if (bound) {
-            effective = boundSpec;
+            effective = judgement.spec();
             source = "binding";
         } else {
             effective = scene.isRequiresVision() ? snapshot.resolveVisionDefault() : snapshot.resolveTextDefault();

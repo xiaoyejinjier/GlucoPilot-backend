@@ -1,5 +1,6 @@
 package com.threadfit.glucopilot.community;
 
+import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.core.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
@@ -52,18 +53,19 @@ public class CommunityModerationWorker {
 
     private final CommunityModerationQueue queue;
 
-    private final ObjectProvider<ChatModel> models;
+    /** 文本模型从 registry 取：与对话链路共用同一份「怎么拿到模型」的知识。 */
+    private final AiChatClientRegistry clients;
 
     private final AiPromptTemplateService prompts;
 
     private final SceneModelResolver sceneModelResolver;
 
     public CommunityModerationWorker(CommunityModerationQueue queue,
-                                     @Qualifier("glucopilotTextChatModel") ObjectProvider<ChatModel> models,
+                                     AiChatClientRegistry clients,
                                      AiPromptTemplateService prompts,
                                      SceneModelResolver sceneModelResolver) {
         this.queue = queue;
-        this.models = models;
+        this.clients = clients;
         this.prompts = prompts;
         this.sceneModelResolver = sceneModelResolver;
     }
@@ -83,10 +85,7 @@ public class CommunityModerationWorker {
         }
         String promptVer = promptVersion();
         try {
-            ChatModel model = models.getIfAvailable();
-            if (model == null) {
-                throw new IllegalStateException("文本模型不可用（ai.model.chat 未启用或未配置凭据）");
-            }
+            ChatModel model = clients.textModel();
             ChatAnswer answer = Mono.fromCallable(() -> call(model, job))
                     .subscribeOn(Schedulers.boundedElastic())
                     .timeout(CALL_TIMEOUT)

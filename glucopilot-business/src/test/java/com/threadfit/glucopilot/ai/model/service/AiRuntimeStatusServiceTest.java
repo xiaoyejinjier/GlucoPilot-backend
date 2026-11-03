@@ -1,7 +1,9 @@
 package com.threadfit.glucopilot.ai.model.service;
 
+import com.threadfit.glucopilot.ai.config.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiModelCapability;
 import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.core.SceneModelResolver;
 import com.threadfit.glucopilot.ai.model.dto.AiRuntimeStatusDtos;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.service.impl.AiRuntimeStatusServiceImpl;
@@ -9,6 +11,7 @@ import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -23,10 +26,10 @@ import static org.mockito.Mockito.when;
 /**
  * 运行时诊断接口：源判定与隐患收集。
  *
- * <p>这几个用例守的是「接口说 binding、实际却走 default」那类漂移：{@link AiRuntimeStatusServiceImpl}
- * 刻意不复用 {@code SceneModelResolver}（避免刷日志），代价是判定条件写了两份，
- * 一旦其中一份改了、另一份没跟上，这个功能就会开始说谎。用例优先覆盖"绑定不可用时必须
- * 如实标成 default 并给出 issue"。
+ * <p>这几个用例守的是「接口说 binding、实际却走 default」那类漂移。判定规则现在只有一份
+ * （{@code SceneModelResolver.judgeBinding}），所以这里**构造真 resolver**、只 mock 它的两个数据源
+ * （{@code AiRuntimeConfigService} 与 {@code AiSceneBindingService}）——若哪天有人把诊断接口
+ * 改回自带一份条件，这些用例仍会以"真 resolver"的口径断言，漂移立刻可见。
  */
 class AiRuntimeStatusServiceTest {
 
@@ -39,7 +42,9 @@ class AiRuntimeStatusServiceTest {
         runtimeConfig = mock(AiRuntimeConfigService.class);
         sceneBindings = mock(AiSceneBindingService.class);
         when(sceneBindings.binding(any())).thenReturn(AiSceneBindingService.SceneBinding.INHERIT);
-        service = new AiRuntimeStatusServiceImpl(runtimeConfig, sceneBindings);
+        SceneModelResolver resolver = new SceneModelResolver(new AIProperties(), runtimeConfig, sceneBindings,
+                new MockEnvironment());
+        service = new AiRuntimeStatusServiceImpl(runtimeConfig, resolver);
     }
 
     @Test

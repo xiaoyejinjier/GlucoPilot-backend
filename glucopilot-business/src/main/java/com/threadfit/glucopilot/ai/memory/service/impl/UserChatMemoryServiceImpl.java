@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.ai.memory.service.impl;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.core.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
@@ -11,8 +12,6 @@ import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
-import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -71,7 +70,8 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
 
     private static final String EXTRACT_KEY_PREFIX = "chat-memory-extract:";
 
-    private final ChatClient memoryClient;
+    /** 记忆抽取用的「裸」文本客户端（不带人设/工具），取用点统一收在 registry 里。 */
+    private final AiChatClientRegistry clients;
     private final ChatUserMemoryMapper memoryMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final AiPromptTemplateService promptTemplateService;
@@ -81,7 +81,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     private final ChatRoundGuard extractGuard;
     private final Executor executor;
 
-    public UserChatMemoryServiceImpl(@Qualifier("summaryChatClient") @Nullable ChatClient memoryClient,
+    public UserChatMemoryServiceImpl(AiChatClientRegistry clients,
                                  ChatUserMemoryMapper memoryMapper,
                                  ChatMessageMapper chatMessageMapper,
                                  AiPromptTemplateService promptTemplateService,
@@ -90,7 +90,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                                  com.threadfit.glucopilot.common.util.JsonUtils jsonUtils,
                                  ChatRoundGuard roundGuard,
                                  @Qualifier("chatSummaryExecutor") Executor executor) {
-        this.memoryClient = memoryClient;
+        this.clients = clients;
         this.memoryMapper = memoryMapper;
         this.chatMessageMapper = chatMessageMapper;
         this.promptTemplateService = promptTemplateService;
@@ -261,7 +261,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     /** 会话结束时调用：异步抽取该会话的长期记忆。不阻塞、不抛异常。 */
     @Override
     public void extractAsync(Long userId, Long sessionId, String reason) {
-        if (memoryClient == null || userId == null || sessionId == null) {
+        if (!clients.summaryAvailable() || userId == null || sessionId == null) {
             return;
         }
         String key = EXTRACT_KEY_PREFIX + sessionId;
@@ -290,7 +290,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * @return 写入/覆盖的记忆条数
      */
     int runExtract(Long userId, Long sessionId, String reason) {
-        if (memoryClient == null) {
+        if (!clients.summaryAvailable()) {
             return 0;
         }
         try {
@@ -300,7 +300,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                 return 0;
             }
             String input = buildInput(userId, messages);
-            String raw = memoryClient.prompt()
+            String raw = clients.summaryClient().prompt()
                     .system(promptTemplateService.systemPrompt(SceneCode.MEMORY))
                     .options(sceneModelResolver.memoryOptionsBuilder())
                     .user(input)

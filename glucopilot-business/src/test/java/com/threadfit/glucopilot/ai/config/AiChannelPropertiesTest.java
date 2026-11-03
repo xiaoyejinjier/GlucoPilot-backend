@@ -57,21 +57,16 @@ class AiChannelPropertiesTest {
     void 未配置超时时应给出可直接使用的缺省值() {
         AiChannelProperties channels = bind(Map.of());
 
-        assertEquals(Duration.ofSeconds(10), channels.getText().connectTimeout());
         assertEquals(Duration.ofSeconds(60), channels.getText().timeout());
-        assertEquals(Duration.ofSeconds(10), channels.getVision().connectTimeout());
         assertEquals(Duration.ofSeconds(60), channels.getVision().timeout());
     }
 
     @Test
     void 零或负数超时不应绑成零秒() {
-        AiChannelProperties channels = bind(Map.of(
-                "ai.channels.text.timeout-seconds", "0",
-                "ai.channels.text.connect-timeout-seconds", "-3"));
+        AiChannelProperties channels = bind(Map.of("ai.channels.text.timeout-seconds", "0"));
 
-        // 0 秒会让 HttpClient.connectTimeout 抛异常，因此这里钳到 1 秒而不是原样使用
+        // 0 秒会被厂商 SDK 当成「立即超时」，因此钳到 1 秒而不是原样使用
         assertEquals(Duration.ofSeconds(1), channels.getText().timeout());
-        assertEquals(Duration.ofSeconds(1), channels.getText().connectTimeout());
     }
 
     @Test

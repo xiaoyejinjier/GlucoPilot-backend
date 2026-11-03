@@ -135,28 +135,65 @@ public class SceneModelResolver {
     }
 
     /**
+     * 场景绑定的判定结果。
+     *
+     * @param binding 绑定原样；未配置时是 {@link AiSceneBindingService.SceneBinding#INHERIT}
+     * @param spec    绑定编码解析出的规格；编码不存在或已停用时为 {@code null}
+     * @param usable  能否被本场景采用（已解析 <b>且</b> 能力满足场景要求）
+     */
+    public record BindingJudgement(AiSceneBindingService.SceneBinding binding, AiModelSpec spec, boolean usable) {
+
+        /** 后台是否配了模型编码（不论该编码是否可用）。 */
+        public boolean bound() {
+            return binding.hasModel();
+        }
+
+        /** 后台配的编码；未配置时为 {@code null}。 */
+        public String modelCode() {
+            return bound() ? binding.modelCode() : null;
+        }
+    }
+
+    /**
+     * 判定场景绑定是否可用：<b>解析 + 能力校验只此一处</b>。
+     * <p>
+     * 抽出来的原因：{@link #resolveModelSpec} 与 {@code AiRuntimeStatusServiceImpl}（诊断接口）
+     * 需要同一个结论，而后者不能打日志（诊断接口会被反复调用）。此前两边各写一份条件，
+     * 规则一漂移就会出现"接口说 binding、实际走 default"——这正是这次要消掉的隐患。
+     * <p>
+     * 刻意<b>不打日志</b>：日志留给真正调用模型的 {@link #resolveModelSpec}。
+     */
+    public BindingJudgement judgeBinding(SceneCode scene) {
+        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
+        if (!binding.hasModel()) {
+            return new BindingJudgement(binding, null, false);
+        }
+        AiModelSpec spec = runtimeConfig.specByModelCode(binding.modelCode());
+        boolean usable = spec != null && (scene.isRequiresVision()
+                ? spec.vision()
+                : spec.capability().contains(AiModelCapability.TEXT));
+        return new BindingJudgement(binding, spec, usable);
+    }
+
+    /**
      * 场景实际使用的模型规格（不只是编码）。
      * <p>
      * 这是「模型」这条链上<b>唯一</b>的解析入口：{@link #modelCode}（落库/回显）、
      * {@link #optionsFor}（决定 options 类型）、{@link #hasOverrides} 都从它出发，
      * 保证「记录里写的模型」「真正发出去的模型」「参数按哪个协议拼」三件事同源。
      * <p>
-     * 采用条件与之前一致：后台绑定<b>必须仍可解析、且能力满足场景要求</b>才采纳；
+     * 采用条件见 {@link #judgeBinding}：后台绑定<b>必须仍可解析、且能力满足场景要求</b>才采纳；
      * 否则回落通道默认（文本 → {@code textSpec(scene)}，视觉 → {@code visionSpec()}）并 WARN。
      */
     public AiModelSpec resolveModelSpec(SceneCode scene) {
-        AiSceneBindingService.SceneBinding binding = sceneBindings.binding(scene);
-        if (binding.hasModel()) {
-            AiModelSpec bound = runtimeConfig.specByModelCode(binding.modelCode());
-            boolean usable = bound != null && (scene.isRequiresVision()
-                    ? bound.vision()
-                    : bound.capability().contains(AiModelCapability.TEXT));
-            if (usable) {
-                return bound;
-            }
+        BindingJudgement judgement = judgeBinding(scene);
+        if (judgement.usable()) {
+            return judgement.spec();
+        }
+        if (judgement.bound()) {
             log.warn("场景 {} 后台绑定的模型编码 {} 不可用（未登记、已停用，或能力不匹配），"
                             + "本次回落通道默认模型",
-                    scene.getCode(), binding.modelCode());
+                    scene.getCode(), judgement.modelCode());
         }
         return scene.isRequiresVision() ? runtimeConfig.visionSpec() : runtimeConfig.textSpec(scene);
     }

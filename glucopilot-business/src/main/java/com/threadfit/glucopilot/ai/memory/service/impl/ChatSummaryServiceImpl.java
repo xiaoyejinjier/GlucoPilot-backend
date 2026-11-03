@@ -4,14 +4,13 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.core.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
-import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -53,7 +52,8 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
     /** 摘要为空时的占位（模型明确表示"无可保留信息"时用），避免反复触发同一个空摘要任务。 */
     private static final String EMPTY_SUMMARY = "无可保留信息";
 
-    private final ChatClient summaryClient;
+    /** 摘要用的「裸」文本客户端：不带人设、记忆与工具，与对话链路刻意分开。 */
+    private final AiChatClientRegistry clients;
 
     private final ChatSessionMapper chatSessionMapper;
 
@@ -70,7 +70,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
 
     private final Executor summaryExecutor;
 
-    public ChatSummaryServiceImpl(@Qualifier("summaryChatClient") @Nullable ChatClient summaryClient,
+    public ChatSummaryServiceImpl(AiChatClientRegistry clients,
                               ChatSessionMapper chatSessionMapper,
                               ChatMessageMapper chatMessageMapper,
                               AiPromptTemplateService promptTemplateService,
@@ -78,7 +78,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
                               AIProperties aiProperties,
                               ChatRoundGuard roundGuard,
                               @Qualifier("chatSummaryExecutor") Executor summaryExecutor) {
-        this.summaryClient = summaryClient;
+        this.clients = clients;
         this.chatSessionMapper = chatSessionMapper;
         this.chatMessageMapper = chatMessageMapper;
         this.promptTemplateService = promptTemplateService;
@@ -98,7 +98,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      */
     @Override
     public void maybeSummarizeAsync(Long userId, Long sessionId) {
-        if (summaryClient == null || sessionId == null) {
+        if (!clients.summaryAvailable() || sessionId == null) {
             return;
         }
         String key = SUMMARY_KEY_PREFIX + sessionId;
@@ -127,7 +127,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      * @return 是否成功写入摘要
      */
     boolean runSummarize(Long userId, Long sessionId) {
-        if (summaryClient == null) {
+        if (!clients.summaryAvailable()) {
             return false;
         }
         try {
@@ -260,7 +260,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      */
     private String callModel(String input) {
         String system = promptTemplateService.systemPrompt(SceneCode.SUMMARY);
-        String content = summaryClient.prompt()
+        String content = clients.summaryClient().prompt()
                 .system(system)
                 // 关思维链 + 输出封顶：摘要要"快"而不是"想得多"，详见 SceneModelResolver.summaryOptionsBuilder
                 .options(sceneModelResolver.summaryOptionsBuilder())

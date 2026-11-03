@@ -156,6 +156,10 @@ ai:
     tool-replay-enabled: true
     tool-replay-max-items: 3
     tool-digest-max-chars: 512
+    # 记忆抽取改走结构化输出：由 BeanOutputConverter 生成 JSON Schema 并由
+    # StructuredOutputValidationAdvisor 校验/重试，避免模型在 JSON 外夹解释文字。
+    # 代码默认 false（单测里 mock 的客户端只桩了 content()），部署时在此打开。
+    structured-output: true
 
   # 医疗安全硬拦截：命中敏感词的请求不会发给模型，直接返回固定话术。
   # 提示词里的合规约束是软约束（模型可能不遵守），这里是硬约束。

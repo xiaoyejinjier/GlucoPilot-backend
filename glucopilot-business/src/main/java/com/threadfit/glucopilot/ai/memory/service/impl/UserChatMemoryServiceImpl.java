@@ -12,6 +12,7 @@ import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.advisor.StructuredOutputValidationAdvisor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -24,6 +25,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import com.threadfit.glucopilot.ai.memory.controller.UserChatMemoryController;
+import com.threadfit.glucopilot.ai.memory.dto.MemoryExtractionDtos;
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
 import com.threadfit.glucopilot.ai.memory.entity.ChatUserMemoryEntity;
 import com.threadfit.glucopilot.ai.memory.mapper.ChatUserMemoryMapper;
@@ -69,6 +71,19 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             List.of("剂量", "加量", "减量", "停药", "换药", "开药", "处方", "确诊", "诊断为", "胰岛素用量");
 
     private static final String EXTRACT_KEY_PREFIX = "chat-memory-extract:";
+
+    /**
+     * 结构化输出校验器（复用同一个实例：它只持有 schema 与重试次数，无状态）。
+     * <p>
+     * {@code entity(...)} 只是把"期望的格式说明"放进请求 context，真正把说明追加到用户消息、
+     * 并在返回后按 JSON Schema 校验 + 重试的是这个 advisor——只调 {@code entity()} 不挂它会拿不到
+     * schema 约束（模型可能返回带解释文字的自由文本）。
+     */
+    private static final StructuredOutputValidationAdvisor STRUCTURED_OUTPUT_ADVISOR =
+            StructuredOutputValidationAdvisor.builder()
+                    .outputType(MemoryExtractionDtos.MemoryPayload.class)
+                    .maxRepeatAttempts(1)
+                    .build();
 
     /** 记忆抽取用的「裸」文本客户端（不带人设/工具），取用点统一收在 registry 里。 */
     private final AiChatClientRegistry clients;
@@ -300,13 +315,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                 return 0;
             }
             String input = buildInput(userId, messages);
-            String raw = clients.summaryClient().prompt()
-                    .system(promptTemplateService.systemPrompt(SceneCode.MEMORY))
-                    .options(sceneModelResolver.memoryOptionsBuilder())
-                    .user(input)
-                    .call()
-                    .content();
-            List<MemoryCandidate> candidates = parse(raw);
+            List<MemoryCandidate> candidates = extractCandidates(input);
             int written = 0;
             for (MemoryCandidate candidate : candidates) {
                 if (upsert(userId, candidate.key(), candidate.text(), candidate.confidence(), sessionId)) {
@@ -378,6 +387,43 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     }
 
     /**
+     * 调一次模型拿候选记忆：默认走结构化输出（JSON Schema 校验），关掉开关时退回自由文本 + 宽松解析。
+     *
+     * <p>两条路径的失败语义一致：抛 {@link RuntimeException} 由 {@code runExtract} 的 catch 兜住，
+     * 本轮一条都不写（记忆是增强项，写半截比不写更糟）。
+     */
+    private List<MemoryCandidate> extractCandidates(String input) {
+        var prompt = clients.summaryClient().prompt()
+                .system(promptTemplateService.systemPrompt(SceneCode.MEMORY))
+                .options(sceneModelResolver.memoryOptionsBuilder())
+                .user(input);
+        if (!aiProperties.getMemory().isStructuredOutput()) {
+            return parse(prompt.call().content());
+        }
+        MemoryExtractionDtos.MemoryPayload payload = prompt
+                .advisors(a -> a.advisors(STRUCTURED_OUTPUT_ADVISOR))
+                .call()
+                .entity(MemoryExtractionDtos.MemoryPayload.class);
+        return toCandidates(payload);
+    }
+
+    /** 把结构化结果转成内部候选：过滤空 key/空内容，同 key 取置信度更高者（与自由文本路径同规则）。 */
+    private static List<MemoryCandidate> toCandidates(MemoryExtractionDtos.MemoryPayload payload) {
+        if (payload == null || payload.memories() == null || payload.memories().isEmpty()) {
+            return List.of();
+        }
+        List<MemoryCandidate> raw = new ArrayList<>(payload.memories().size());
+        for (MemoryExtractionDtos.MemoryItemPayload item : payload.memories()) {
+            if (item == null || !StringUtils.hasText(item.key()) || !StringUtils.hasText(item.text())) {
+                continue;
+            }
+            raw.add(new MemoryCandidate(item.key().trim(), item.text().trim(),
+                    item.confidence() == null ? 0 : item.confidence()));
+        }
+        return dedupeByKey(raw);
+    }
+
+    /**
      * 解析模型输出的 JSON。任何解析失败都返回空列表（宁可这次不记，也不要写进半截内容）。
      * <p>
      * 用宽松解析（遍历 {@code memories} 数组的每个对象），并对每个字段做类型兜底：
@@ -395,7 +441,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             if (!(memories instanceof List<?> list)) {
                 return List.of();
             }
-            Map<String, MemoryCandidate> byKey = new LinkedHashMap<>();
+            List<MemoryCandidate> collected = new ArrayList<>(list.size());
             for (Object item : list) {
                 if (!(item instanceof Map<?, ?> map)) {
                     continue;
@@ -408,17 +454,28 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                 }
                 int score = confidence instanceof Number number ? number.intValue() : 0;
                 MemoryCandidate candidate = new MemoryCandidate(String.valueOf(key), String.valueOf(text), score);
-                // 同 key 取置信度更高的那条（提示词已要求只输出一条，这里是防御）
-                MemoryCandidate existing = byKey.get(candidate.key());
-                if (existing == null || candidate.confidence() > existing.confidence()) {
-                    byKey.put(candidate.key(), candidate);
-                }
+                collected.add(candidate);
             }
-            return new ArrayList<>(byKey.values());
+            return dedupeByKey(collected);
         } catch (RuntimeException e) {
             log.warn("长期记忆抽取结果解析失败（本次不写任何记忆）长度={}", json.length(), e);
             return List.of();
         }
+    }
+
+    /**
+     * 同 key 只留置信度最高的那条（提示词已要求同 key 只输出一条，这里是防御）。
+     * 两条路径（结构化 / 自由文本）都必须走这里，否则"哪条覆盖哪条"会在两处各写一遍。
+     */
+    private static List<MemoryCandidate> dedupeByKey(List<MemoryCandidate> candidates) {
+        Map<String, MemoryCandidate> byKey = new LinkedHashMap<>();
+        for (MemoryCandidate candidate : candidates) {
+            MemoryCandidate existing = byKey.get(candidate.key());
+            if (existing == null || candidate.confidence() > existing.confidence()) {
+                byKey.put(candidate.key(), candidate);
+            }
+        }
+        return new ArrayList<>(byKey.values());
     }
 
     /** 当前是否有抽取任务在跑（E2E/断言用）。 */

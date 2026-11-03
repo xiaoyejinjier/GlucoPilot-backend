@@ -211,6 +211,15 @@ public class AIProperties {
 
         /** 抽取输出的 token 上限（只输出 JSON）。 */
         private int memoryExtractMaxTokens = 500;
+
+        /**
+         * 记忆抽取是否走<b>结构化输出</b>（{@code call().entity(...)} + JSON Schema 校验）。
+         * <p>
+         * 代码默认关（单测里 mock 的 ChatClient 只桩了 {@code content()}，走老路径更稳定），
+         * 部署配置里显式打开：见 {@code application.yaml} 的 {@code ai.memory.structured-output}。
+         * 打开后若结构化解析失败，本轮不写任何记忆（记忆是增强项，宁可少记也不要写半截）。
+         */
+        private boolean structuredOutput = false;
     }
 
     /**

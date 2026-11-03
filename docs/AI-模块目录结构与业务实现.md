@@ -3,6 +3,10 @@
 > 范围：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai`（128 个 java 文件，13 400 余行；12 个 controller、9 个 mapper）
 > 版本：2026-11-03，Flyway v51
 > 本文分两部分：第一部分判「类放得对不对、还能不能更细」，第二部分按业务链路讲「谁依赖谁、关键方法做什么」。
+>
+> **执行状态（2026-11-03）**：M1–M7 已全部落地（提交 `3423969` → `7d99bf7` → `90aa508` → `7009244` → `9702792` → `a5a433c`），
+> `ai/core` 与 `ai/guard` 已消失，66 个包全部有 `package-info`，全量单测 866 绿、打包启动正常。
+> 仅 M8（拆分 `ChatCompletionServiceImpl`）按计划保留未做。
 
 ---
 
@@ -98,16 +102,16 @@ ai/
 
 ### 3. 迁移清单（按性价比排序）
 
-| 步骤 | 动作 | 文件数 | 风险 |
+| 步骤 | 动作 | 状态 | 提交 |
 |---|---|---|---|
-| M1 | `support/` 拆解：3 个只被 chat 用的 → `business/chat/support/`；`ChatRoundGuard`、`TokenEstimator` 留 `support/` | 4 | 低（只改 import） |
-| M2 | `AiModelCapability` → `model/capability/`；`AiChannel`＋`AiChannelProperties` → `channel/`；`AIProperties` → `config/properties/` | 4 | 低，但 import 波及 7 个包（编译错误驱动即可） |
-| M3 | Advisor 归并到 `ai/advisor/`（含 `ChatContextReader` → `memory/reader/`） | 5 | 低；注意 `@Component` 扫描路径不变（`com.threadfit.glucopilot.ai.**`） |
-| M4 | 拆 `core/`：`AiChatClientRegistry` → `client/`；`SceneModelResolver` → `routing/`；`SceneCode` → `scene/` | 3 | 中：`SceneCode` 被 20+ 文件引用，import 面大但机械 |
-| M5 | `tool/` 分 `builtin`/`runtime`/`trace` | 10 | 低 |
-| M6 | `business/speech/` 补 `controller`/`dto`/`config` 子包 | 4 | 低 |
-| M7 | 每个包补 `package-info.java`（当前只有 meal、ocr 有） | 13 | 无 |
-| M8 | （可选，纯重构）`ChatCompletionServiceImpl` 634 行 → 抽出 `ChatStreamEvents`（SSE 事件拼装）与 `ChatTurnPersister`（落库+分片记录） | 1→3 | 中；需回归 `session-e2e` |
+| M1 | `support/` 拆解：3 个只被 chat 用的 → `business/chat/support/`；`ChatRoundGuard`、`TokenEstimator` 留 `support/`；`ChatContextShard` → `business/chat/dto/` | ✅ 已完成 | `3423969` |
+| M2 | `AiModelCapability` → `model/capability/`；`AiChannel`＋`AiChannelProperties` → `channel/`；`AIProperties` → `config/properties/` | ✅ 已完成 | `7d99bf7` |
+| M3 | Advisor 归并到 `ai/advisor/`；`ChatContextReader` → `memory/reader/` | ✅ 已完成 | `90aa508` |
+| M4 | `tool/` 分 `builtin`/`runtime`/`trace` | ✅ 已完成 | `7009244` |
+| M5 | `business/speech/` 补 `controller`/`dto`/`config`/`service` 子包 | ✅ 已完成 | `7009244` |
+| M6 | 拆 `core/`：`AiChatClientRegistry` → `client/`；`SceneModelResolver` → `routing/`；`SceneCode` → `scene/` | ✅ 已完成 | `9702792` |
+| M7 | 每个包补 `package-info.java`（66 个包全覆盖） | ✅ 已完成 | `a5a433c` |
+| M8 | （可选）`ChatCompletionServiceImpl` 约 660 行 → 抽出 `ChatStreamEvents`（SSE 事件拼装）与 `ChatTurnPersister`（落库 + 分片记录） | ⏸ 未做（按计划保留） | — |
 
 **为什么不做**：不引入 `domain/application/infrastructure` 这类四层 DDD 目录——本项目是 MyBatis 直连 + 单一 Spring 应用，强行分层会让 118 个类里 60 个「无处安放」；Spring AI 与 Anthropic 的经验都是「按关注点分包、别按抽象层次分包」。
 

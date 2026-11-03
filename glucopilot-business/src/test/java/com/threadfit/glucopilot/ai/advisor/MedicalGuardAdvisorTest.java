@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.guard;
+package com.threadfit.glucopilot.ai.advisor;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;

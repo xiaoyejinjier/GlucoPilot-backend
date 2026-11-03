@@ -2,10 +2,10 @@ package com.threadfit.glucopilot.ai.config;
 
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
-import com.threadfit.glucopilot.ai.guard.MedicalGuardAdvisor;
-import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryReadAdvisor;
+import com.threadfit.glucopilot.ai.advisor.MedicalGuardAdvisor;
+import com.threadfit.glucopilot.ai.advisor.ChatMemoryReadAdvisor;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.prompt.advisor.DynamicPromptAdvisor;
+import com.threadfit.glucopilot.ai.advisor.DynamicPromptAdvisor;
 import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

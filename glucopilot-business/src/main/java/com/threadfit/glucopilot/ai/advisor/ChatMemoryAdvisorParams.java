@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.memory.advisor;
+package com.threadfit.glucopilot.ai.advisor;
 
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatCompletionService;

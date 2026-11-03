@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.memory.advisor;
+package com.threadfit.glucopilot.ai.advisor;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -16,6 +16,7 @@ import reactor.core.publisher.Flux;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
+import com.threadfit.glucopilot.ai.memory.reader.ChatContextReader;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatCompletionService;

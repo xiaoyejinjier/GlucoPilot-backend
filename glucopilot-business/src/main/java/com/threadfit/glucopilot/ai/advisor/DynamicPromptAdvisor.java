@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.prompt.advisor;
+package com.threadfit.glucopilot.ai.advisor;
 
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import lombok.extern.slf4j.Slf4j;

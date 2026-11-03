@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.memory.advisor;
+package com.threadfit.glucopilot.ai.advisor;
 
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,9 +26,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import com.threadfit.glucopilot.ai.memory.advisor.ChatContextReader;
-import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryAdvisorParams;
-import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryReadAdvisor;
+import com.threadfit.glucopilot.ai.memory.reader.ChatContextReader;
+import com.threadfit.glucopilot.ai.advisor.ChatMemoryAdvisorParams;
+import com.threadfit.glucopilot.ai.advisor.ChatMemoryReadAdvisor;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
 import com.threadfit.glucopilot.ai.support.TokenEstimator;

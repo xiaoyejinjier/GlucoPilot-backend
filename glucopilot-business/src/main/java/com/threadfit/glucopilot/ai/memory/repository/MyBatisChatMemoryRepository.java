@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
 import java.util.List;
-import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryReadAdvisor;
+import com.threadfit.glucopilot.ai.advisor.ChatMemoryReadAdvisor;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatCompletionService;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatSessionService;
 

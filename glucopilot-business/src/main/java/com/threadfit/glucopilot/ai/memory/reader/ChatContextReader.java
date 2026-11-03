@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.memory.advisor;
+package com.threadfit.glucopilot.ai.memory.reader;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatToolCall;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;

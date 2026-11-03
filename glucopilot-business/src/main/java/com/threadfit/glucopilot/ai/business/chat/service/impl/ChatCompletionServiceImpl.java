@@ -10,7 +10,7 @@ import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.ai.business.chat.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.business.chat.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
-import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryAdvisorParams;
+import com.threadfit.glucopilot.ai.advisor.ChatMemoryAdvisorParams;
 import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
 import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;

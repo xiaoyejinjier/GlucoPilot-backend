@@ -812,6 +812,31 @@ P1 之前，后台保存模型配置只做**格式**校验：编码非空、能�
 
 两个实现细节：探针在事务内执行，最长占用一个连接 30s（保存是低频人工操作，这个代价换"填错了存不进去"是划算的）；`update` 时探针用的凭据是「新密钥 > 库里旧密文 > 清空即无」，不能用 yaml 的 key 去代表这一行——否则会出现"测着成功、线上 401"。
 
+### 9.8 用量出口：`AiUsageServiceImpl`（天 × 模型）
+
+`chat_message` 一直有 `model_code / prompt_tokens / completion_tokens / latency_ms`，但**全仓没有任何聚合**——运营只能看到"模型配了几条"，看不到"花了多少"。`GET /admin/v1/ai/usage`（接口文档 4.28）补上这个出口。
+
+三个刻意的选择：
+
+1. **单开 `AiUsageMapper`**，不塞进 `ChatMessageMapper`：后者是对话写入路径的热点，且用量查询带 `GROUP BY`，语义与"按会话取消息"完全不同。
+2. **只统计 `msg_role = 2`**（助手消息）：用户消息不带 token，算进去会把"调用次数"直接翻倍。
+3. **半开区间 `[start 00:00, end+1d 00:00)`**：避免 MySQL `DATE_ADD` 与 H2 `DATEADD` 的方言差异，也不会漏掉结束日带毫秒的行。
+
+维度只能是「天 × 模型」：摘要、记忆抽取、内容审核、饮食识别、OCR 这些内部调用都只取 `.content()`，没有用量记录。所以接口返回一个固定 `note`，前端原样展示——让所有人看到同一句口径说明，而不是各自写一句不同的解释。
+
+### 9.9 记忆抽取的结构化输出试点
+
+记忆抽取原本靠"模型自由输出 JSON + 手写宽松解析"。改成 `call().entity(MemoryPayload.class)` 之后：
+
+- `BeanOutputConverter` 生成 JSON Schema，模型按 schema 输出；
+- `StructuredOutputValidationAdvisor` 负责把格式说明追加到用户消息、并在返回后按 schema 校验（`maxRepeatAttempts=1` 时失败重试一次）。
+
+**最容易漏的一点**：只调 `entity()` 是不够的。2.0.2 的 `DefaultCallResponseSpec.entity()` 只把格式说明写进 `ChatClientAttributes.OUTPUT_FORMAT`（`javap` 确认，没有任何 `augmentUserMessage` 调用），真正消费它的是 `StructuredOutputValidationAdvisor`（`Prompt.augmentUserMessage`）。不挂这个 advisor，模型收到的还是"随便输出 JSON"的原始提示词，schema 只是摆设。
+
+开关 `ai.memory.structured-output`：代码默认 `false`（单测里 mock 的客户端只桩了 `content()`），`application.yaml` 里打开。yaml 里必须写裸 `true`，不能写 `${ENV:true}`——`AiPropertiesBindingTest` 会直接解析 yaml 做绑定，未解析的占位符会让 `boolean` 绑定失败。
+
+两条路径的候选都走同一个 `dedupeByKey()`：否则"同 key 取置信度更高者"这条规则会在两处各写一遍，早晚改漏一处。
+
 
 ---
 

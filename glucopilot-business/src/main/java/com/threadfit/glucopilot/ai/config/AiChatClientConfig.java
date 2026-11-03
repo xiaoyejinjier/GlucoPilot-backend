@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.config;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.advisor.MedicalGuardAdvisor;
 import com.threadfit.glucopilot.ai.advisor.ChatMemoryReadAdvisor;

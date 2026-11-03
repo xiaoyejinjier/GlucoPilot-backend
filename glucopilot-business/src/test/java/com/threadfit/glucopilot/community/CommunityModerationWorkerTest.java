@@ -1,8 +1,8 @@
 package com.threadfit.glucopilot.community;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
-import com.threadfit.glucopilot.ai.core.SceneModelResolver;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;

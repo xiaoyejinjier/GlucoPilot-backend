@@ -3,7 +3,7 @@ package com.threadfit.glucopilot.ai.model.service.impl;
 import com.threadfit.glucopilot.ai.channel.AiChannel;
 import com.threadfit.glucopilot.ai.channel.AiChannelProperties;
 import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;

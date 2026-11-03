@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.*;
 import org.springframework.ai.chat.model.*;
 import org.springframework.ai.chat.prompt.Prompt;
-import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import tools.jackson.databind.ObjectMapper;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;

@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.core;
+package com.threadfit.glucopilot.ai.scene;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;

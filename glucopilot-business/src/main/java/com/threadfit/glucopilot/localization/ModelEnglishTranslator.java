@@ -1,4 +1,5 @@
 package com.threadfit.glucopilot.localization;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -38,9 +39,9 @@ public class ModelEnglishTranslator implements EnglishTranslator {
         Retain numbers/identifying suffixes; do not invent identity, credentials or a different person. No Chinese characters.
         """;
     /** 文本模型统一从 registry 取；这里只借它翻译，不需要 ChatClient 的 advisor 链。 */
-    private final com.threadfit.glucopilot.ai.core.AiChatClientRegistry clients;
+    private final com.threadfit.glucopilot.ai.client.AiChatClientRegistry clients;
     private final ObjectMapper json;
-    public ModelEnglishTranslator(com.threadfit.glucopilot.ai.core.AiChatClientRegistry clients,ObjectMapper json) {
+    public ModelEnglishTranslator(com.threadfit.glucopilot.ai.client.AiChatClientRegistry clients,ObjectMapper json) {
         this.clients=clients;this.json=json;
     }
     record Part(String value,boolean translate,boolean html) {}

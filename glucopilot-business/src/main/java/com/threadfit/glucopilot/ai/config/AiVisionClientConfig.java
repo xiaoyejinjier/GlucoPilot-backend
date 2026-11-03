@@ -57,7 +57,7 @@ import com.threadfit.glucopilot.ai.model.runtime.DynamicChatModel;
  * <h2>Bean 命名与注入歧义</h2>
  * 本 Bean 名为 {@code visionChatClient}，与 {@code textChatClient} 同类型。任何 {@code ChatClient}
  * 注入点都必须带 {@code @Qualifier}，否则启动期就会因候选不唯一失败
- * （见 {@link com.threadfit.glucopilot.ai.core.AiChatClientRegistry}）。ChatModel 侧同理：
+ * （见 {@link com.threadfit.glucopilot.ai.client.AiChatClientRegistry}）。ChatModel 侧同理：
  * 容器里有 {@code DeepSeekChatModel}、{@code glucopilotTextChatModel}（@Primary）、
  * {@code glucopilotVisionChatModel} 三个，所以这里显式按名字取。
  */

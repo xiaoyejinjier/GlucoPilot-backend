@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.model.service;
 
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 
 import java.util.Map;
 import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;

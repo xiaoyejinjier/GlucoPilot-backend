@@ -1,4 +1,5 @@
-package com.threadfit.glucopilot.ai.core;
+package com.threadfit.glucopilot.ai.client;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;

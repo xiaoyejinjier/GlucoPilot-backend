@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.scene.service.impl;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;

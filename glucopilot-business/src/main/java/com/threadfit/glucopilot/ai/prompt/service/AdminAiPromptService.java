@@ -1,4 +1,5 @@
 package com.threadfit.glucopilot.ai.prompt.service;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 
 import com.threadfit.glucopilot.ai.prompt.dto.AdminAiPromptDtos;
 

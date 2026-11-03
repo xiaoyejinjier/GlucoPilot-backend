@@ -2,8 +2,8 @@ package com.threadfit.glucopilot.ai.model.service;
 
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;
-import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.core.SceneModelResolver;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.model.dto.AiRuntimeStatusDtos;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.service.impl.AiRuntimeStatusServiceImpl;

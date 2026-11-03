@@ -3,7 +3,7 @@ package com.threadfit.glucopilot.ai.scene.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.model.entity.AiModelConfigEntity;
 import com.threadfit.glucopilot.ai.model.mapper.AiModelConfigMapper;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;

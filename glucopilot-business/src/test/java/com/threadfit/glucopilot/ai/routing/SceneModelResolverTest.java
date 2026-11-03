@@ -1,4 +1,5 @@
-package com.threadfit.glucopilot.ai.core;
+package com.threadfit.glucopilot.ai.routing;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;

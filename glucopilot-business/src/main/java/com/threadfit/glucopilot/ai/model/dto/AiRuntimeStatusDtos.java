@@ -1,4 +1,5 @@
 package com.threadfit.glucopilot.ai.model.dto;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 
 import lombok.Builder;
 import lombok.Data;

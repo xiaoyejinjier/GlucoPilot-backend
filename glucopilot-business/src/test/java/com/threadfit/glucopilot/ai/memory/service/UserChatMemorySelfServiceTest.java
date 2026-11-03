@@ -8,7 +8,7 @@ import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerIntercept
 import com.baomidou.mybatisplus.spring.MybatisSqlSessionFactoryBean;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
-import com.threadfit.glucopilot.ai.core.SceneModelResolver;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.context.RequestContext;
@@ -21,7 +21,7 @@ import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import tools.jackson.databind.ObjectMapper;

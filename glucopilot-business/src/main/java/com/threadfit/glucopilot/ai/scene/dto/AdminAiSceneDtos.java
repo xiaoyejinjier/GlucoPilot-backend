@@ -1,4 +1,5 @@
 package com.threadfit.glucopilot.ai.scene.dto;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;

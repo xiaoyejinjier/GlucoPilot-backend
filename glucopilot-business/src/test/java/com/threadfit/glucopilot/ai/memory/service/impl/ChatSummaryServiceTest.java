@@ -1,17 +1,18 @@
 package com.threadfit.glucopilot.ai.memory.service.impl;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
-import com.threadfit.glucopilot.ai.core.SceneCode;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 
 import java.util.ArrayList;
@@ -58,8 +59,8 @@ class ChatSummaryServiceTest {
     private final AIProperties properties = new AIProperties();
 
     /** 摘要请求的 options（关思维链/输出封顶）由它给出；本测试只关心被调用。 */
-    private final com.threadfit.glucopilot.ai.core.SceneModelResolver sceneModelResolver =
-            mock(com.threadfit.glucopilot.ai.core.SceneModelResolver.class);
+    private final com.threadfit.glucopilot.ai.routing.SceneModelResolver sceneModelResolver =
+            mock(com.threadfit.glucopilot.ai.routing.SceneModelResolver.class);
 
     /** 直接在当前线程执行，便于断言"异步任务真的做了什么"。 */
     private final Executor directExecutor = Runnable::run;

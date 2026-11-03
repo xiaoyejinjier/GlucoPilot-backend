@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.model.service.impl;
 
-import com.threadfit.glucopilot.ai.core.SceneCode;
-import com.threadfit.glucopilot.ai.core.SceneModelResolver;
+import com.threadfit.glucopilot.ai.scene.SceneCode;
+import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.model.dto.AiRuntimeStatusDtos;
 import com.threadfit.glucopilot.ai.model.runtime.AiModelSpec;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
@@ -18,7 +18,7 @@ import java.util.List;
  * 把「快照 + 场景绑定」翻译成一份人可读的现状，并收集可疑配置。
  *
  * <p>绑定是否可用的判定<b>不在本类里</b>：它与 {@code SceneModelResolver} 共用
- * {@link com.threadfit.glucopilot.ai.core.SceneModelResolver#judgeBinding}。此前这里自己实现了一遍条件，
+ * {@link com.threadfit.glucopilot.ai.routing.SceneModelResolver#judgeBinding}。此前这里自己实现了一遍条件，
  * 一旦 resolver 改了而这里没跟上，接口就会开始说谎（"说 binding、实际走 default"）。
  * 那个方法刻意不打日志，正好满足"诊断接口会被反复调用"的要求。
  */

@@ -263,6 +263,8 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 **用途**：对话正文 + 多模态引用 + token 计量。`ChatMessageServiceImpl` 写，`ChatCompletionServiceImpl` 读/写。
 
+**这里也是全库唯一有真实用量数据的地方**：`prompt_tokens` / `completion_tokens` / `model_code` / `latency_ms` 只在助手消息上落库，`GET /admin/v1/ai/usage`（接口文档 4.28）就是按 `CAST(gmt_create AS DATE) × model_code` 聚合这几列。摘要、记忆抽取、内容审核、饮食识别、OCR 都只取 `.content()`，没有用量记录——所以「哪个场景花了多少」目前答不出来，这是数据缺口而不是接口缺失。
+
 **索引**：`PRIMARY(id)`、`uk_session_seq(session_id,seq_no)`、`uk_session_client_active(session_id,client_msg_id,is_deleted)`、`idx_session_seq`、`idx_session_time(session_id,gmt_create)`、`idx_reply_to(reply_to_msg_id)`
 
 | # | 列 | 类型 | 空 | 默认 | 含义 |

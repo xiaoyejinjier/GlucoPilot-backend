@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.memory.assembly;
+package com.threadfit.glucopilot.ai.business.chat.dto;
 
 /**
  * 一轮 prompt 的"分片元数据"（③ 期）：这一轮送给模型的内容由哪几块组成、各占多少 token。

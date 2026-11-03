@@ -29,9 +29,9 @@ import static org.mockito.Mockito.when;
 import com.threadfit.glucopilot.ai.memory.advisor.ChatContextReader;
 import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryAdvisorParams;
 import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryReadAdvisor;
-import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
-import com.threadfit.glucopilot.ai.memory.assembly.TokenEstimator;
+import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 
 /**

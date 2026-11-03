@@ -14,9 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
-import com.threadfit.glucopilot.ai.memory.assembly.TokenEstimator;
+import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 
 /**

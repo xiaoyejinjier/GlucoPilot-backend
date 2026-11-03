@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.support;
+package com.threadfit.glucopilot.ai.business.chat.support;
 
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;

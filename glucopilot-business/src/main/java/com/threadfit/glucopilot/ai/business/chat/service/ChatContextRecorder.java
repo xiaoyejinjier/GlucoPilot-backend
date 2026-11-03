@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.business.chat.service;
 
-import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 
 import java.util.List;
 

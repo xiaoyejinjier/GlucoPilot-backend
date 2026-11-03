@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.memory.assembly;
+package com.threadfit.glucopilot.ai.support;
 
 import org.springframework.stereotype.Component;
 

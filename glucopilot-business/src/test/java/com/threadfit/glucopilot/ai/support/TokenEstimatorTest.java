@@ -1,10 +1,10 @@
-package com.threadfit.glucopilot.ai.memory.assembly;
+package com.threadfit.glucopilot.ai.support;
 
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import com.threadfit.glucopilot.ai.memory.assembly.TokenEstimator;
+import com.threadfit.glucopilot.ai.support.TokenEstimator;
 
 /**
  * token 估算与校准。

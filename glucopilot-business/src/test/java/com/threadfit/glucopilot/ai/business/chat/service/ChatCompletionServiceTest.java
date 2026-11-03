@@ -8,11 +8,11 @@ import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
-import com.threadfit.glucopilot.ai.memory.assembly.TokenEstimator;
+import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.support.EnglishPreambleGuard;
+import com.threadfit.glucopilot.ai.business.chat.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.tool.AiToolRegistry;
-import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.business.chat.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
@@ -70,7 +70,7 @@ import com.threadfit.glucopilot.ai.business.chat.service.impl.ChatCompletionServ
  *   <li>末尾只带 usage 的空正文 chunk → 计量仍要聚合；</li>
  *   <li>落库自身失败 → 只尝试一次，不重复落库；</li>
  *   <li>回答开头的英文句子 → 落库与 {@code done.contentText} 里都不留（见
- *       {@link com.threadfit.glucopilot.ai.support.EnglishPreambleGuard}），
+ *       {@link com.threadfit.glucopilot.ai.business.chat.support.EnglishPreambleGuard}），
  *       而 {@code delta} 流保持原样。</li>
  * </ol>
  * <p>

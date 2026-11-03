@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.support;
+package com.threadfit.glucopilot.ai.business.chat.support;
 
 import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;

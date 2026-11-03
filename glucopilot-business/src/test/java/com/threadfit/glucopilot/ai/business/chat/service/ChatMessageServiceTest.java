@@ -4,7 +4,7 @@ import com.threadfit.glucopilot.ai.business.chat.dto.ChatDtos;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
-import com.threadfit.glucopilot.ai.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.business.chat.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.ChatMsgType;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;

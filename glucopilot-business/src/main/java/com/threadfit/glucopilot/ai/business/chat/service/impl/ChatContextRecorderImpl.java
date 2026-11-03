@@ -2,7 +2,7 @@ package com.threadfit.glucopilot.ai.business.chat.service.impl;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatContextEntity;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatContextMapper;
-import com.threadfit.glucopilot.ai.memory.assembly.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

@@ -32,8 +32,8 @@ class ToolCallTraceRecorderTest {
     /** 摘要器用真实现（它本身就是被测行为的一部分：结构压缩 + 截断）。 */
     private final ToolResultDigester digester = new ToolResultDigester();
 
-    private final com.threadfit.glucopilot.ai.config.AIProperties aiProperties =
-            new com.threadfit.glucopilot.ai.config.AIProperties();
+    private final com.threadfit.glucopilot.ai.config.properties.AIProperties aiProperties =
+            new com.threadfit.glucopilot.ai.config.properties.AIProperties();
 
     private final ToolCallTraceRecorder recorder = new ToolCallTraceRecorder(mapper, digester, aiProperties);
 

@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.config;
 
 import com.threadfit.glucopilot.ai.memory.advisor.ChatContextReader;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
 import com.threadfit.glucopilot.ai.memory.advisor.ChatMemoryReadAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;

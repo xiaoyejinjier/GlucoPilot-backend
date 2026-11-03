@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.tool;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiToolConfig;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import com.threadfit.glucopilot.food.service.FoodService;

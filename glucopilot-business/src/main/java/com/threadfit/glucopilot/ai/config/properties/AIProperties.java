@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.config;
+package com.threadfit.glucopilot.ai.config.properties;
 
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import lombok.Data;

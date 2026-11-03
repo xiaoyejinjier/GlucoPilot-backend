@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.config;
+package com.threadfit.glucopilot.ai.channel;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;

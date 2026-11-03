@@ -2,7 +2,7 @@ package com.threadfit.glucopilot.ai.tool;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatToolCall;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper;
-import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;

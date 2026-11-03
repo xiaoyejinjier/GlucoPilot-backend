@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.config;
+package com.threadfit.glucopilot.ai.channel;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Bindable;

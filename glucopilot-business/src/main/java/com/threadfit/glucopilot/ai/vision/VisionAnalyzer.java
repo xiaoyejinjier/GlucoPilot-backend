@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.vision;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;

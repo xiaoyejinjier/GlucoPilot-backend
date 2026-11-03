@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.config;
+package com.threadfit.glucopilot.ai.channel;
 
 /**
  * 模型通道：一个通道 = 一套「协议 + 连接参数 + 凭据」。

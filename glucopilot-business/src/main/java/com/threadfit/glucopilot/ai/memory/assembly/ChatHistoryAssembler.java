@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.memory.assembly;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import lombok.RequiredArgsConstructor;

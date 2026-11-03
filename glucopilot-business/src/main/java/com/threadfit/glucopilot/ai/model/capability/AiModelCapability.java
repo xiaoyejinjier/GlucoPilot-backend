@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.config;
+package com.threadfit.glucopilot.ai.model.capability;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;

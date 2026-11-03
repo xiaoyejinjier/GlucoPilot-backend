@@ -2,7 +2,7 @@ package com.threadfit.glucopilot.ai.core;
 
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
-import com.threadfit.glucopilot.ai.config.AIProperties;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.config.AiChatClientConfig;
 import com.threadfit.glucopilot.ai.memory.mapper.ChatUserMemoryMapper;
 import com.threadfit.glucopilot.ai.memory.service.impl.ChatSummaryServiceImpl;

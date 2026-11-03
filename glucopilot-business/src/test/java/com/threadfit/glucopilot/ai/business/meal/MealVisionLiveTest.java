@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.ai.business.meal;
 
-import com.threadfit.glucopilot.ai.config.AIProperties;
-import com.threadfit.glucopilot.ai.config.AiModelCapability;
+import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;
 import com.threadfit.glucopilot.ai.config.AiVisionClientConfig;
 import com.threadfit.glucopilot.ai.core.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.core.SceneCode;

@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.ai.model.runtime;
 
-import com.threadfit.glucopilot.ai.config.AiModelCapability;
+import com.threadfit.glucopilot.ai.model.capability.AiModelCapability;
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;

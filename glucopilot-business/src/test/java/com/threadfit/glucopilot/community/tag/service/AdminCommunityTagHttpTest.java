@@ -53,7 +53,7 @@ class AdminCommunityTagHttpTest {
     }
 
     @Test
-    void readPermissionCannotWriteAndAdministratorNeedsBothRoleAndPermission() throws Exception {
+    void readPermissionCannotWriteAndWritePermissionIsEnoughWithoutAdminRole() throws Exception {
         try (var context = new AnnotationConfigApplicationContext(Config.class)) {
             var controller = context.getBean(AdminCommunityTagController.class);
             var service = context.getBean(CommunityTagService.class);
@@ -61,24 +61,21 @@ class AdminCommunityTagHttpTest {
             SecurityContextHolder.clearContext();
             assertThrows(AccessDeniedException.class, () -> controller.remove("diet"));
             RequestContext.setOpsId(99L);
+            // 只有读权限：写操作仍然被拒（读与写是两个权限点）
             SecurityContextHolder.getContext()
                     .setAuthentication(
-                            new TestingAuthenticationToken(
-                                    "editor", "unused", "content:news:list", "content:news:edit"));
+                            new TestingAuthenticationToken("viewer", "unused", "content:news:list"));
             assertThrows(AccessDeniedException.class, () -> controller.create(change));
             assertThrows(AccessDeniedException.class, () -> controller.update("diet", change));
             assertThrows(AccessDeniedException.class, () -> controller.remove("diet"));
             when(service.list(any(), any(), any(), any()))
                     .thenReturn(PageResult.of(1, 10, 0, List.of()));
             assertEquals(0, controller.list("", "", null, new PageQuery()).getCode());
+            // 有写权限、没有 admin 角色：放行（授权由 sys_role_menu 决定，不再钉死在超管账号上）
             SecurityContextHolder.getContext()
                     .setAuthentication(
                             new TestingAuthenticationToken(
-                                    "admin",
-                                    "unused",
-                                    "ROLE_admin",
-                                    "content:news:edit",
-                                    "content:news:list"));
+                                    "editor", "unused", "content:news:edit", "content:news:list"));
             var row = new CommunityTagDtos.Row("7", "topic_new", "新分类", "OFFICIAL", 4, 1, 0);
             when(service.create(change)).thenReturn(row);
             when(service.update("diet", change)).thenReturn(row);

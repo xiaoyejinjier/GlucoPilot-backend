@@ -1108,6 +1108,8 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 - **越权一律 404 且不留痕**：`messageDetail` 先校验 `message.sessionId == sessionId`，不匹配按「消息不存在或不属于该会话」返回，避免「用会话 A 的入口试出会话 B 有没有消息 ID」。
 - 权限点在 V53 从 `ai:model:query` 拆成 `ai:chat:audit`（含原始对话，只授超管），并顺带把用量页拆出 `ai:usage:view`：**配置、成本、隐私审计是三类不同的关注点**，不该共用一个权限点。
 - 前端（管理端 `src/views/ai/ChatSessionView.vue`）只在用户点「展开原文」时请求全文，结果缓存在内存、收起即删；这是刻意的——预取会让审计表里堆满「没人真看过」的记录。
+- **分片账本的唯一读出口是 `GET /admin/v1/ai/chat-sessions/{id}/context`，页面入口在同一个抽屉的「上下文构成」区块**：默认收起，展开才请求，用 `flex` 权重画一条按 `contextType` 着色的占比条（系统提示词 / 长期记忆 / 滚动摘要 / 工具摘要 / 历史消息），图例给出每个分片的估算 token。该区块**不写审计**——它只有元数据、没有正文，展开它不等于读了用户内容；这与「读正文必留痕」是两条独立的线。
+- 这套分片**不参与任何运行时决策**：下一轮装配不读 `chat_context`（`ChatContextReader` 读的是摘要/工具摘要/长期记忆）、预算校准用厂商返回的真实 `prompt_tokens`、用量报表读 `chat_message`。它的价值只在「这一轮 2900 token 花在哪」的可解释性——这也解释了为什么页面做得很轻：没有它，问答照样正确、成本一分不差。
 
 ---
 

@@ -116,6 +116,18 @@ $assistantMsgA = [long](Sql "SELECT id FROM sugar_health.chat_message WHERE sess
 $userMsgB = [long](Sql "SELECT id FROM sugar_health.chat_message WHERE session_id=$sessionB AND seq_no=1 AND is_deleted=0;")
 Write-Host "  造数据：会话 A=$sessionA / B=$sessionB，消息 A.user=$userMsgA A.assistant=$assistantMsgA B.user=$userMsgB" -ForegroundColor DarkGray
 
+# 上下文分片的夹具：只给会话 A 造两轮，会话 B 刻意留空（用来验「没有记录也不是错误」）。
+# V28 之后 chat_context 只存元数据，content_text/content_json 允许为 NULL；chk_cc_payload 已被 V28 删除。
+[void](Sql @"
+INSERT INTO sugar_health.chat_context (session_id, user_id, trigger_msg_id, assistant_msg_id, context_round, context_type, context_key, token_estimate, model_code, sort_no, created_by, gmt_create, is_deleted)
+VALUES
+  ($sessionA, $userId, $userMsgA, $assistantMsgA, 1, 1, 'system_prompt',    2348, 'deepseek-v4-pro', 1, $userId, NOW(3), 0),
+  ($sessionA, $userId, $userMsgA, $assistantMsgA, 1, 6, 'history_messages',  552, 'deepseek-v4-pro', 2, $userId, NOW(3), 0),
+  ($sessionA, $userId, $userMsgA, $assistantMsgA, 2, 1, 'system_prompt',    2400, 'deepseek-v4-pro', 1, $userId, NOW(3), 0),
+  ($sessionA, $userId, $userMsgA, $assistantMsgA, 2, 3, 'context_summary',   300, 'deepseek-v4-pro', 2, $userId, NOW(3), 0),
+  ($sessionA, $userId, $userMsgA, $assistantMsgA, 2, 5, 'tool_digest',       120, 'deepseek-v4-pro', 3, $userId, NOW(3), 0);
+"@)
+
 try {
     # ---------- 1. 未授权 ----------
     $r = Call 'GET' "$admin/ai/chat-sessions"
@@ -202,10 +214,42 @@ try {
     Check '25. ai:usage:view 拆分后超管仍可读用量' ($r.Code -eq 200) "HTTP $($r.Code)"
     $r = Call 'GET' "$admin/ai/chat-sessions/$sessionA/context" $ah
     Check '26. 分片审计接口改用 ai:chat:audit 后仍可读' ($r.Code -eq 200) "HTTP $($r.Code)"
+
+    # ---------- 8. 上下文构成（管理端「上下文构成」区块的数据源） ----------
+    $auditBefore = [long](Sql "SELECT COUNT(*) FROM sugar_health.ops_audit_log WHERE module_code='ai' AND action_code='ai_chat_audit_view';")
+    $ctx = $r.Json.data
+    $roundsA = @($ctx.rounds)
+    Check '27. 上下文构成返回 2 轮、合计 5720 token' (
+        $roundsA.Count -eq 2 -and $ctx.totalTokens -eq 5720
+    ) "轮数 $($roundsA.Count) totalTokens=$($ctx.totalTokens)"
+    if ($roundsA.Count -eq 2) {
+        $r1 = $roundsA[0]
+        $keys = @($r1.shards | ForEach-Object { $_.contextKey })
+        Check '28. 第 1 轮分片按 sort_no 升序、首片是系统提示词' (
+            $r1.contextRound -eq 1 -and $r1.totalTokens -eq 2900 -and
+            $keys[0] -eq 'system_prompt' -and $keys[1] -eq 'history_messages'
+        ) "round=$($r1.contextRound) total=$($r1.totalTokens) keys=$($keys -join ',')"
+        Check '29. 分片只含元数据（无 contentText/contentJson）' (
+            ($null -eq $r1.shards[0].PSObject.Properties['contentText']) -and
+            ($null -eq $r1.shards[0].PSObject.Properties['contentJson'])
+        ) '分片里出现了正文字段'
+    }
+    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionA/context?round=2" $ah
+    $only2 = @($r.Json.data.rounds)
+    Check '30. round=2 只返回该轮' ($r.Code -eq 200 -and $only2.Count -eq 1 -and $only2[0].contextRound -eq 2) "HTTP $($r.Code) 轮数 $($only2.Count)"
+    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionB/context" $ah
+    Check '31. 没有分片记录时返回空列表而不是错误' ($r.Code -eq 200 -and @($r.Json.data.rounds).Count -eq 0) "HTTP $($r.Code) 轮数 $(@($r.Json.data.rounds).Count)"
+    $r = Call 'GET' "$admin/ai/chat-sessions?pageNum=1&pageSize=20" $ah
+    $rowA = @($r.Json.data.records | Where-Object { $_.id -eq $sessionA })[0]
+    Check '32. 列表的「分片轮次」列 = 2' ($null -ne $rowA -and $rowA.contextRounds -eq 2) "contextRounds=$($rowA.contextRounds)"
+    $auditAfter = [long](Sql "SELECT COUNT(*) FROM sugar_health.ops_audit_log WHERE module_code='ai' AND action_code='ai_chat_audit_view';")
+    Check '33. 读上下文构成不写审计（只有元数据）' (($auditAfter - $auditBefore) -eq 0) "新增 $($auditAfter - $auditBefore) 条"
 }
 finally {
     [void](Sql "UPDATE sugar_health.chat_session SET is_deleted=1, deleted_at=NOW(3), deleted_by=$userId WHERE title LIKE '$marker%' AND is_deleted=0;")
     [void](Sql "UPDATE sugar_health.chat_message m JOIN sugar_health.chat_session s ON s.id=m.session_id SET m.is_deleted=1, m.deleted_at=NOW(3), m.deleted_by=$userId WHERE s.title LIKE '$marker%';")
+    # chat_context 没有逻辑删除约定（注销走物理删除），夹具同样物理删掉，避免重跑时轮次累加
+    [void](Sql "DELETE FROM sugar_health.chat_context WHERE session_id IN (SELECT id FROM sugar_health.chat_session WHERE title LIKE '$marker%');")
 }
 
 Write-Host ""

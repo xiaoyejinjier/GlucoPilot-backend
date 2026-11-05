@@ -436,6 +436,17 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 > 为什么没有 `gmt_modified`/`is_deleted`：审计表**只追加**，不允许更新或删除（连逻辑删除都不给，否则「删掉审计」就成了绕过手段）。
 
+**AI 模块当前写入的 `action_code`**（都在 `module_code='ai'` 下）：
+
+| `action_code` | `target_type` | 什么时候写 | `detail_json` 里放什么 |
+| --- | --- | --- | --- |
+| `ai_model_create` / `ai_model_update` / `ai_model_delete` | `ai_model` | 后台增删改模型 | 变更前后摘要（**不含密钥**） |
+| `ai_prompt_publish` / `ai_prompt_rollback` | `ai_prompt_template` | 提示词发布/回滚 | 场景编码、版本号 |
+| `ai_scene_update` | `ai_scene_config` | 场景绑定保存 | 场景编码、模型编码 |
+| `ai_chat_audit_view` | `chat_message` | **运营读某条会话消息的全文**（4.31 全文接口） | 只有 `{"sessionId":N}`；**正文永不进审计** |
+
+> `ai_chat_audit_view` 是「读隐私也留痕」：列表与预览不写，只有真正把正文读出来才写一条。所以审计表里出现这个动作，等于「有人看过了」，这也是前端不做原文预取的原因。
+
 ---
 
 ## 12. `community_moderation_hit` — 审核命中明细（V43）

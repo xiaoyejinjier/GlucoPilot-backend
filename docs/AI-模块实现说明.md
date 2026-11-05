@@ -1091,6 +1091,26 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 
 ---
 
+## 14.1 会话审计面：只读两段式 + 读正文留痕
+
+后台看用户对话，本质是「运维在读别人的隐私」，所以这一面刻意做成**两段式**，而不是一个万能查询接口。
+
+| 关注点 | 表 | Service | Controller | 权限点 |
+| --- | --- | --- | --- | --- |
+| 会话清单 | `chat_session`（+ `user_profile` 昵称、`chat_context` 轮次计数） | `AdminChatSessionServiceImpl#list` | `AdminChatSessionController` | `ai:chat:audit` |
+| 消息预览 | `chat_message` | `#messages` | 同上 | `ai:chat:audit` |
+| 单条全文 | `chat_message` | `#messageDetail` | 同上 | `ai:chat:audit` |
+| 分片账本 | `chat_context` | `ChatContextService` | `AdminChatContextController` | `ai:chat:audit` |
+
+- **列表与预览都不返回正文**。预览 200 字封顶（`PREVIEW_MAX_CHARS`），先折叠空白再截断加 `…`，所以字符串最长 201 字符；图片取 `media_caption`、语音取 `asr_text`，都没有就按类型给 `[图片]`/`[语音]`/`[空消息]`。
+- **全文接口是唯一出口**，且每次调用都写一条 `ops_audit_log`：`module_code=ai`、`action_code=ai_chat_audit_view`、`target_type=chat_message`、`target_id=消息ID`，`detail_json` 只放 `{"sessionId":N}` —— **正文不进审计**，审计只回答「谁在什么时候看了哪条」。
+- **不提供按正文关键词搜索**：那等于隐式的全文批量读取，会绕过上面的留痕。会话列表的关键词只匹配标题与用户昵称。
+- **越权一律 404 且不留痕**：`messageDetail` 先校验 `message.sessionId == sessionId`，不匹配按「消息不存在或不属于该会话」返回，避免「用会话 A 的入口试出会话 B 有没有消息 ID」。
+- 权限点在 V53 从 `ai:model:query` 拆成 `ai:chat:audit`（含原始对话，只授超管），并顺带把用量页拆出 `ai:usage:view`：**配置、成本、隐私审计是三类不同的关注点**，不该共用一个权限点。
+- 前端（管理端 `src/views/ai/ChatSessionView.vue`）只在用户点「展开原文」时请求全文，结果缓存在内存、收起即删；这是刻意的——预取会让审计表里堆满「没人真看过」的记录。
+
+---
+
 ## 15. 依赖关系一览
 
 谁 depends on 谁（只列跨包的关键边）：

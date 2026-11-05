@@ -9,7 +9,6 @@ import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import com.threadfit.glucopilot.ai.memory.repository.MyBatisChatMemoryRepository;
 
 /**
  * 会话记忆装配。

@@ -38,6 +38,7 @@ public class AdminRecommendationService {
         query.setReadable(true);
         query.setRecommendation(context);
         query.setExplainRecommendation(true);
+        // 复用文章列表XML：先过滤候选，再引用推荐XML中的解释列和排序公式，管理端取前20名。
         long total = articles.countArticles(query);
         var rows = articles.selectArticles(query, 20, 0);
         var names =

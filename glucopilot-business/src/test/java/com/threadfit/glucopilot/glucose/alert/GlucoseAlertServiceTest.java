@@ -47,26 +47,26 @@ class GlucoseAlertServiceTest {
         tx = new TransactionTemplate(new DataSourceTransactionManager(ds));
         jdbc.execute(
                 "CREATE TABLE user_account(id BIGINT PRIMARY KEY,username VARCHAR(64),phone"
-                    + " VARCHAR(20),is_deleted INT DEFAULT 0)");
+                        + " VARCHAR(20),is_deleted INT DEFAULT 0)");
         jdbc.execute(
                 "CREATE TABLE user_profile(user_id BIGINT PRIMARY KEY,nickname"
-                    + " VARCHAR(64),is_deleted INT DEFAULT 0)");
+                        + " VARCHAR(64),is_deleted INT DEFAULT 0)");
         jdbc.execute(
                 "CREATE TABLE glucose_record(id BIGINT PRIMARY KEY,user_id BIGINT,record_date"
-                    + " DATE,node_code VARCHAR(32),glucose_value DECIMAL(4,1),source_type INT"
-                    + " DEFAULT 1,remark VARCHAR(256),recorded_at TIMESTAMP(3),is_deleted INT"
-                    + " DEFAULT 0)");
+                        + " DATE,node_code VARCHAR(32),glucose_value DECIMAL(4,1),source_type INT"
+                        + " DEFAULT 1,remark VARCHAR(256),recorded_at TIMESTAMP(3),is_deleted INT"
+                        + " DEFAULT 0)");
         jdbc.execute(
                 "CREATE TABLE sys_menu(menu_id BIGINT AUTO_INCREMENT PRIMARY KEY,menu_name"
-                    + " VARCHAR(128),parent_id BIGINT,order_num INT,path VARCHAR(256),component"
-                    + " VARCHAR(256),menu_type CHAR(1),visible CHAR(1),status CHAR(1),perms"
-                    + " VARCHAR(128),icon VARCHAR(100),create_time TIMESTAMP)");
+                        + " VARCHAR(128),parent_id BIGINT,order_num INT,path VARCHAR(256),component"
+                        + " VARCHAR(256),menu_type CHAR(1),visible CHAR(1),status CHAR(1),perms"
+                        + " VARCHAR(128),icon VARCHAR(100),create_time TIMESTAMP)");
         jdbc.execute(
                 "CREATE TABLE sys_role(role_id BIGINT PRIMARY KEY,role_key VARCHAR(64),del_flag"
-                    + " CHAR(1) DEFAULT '0')");
+                        + " CHAR(1) DEFAULT '0')");
         jdbc.execute(
                 "CREATE TABLE sys_role_menu(role_id BIGINT,menu_id BIGINT,PRIMARY"
-                    + " KEY(role_id,menu_id))");
+                        + " KEY(role_id,menu_id))");
         jdbc.update("INSERT INTO sys_role(role_id,role_key) VALUES(1,'admin'),(2,'viewer')");
         jdbc.update("INSERT INTO sys_menu(menu_id,perms) VALUES(100,'health:archive:view')");
         jdbc.update("INSERT INTO sys_role_menu VALUES(2,100)");
@@ -80,7 +80,7 @@ class GlucoseAlertServiceTest {
         migration.populate(migrationConnection);
         jdbc.update(
                 "INSERT INTO user_account(id,username,phone)"
-                    + " VALUES(1,'alice','12345678901'),(2,'bob','12345678902')");
+                        + " VALUES(1,'alice','12345678901'),(2,'bob','12345678902')");
         jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(1,'用户甲'),(2,'用户乙')");
         repository =
                 new GlucoseAlertRepository(
@@ -368,6 +368,23 @@ class GlucoseAlertServiceTest {
     }
 
     @Test
+    void secondAdministratorWithTheSameOpenedVersionReceivesTheExactRefreshMessage() {
+        record(1, 1, "after_dinner", "12.6");
+        var adminOneOpened = repository.find(1);
+        var adminTwoOpened = repository.find(1);
+        handle(1, 1, request(adminOneOpened, "PROCESSING", "管理员一已提交的建议"));
+        var error =
+                assertThrows(
+                        BizException.class,
+                        () -> handle(3, 1, request(adminTwoOpened, "PROCESSING", "管理员二尚未刷新的建议")));
+        assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
+        assertEquals("事件已被其他管理员处理，请刷新后重试", error.getMessage());
+        assertEquals("管理员一已提交的建议", repository.find(1).note());
+        assertEquals(1, repository.history(1).size());
+        assertEquals(1, repository.find(1).version());
+    }
+
+    @Test
     void changedValueOrMeasurementTimeStartsNewPendingSnapshotAndPreservesHistory() {
         record(1, 1, "before_breakfast", "3.8");
         var old = repository.find(1);
@@ -445,7 +462,7 @@ class GlucoseAlertServiceTest {
         var event = repository.find(1);
         jdbc.execute(
                 "ALTER TABLE gp_glucose_alert_log ADD CONSTRAINT reject_logs"
-                    + " CHECK(note='allowed')");
+                        + " CHECK(note='allowed')");
         assertThrows(
                 RuntimeException.class,
                 () -> handle(7, 1, request(event, "PROCESSING", "失败时不能只保存状态")));
@@ -459,22 +476,22 @@ class GlucoseAlertServiceTest {
                 1,
                 jdbc.queryForObject(
                         "SELECT COUNT(*) FROM sys_role_menu rm JOIN sys_menu m ON"
-                            + " m.menu_id=rm.menu_id WHERE rm.role_id=2 AND"
-                            + " m.perms='health:alert:view'",
+                                + " m.menu_id=rm.menu_id WHERE rm.role_id=2 AND"
+                                + " m.perms='health:alert:view'",
                         Long.class));
         assertEquals(
                 0,
                 jdbc.queryForObject(
                         "SELECT COUNT(*) FROM sys_role_menu rm JOIN sys_menu m ON"
-                            + " m.menu_id=rm.menu_id WHERE rm.role_id=2 AND"
-                            + " m.perms='health:alert:handle'",
+                                + " m.menu_id=rm.menu_id WHERE rm.role_id=2 AND"
+                                + " m.perms='health:alert:handle'",
                         Long.class));
         assertEquals(
                 1,
                 jdbc.queryForObject(
                         "SELECT COUNT(*) FROM sys_role_menu rm JOIN sys_menu m ON"
-                            + " m.menu_id=rm.menu_id WHERE rm.role_id=1 AND"
-                            + " m.perms='health:alert:handle'",
+                                + " m.menu_id=rm.menu_id WHERE rm.role_id=1 AND"
+                                + " m.perms='health:alert:handle'",
                         Long.class));
     }
 

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.community.message.mapper.AdminMessageMapper">
+
+    <!-- 管理端信息列表与总数共用筛选条件。 -->
+    <sql id="messageSearchFrom">
+        FROM community_message m
+        LEFT JOIN user_profile sender
+            ON sender.user_id = m.sender_id AND sender.is_deleted = 0
+        LEFT JOIN user_profile recipient
+            ON recipient.user_id = m.recipient_id AND recipient.is_deleted = 0
+        WHERE 1 = 1
+        <if test="q.senderId != null">
+            AND m.sender_id = #{q.senderId}
+        </if>
+        <if test="q.recipientId != null">
+            AND m.recipient_id = #{q.recipientId}
+        </if>
+        <if test="q.readState == 'READ'">
+            AND m.read_at IS NOT NULL
+        </if>
+        <if test="q.readState == 'UNREAD'">
+            AND m.read_at IS NULL
+        </if>
+        <if test="q.keyword != null">
+            AND (
+                LOCATE(#{q.keyword}, m.content) &gt; 0
+                OR LOCATE(#{q.keyword}, sender.nickname) &gt; 0
+                OR LOCATE(#{q.keyword}, recipient.nickname) &gt; 0
+            )
+        </if>
+        <if test="q.firstUserId != null">
+            AND (
+                (m.sender_id = #{q.firstUserId} AND m.recipient_id = #{q.secondUserId})
+                OR (m.sender_id = #{q.secondUserId} AND m.recipient_id = #{q.firstUserId})
+            )
+        </if>
+    </sql>
+
+    <select id="count" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        <include refid="messageSearchFrom"/>
+    </select>
+
+    <select id="page" resultType="com.threadfit.glucopilot.community.message.entity.AdminMessageRow">
+        SELECT
+            m.id,
+            m.sender_id,
+            m.recipient_id,
+            m.content,
+            m.created_at,
+            m.read_at,
+            COALESCE(NULLIF(sender.nickname, ''), CONCAT('用户 ', m.sender_id)) sender_nickname,
+            COALESCE(NULLIF(recipient.nickname, ''), CONCAT('用户 ', m.recipient_id)) recipient_nickname
+        <include refid="messageSearchFrom"/>
+        ORDER BY m.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+</mapper>

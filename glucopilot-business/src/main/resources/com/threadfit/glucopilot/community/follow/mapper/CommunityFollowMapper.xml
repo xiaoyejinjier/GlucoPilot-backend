@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 与Java接口同路径、同名，MyBatis注册接口时自动加载；id对应接口方法名。 -->
+<mapper namespace="com.threadfit.glucopilot.community.follow.mapper.CommunityFollowMapper">
+
+    <!-- 关注列表和计数共用相同的有效用户、博主及昵称搜索条件。 -->
+    <sql id="followingSearchFrom">
+        FROM community_follow f
+        WHERE f.follower_id = #{viewer}
+          AND f.following = 1
+          AND ((LEFT(f.target_key,1) = 'u'
+                  AND EXISTS(
+                    SELECT 1
+                    FROM user_account u
+                    WHERE CONCAT('u',u.id) = f.target_key
+                      AND u.is_deleted = 0
+                      AND u.account_status = 1))
+              OR (LEFT(f.target_key,1) = 'b'
+                  AND EXISTS(
+                    SELECT 1
+                    FROM community_blogger b
+                    WHERE CONCAT('b',b.id) = f.target_key
+                      AND b.enabled = 1)))
+          AND (EXISTS(
+                SELECT 1
+                FROM user_account u
+                LEFT JOIN user_profile p ON p.user_id = u.id
+                  AND p.is_deleted = 0
+                WHERE f.target_key = CONCAT('u',u.id)
+                  AND LOCATE(#{keyword},COALESCE(NULLIF(p.nickname,''),'社区用户'))&gt;0)
+              OR EXISTS(
+                SELECT 1
+                FROM community_blogger b
+                LEFT JOIN user_profile bp ON bp.user_id = b.user_id
+                  AND bp.is_deleted = 0
+                WHERE f.target_key = CONCAT('b',b.id)
+                  AND LOCATE(#{keyword},CASE WHEN b.user_id IS NULL THEN b.nickname ELSE COALESCE(NULLIF(bp.nickname,''),'社区用户') END)&gt;0))
+    </sql>
+
+    <select id="countUserFollowing" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM community_follow
+        WHERE follower_id = #{viewer}
+          AND following = 1
+          AND (target_key = #{key}
+              OR target_key IN (
+                SELECT CONCAT('b',id)
+                FROM community_blogger
+                WHERE user_id = #{userId}
+                  AND enabled = 1))
+    </select>
+
+    <select id="countBloggerFollowing" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM community_follow
+        WHERE follower_id = #{viewer}
+          AND target_key = #{key}
+          AND following = 1
+    </select>
+
+    <select id="lockActiveUser" resultType="java.lang.Long" useCache="false" flushCache="true">
+        SELECT id
+        FROM user_account
+        WHERE id = #{viewer}
+          AND is_deleted = 0
+          AND account_status = 1
+        FOR UPDATE
+    </select>
+
+    <insert id="upsertFollowing">
+        INSERT INTO community_follow(follower_id,target_key,following)
+        VALUES(#{viewer},#{targetKey},#{following})
+        ON DUPLICATE KEY UPDATE following = #{updatedFollowing},updated_at = CURRENT_TIMESTAMP
+    </insert>
+
+    <update id="clearBloggerAliases">
+        UPDATE community_follow
+        SET following = 0,updated_at = CURRENT_TIMESTAMP
+        WHERE follower_id = #{viewer}
+          AND target_key IN (
+            SELECT CONCAT('b',id)
+            FROM community_blogger
+            WHERE user_id = #{targetUser})
+          AND following = 1
+    </update>
+
+    <delete id="deleteFollowNotification">
+        DELETE
+        FROM community_notification
+        WHERE recipient_id = #{recipient}
+          AND actor_id = #{actor}
+          AND kind = 'FOLLOW'
+    </delete>
+
+    <select id="countFollowing" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        <include refid="followingSearchFrom"/>
+    </select>
+
+    <select id="selectFollowingKeys" resultType="java.lang.String">
+        SELECT f.target_key
+        <include refid="followingSearchFrom"/>
+        ORDER BY f.updated_at DESC,f.target_key
+        LIMIT #{limit}
+        OFFSET #{offset}
+    </select>
+</mapper>

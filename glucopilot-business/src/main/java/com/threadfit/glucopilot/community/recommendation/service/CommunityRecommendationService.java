@@ -15,7 +15,10 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
-/** 用户兴趣向量生成：查询行为 → 时间衰减 → 标签累加 → 取前64维 → L2归一化。 */
+/**
+ * 用户兴趣向量生成：查询行为 → 时间衰减 → 标签累加 → 取前64维 → L2归一化。
+ * 行为权重与文章评分SQL见resources同包根下recommendation/mapper/CommunityRecommendationMapper.xml。
+ */
 @Service
 @RequiredArgsConstructor
 public class CommunityRecommendationService {
@@ -32,7 +35,8 @@ public class CommunityRecommendationService {
     /** 【入口B：完整分析】同时返回向量、原始/衰减权重和范数，供管理端解释计算。 */
     public RecommendationAnalysis analyze(long viewer) {
         var now = LocalDateTime.now();
-        // 【1. 取行为】今天向前推29天的零点起算；本次查询和计算使用同一个now。
+        // 【1. 取行为】对应XML的signals：阅读1、点赞3、收藏5；本次查询和计算使用同一个now。
+        // 今天向前推29天的零点起算，按自然日限制近30天的行为窗口。
         var since = now.toLocalDate().minusDays(HISTORY_DAYS - 1).atStartOfDay();
         return analyzeSignals(mapper.signals(viewer, since, now), now);
     }

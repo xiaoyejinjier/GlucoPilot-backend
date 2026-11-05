@@ -1,0 +1,510 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.community.article.mapper.CommunityPublicationMapper">
+
+    <!-- 文章总数与列表统一过滤：发布状态、阅读权限、隐藏、标签、关注及搜索。 -->
+    <sql id="articleSearchFrom">
+        FROM cms_news n
+        LEFT JOIN community_article a ON a.news_id = n.id
+        WHERE n.is_deleted = 0
+        <if test='query.published'>
+              AND n.is_deleted = 0
+              AND n.publish_status = 1
+              AND n.publish_at&lt;= CURRENT_TIMESTAMP
+              AND (n.community_managed = 0
+                  OR EXISTS(
+                    SELECT 1
+                    FROM community_article pa
+                    LEFT JOIN user_account au ON au.id = pa.author_user_id
+                      AND au.is_deleted = 0
+                      AND au.account_status = 1
+                    WHERE pa.news_id = n.id
+                      AND pa.state = 'PUBLISHED'
+                      AND (au.id IS NOT NULL
+                          OR (pa.author_user_id IS NULL
+                              AND EXISTS(
+                                SELECT 1
+                                FROM community_blogger eb
+                                WHERE eb.id = n.blogger_id
+                                  AND eb.enabled = 1
+                                  AND eb.user_id IS NULL)))))
+        </if>
+        <if test='query.readable'>
+              AND (NOT EXISTS(
+                    SELECT 1
+                    FROM community_article_access ac
+                    WHERE ac.news_id = n.id
+                      AND ac.visibility&lt;&gt;'PUBLIC')
+                  OR (
+                    SELECT va.author_user_id
+                    FROM community_article va
+                    WHERE va.news_id = n.id) = #{query.viewer}
+                  OR EXISTS(
+                    SELECT 1
+                    FROM community_article_access ac
+                    JOIN community_article_reader ar ON ar.news_id = ac.news_id
+                    WHERE ac.news_id = n.id
+                      AND ac.visibility = 'FRIENDS'
+                      AND ar.user_id = #{query.viewer}
+                      AND EXISTS(
+                        SELECT 1
+                        FROM community_follow f
+                        WHERE f.follower_id = #{query.viewer}
+                          AND f.target_key = CONCAT('u',(
+                                SELECT va.author_user_id
+                                FROM community_article va
+                                WHERE va.news_id = n.id))
+                          AND f.following = 1)
+                      AND EXISTS(
+                        SELECT 1
+                        FROM community_follow f
+                        WHERE f.follower_id = (
+                            SELECT va.author_user_id
+                            FROM community_article va
+                            WHERE va.news_id = n.id)
+                          AND f.target_key = CONCAT('u',#{query.viewer})
+                          AND f.following = 1)))
+              AND NOT EXISTS(
+                SELECT 1
+                FROM community_article_hidden ah
+                WHERE ah.news_id = n.id
+                  AND ah.user_id = #{query.viewer})
+        </if>
+        <if test='query.tag != null and query.tag != ""'>
+              AND EXISTS(
+                SELECT 1
+                FROM community_article_tag atg
+                JOIN community_tag t ON t.id = atg.tag_id
+                WHERE atg.news_id = n.id
+                  AND t.enabled = 1
+                <choose>
+                    <when test='query.tag == "other"'>
+                          AND (t.code = 'other'
+                              OR LEFT(t.code,7) = 'custom_')
+                    </when>
+                    <otherwise>
+                          AND t.code = #{query.tag}
+                    </otherwise>
+                </choose>
+                )
+        </if>
+        <if test='query.following'>
+              AND EXISTS(
+                SELECT 1
+                FROM community_follow f
+                WHERE f.follower_id = #{query.viewer}
+                  AND f.following = 1
+                  AND (f.target_key = CONCAT('u',a.author_user_id)
+                      OR f.target_key = CONCAT('b',n.blogger_id)
+                      OR f.target_key = CONCAT('u',(
+                            SELECT b.user_id
+                            FROM community_blogger b
+                            WHERE b.id = n.blogger_id))))
+        </if>
+        <if test='query.authorUser != null'>
+              AND (a.author_user_id = #{query.authorUser}
+                  OR EXISTS(
+                    SELECT 1
+                    FROM community_blogger b
+                    WHERE b.id = n.blogger_id
+                      AND b.user_id = #{query.authorUser}))
+        </if>
+        <if test='query.blogger != null'>
+              AND n.blogger_id = #{query.blogger}
+        </if>
+        <if test='query.mine != null'>
+              AND a.author_user_id = #{query.mine}
+        </if>
+        <if test='query.state != null and query.state != ""'>
+              AND (CASE WHEN n.community_managed = 1 THEN COALESCE(a.state,'AI_PENDING') ELSE CASE n.publish_status WHEN 1 THEN 'PUBLISHED' WHEN 2 THEN 'HIDDEN' ELSE 'DRAFT' END END) = #{query.state}
+        </if>
+        <if test='query.source != null and query.source != ""'>
+              AND n.community_managed =
+            <choose>
+                <when test='query.source == "COMMUNITY"'>
+                    1
+                </when>
+                <otherwise>
+                    0
+                </otherwise>
+            </choose>
+        </if>
+        <if test='query.keyword != null and query.keyword != ""'>
+              AND (LOCATE(#{query.keyword},n.title)&gt;0
+                <if test='query.adminSearch'>
+                      OR EXISTS(
+                        SELECT 1
+                        FROM user_profile p
+                        WHERE p.user_id = a.author_user_id
+                          AND p.is_deleted = 0
+                          AND LOCATE(#{query.keyword},p.nickname)&gt;0)
+                      OR EXISTS(
+                        SELECT 1
+                        FROM community_blogger b
+                        WHERE b.id = n.blogger_id
+                          AND a.author_user_id IS NULL
+                          AND LOCATE(#{query.keyword},b.nickname)&gt;0)
+                </if>
+                )
+        </if>
+    </sql>
+
+    <select id="selectActiveUser" resultType="java.lang.Long" useCache="false" flushCache="true">
+        SELECT id
+        FROM user_account
+        WHERE id = #{id}
+          AND is_deleted = 0
+          AND account_status = 1
+        <if test="lock">
+            FOR UPDATE
+        </if>
+    </select>
+
+    <select id="selectVisibleTags" resultType="java.util.HashMap">
+        SELECT t.code,t.name
+        FROM community_tag t
+        WHERE t.enabled = 1
+          AND (LEFT(t.code,7)&lt;&gt;'custom_'
+              OR EXISTS(
+                SELECT 1
+                FROM community_article_tag atg
+                JOIN cms_news n ON n.id = atg.news_id
+                LEFT JOIN community_article a ON a.news_id = n.id
+                WHERE atg.tag_id = t.id
+                  AND n.is_deleted = 0
+                  AND n.publish_status = 1
+                  AND n.publish_at&lt;=CURRENT_TIMESTAMP
+                  AND (n.community_managed = 0
+                      OR a.state = 'PUBLISHED')
+                  AND (NOT EXISTS(
+                        SELECT 1
+                        FROM community_article_access ac
+                        WHERE ac.news_id = n.id
+                          AND ac.visibility&lt;&gt;'PUBLIC')
+                      OR (
+                        SELECT va.author_user_id
+                        FROM community_article va
+                        WHERE va.news_id = n.id) = #{viewer}
+                      OR EXISTS(
+                        SELECT 1
+                        FROM community_article_access ac
+                        JOIN community_article_reader ar ON ar.news_id = ac.news_id
+                        WHERE ac.news_id = n.id
+                          AND ac.visibility = 'FRIENDS'
+                          AND ar.user_id = #{viewer}
+                          AND EXISTS(
+                            SELECT 1
+                            FROM community_follow f
+                            WHERE f.follower_id = #{viewer}
+                              AND f.target_key = CONCAT('u',(
+                                    SELECT va.author_user_id
+                                    FROM community_article va
+                                    WHERE va.news_id = n.id))
+                              AND f.following = 1)
+                          AND EXISTS(
+                            SELECT 1
+                            FROM community_follow f
+                            WHERE f.follower_id = (
+                                SELECT va.author_user_id
+                                FROM community_article va
+                                WHERE va.news_id = n.id)
+                              AND f.target_key = CONCAT('u',#{viewer})
+                              AND f.following = 1)))
+                  AND NOT EXISTS(
+                    SELECT 1
+                    FROM community_article_hidden ah
+                    WHERE ah.news_id = n.id
+                      AND ah.user_id = #{viewer}) ))
+        ORDER BY t.sort_no,t.id
+    </select>
+
+    <select id="selectArticleTags" resultType="java.util.HashMap">
+        SELECT t.code,t.name
+        FROM community_article_tag a
+        JOIN community_tag t ON t.id = a.tag_id
+        WHERE a.news_id = #{id}
+          AND t.enabled = 1
+        ORDER BY t.sort_no,t.id
+    </select>
+
+    <select id="lockEnabledTagCodes" resultType="java.lang.String" useCache="false" flushCache="true">
+        SELECT code
+        FROM community_tag
+        WHERE enabled = 1
+        ORDER BY id
+        FOR UPDATE
+    </select>
+
+    <select id="lockDraftTagCodes" resultType="java.lang.String" useCache="false" flushCache="true">
+        SELECT code
+        FROM community_tag
+        WHERE enabled = 1
+        ORDER BY id
+        FOR UPDATE
+    </select>
+
+    <select id="countDisabledTagName" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM community_tag
+        WHERE LOWER(name) = LOWER(#{name})
+          AND enabled = 0
+    </select>
+
+    <select id="selectCustomTag" resultType="java.util.HashMap">
+        SELECT code,enabled
+        FROM community_tag
+        WHERE name = #{name}
+        ORDER BY id
+        LIMIT 1
+    </select>
+
+    <insert id="insertCustomTag">
+        INSERT INTO community_tag(code,name,sort_no)
+        VALUES(#{code},#{name},100)
+        ON DUPLICATE KEY UPDATE code = code
+    </insert>
+
+    <select id="selectTagEnabled" resultType="java.lang.Integer">
+        SELECT enabled
+        FROM community_tag
+        WHERE code = #{code}
+    </select>
+
+    <delete id="deleteArticleTags">
+        DELETE
+        FROM community_article_tag
+        WHERE news_id = #{id}
+    </delete>
+
+    <insert id="insertArticleTag">
+        INSERT INTO community_article_tag(news_id,tag_id)
+        SELECT #{id},id
+        FROM community_tag
+        WHERE code = #{code}
+          AND enabled = 1
+    </insert>
+
+    <select id="countOwnedImage" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM media_file
+        WHERE id = #{mediaId}
+          AND user_id = #{author}
+          AND ops_id IS NULL
+          AND biz_type = 7
+          AND file_status = 1
+          AND is_deleted = 0
+          AND size_bytes&gt;0
+          AND size_bytes&lt;=5242880
+          AND mime_type IN ('image/jpeg','image/png','image/webp','image/gif')
+    </select>
+
+    <select id="countOwnedVideo" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM media_file
+        WHERE id = #{mediaId}
+          AND user_id = #{author}
+          AND ops_id IS NULL
+          AND biz_type = 8
+          AND file_status = 1
+          AND is_deleted = 0
+          AND size_bytes&gt;0
+          AND size_bytes&lt;=20971520
+          AND mime_type = 'video/mp4'
+    </select>
+
+    <delete id="deleteArticleMedia">
+        DELETE
+        FROM community_article_image
+        WHERE news_id = #{id}
+    </delete>
+
+    <insert id="insertArticleMedia">
+        INSERT INTO community_article_image(news_id,media_id,sort_no)
+        VALUES(#{id},#{mediaId},#{sortNo})
+    </insert>
+
+    <select id="selectSubmittedArticleIds" resultType="java.lang.Long">
+        SELECT news_id
+        FROM community_article
+        WHERE author_user_id = #{author}
+          AND client_request_id = #{clientRequestId}
+    </select>
+
+    <select id="countRecentArticles" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM community_article
+        WHERE author_user_id = #{author}
+          AND created_at&gt;#{since}
+    </select>
+
+    <select id="selectBloggerIds" resultType="java.lang.Long">
+        SELECT id
+        FROM community_blogger
+        WHERE user_id = #{author}
+        ORDER BY id
+        LIMIT 1
+    </select>
+
+    <insert id="insertUserBlogger">
+        INSERT INTO community_blogger(user_id,nickname,bio)
+        VALUES(#{author},'社区用户','')
+    </insert>
+
+    <select id="selectUserBlogger" resultType="java.lang.Long">
+        SELECT id
+        FROM community_blogger
+        WHERE user_id = #{author}
+        ORDER BY id
+        LIMIT 1
+    </select>
+
+    <insert id="insertSubmission">
+        INSERT INTO community_article(news_id,author_user_id,client_request_id)
+        VALUES(#{newsId},#{author},#{clientRequestId})
+    </insert>
+
+    <update id="updateArticleContent">
+        UPDATE cms_news
+        SET title = #{title},summary_text = #{summary},content_body = #{body},content_type = #{contentType},publish_status = 0,gmt_modified = CURRENT_TIMESTAMP
+        WHERE id = #{id}
+          AND is_deleted = 0
+    </update>
+
+    <update id="resetArticleReview">
+        UPDATE community_article
+        SET state = 'AI_PENDING',revision = revision+1,ai_verdict = 'PENDING',ai_reason = '',ai_model = '',ai_checked_at = NULL,review_note = '',reviewed_by = NULL,reviewed_at = NULL,updated_at = CURRENT_TIMESTAMP
+        WHERE news_id = #{id}
+    </update>
+
+    <select id="selectAuthorTags" resultType="java.util.HashMap">
+        SELECT DISTINCT t.code,t.name,t.enabled
+        FROM community_article_tag atg
+        JOIN community_tag t ON t.id = atg.tag_id
+        JOIN community_article a ON a.news_id = atg.news_id
+        JOIN cms_news n ON n.id = a.news_id
+        WHERE a.author_user_id = #{viewer}
+          AND n.is_deleted = 0
+          AND (t.enabled = 1
+              OR #{includeDisabled} = 1)
+        ORDER BY t.name
+        LIMIT 100
+    </select>
+
+    <!-- 候选总数：只计用户当前有权看到的文章，不受排序和分页影响。 -->
+    <select id="countArticles" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        <include refid="articleSearchFrom"/>
+    </select>
+
+    <!-- 推荐执行入口：评分明细 → 共用候选过滤 → 推荐排序 → 分页。 -->
+    <select id="selectArticles" resultType="java.util.HashMap">
+        SELECT
+            n.*,
+            a.author_user_id,
+            CASE WHEN n.community_managed = 1 THEN COALESCE(a.state,'AI_PENDING') ELSE CASE n.publish_status WHEN 1 THEN 'PUBLISHED' WHEN 2 THEN 'HIDDEN' ELSE 'DRAFT' END END article_state,
+            a.revision,
+            a.ai_verdict,
+            a.ai_reason,
+            a.ai_model,
+            a.review_note,
+            COALESCE(a.created_at,n.gmt_create) article_created_at
+        <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.explanationColumns"/>
+        <include refid="articleSearchFrom"/>
+        <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.orderBy"/>
+        LIMIT #{limit}
+        OFFSET #{offset}
+    </select>
+
+    <select id="selectArticle" resultType="java.util.HashMap">
+        SELECT
+            n.*,
+            a.author_user_id,
+            CASE WHEN n.community_managed = 1 THEN COALESCE(a.state,'AI_PENDING') ELSE CASE n.publish_status WHEN 1 THEN 'PUBLISHED' WHEN 2 THEN 'HIDDEN' ELSE 'DRAFT' END END article_state,
+            a.revision,
+            a.ai_verdict,
+            a.ai_reason,
+            a.ai_model,
+            a.review_note,
+            COALESCE(a.created_at,n.gmt_create) article_created_at
+        FROM cms_news n
+        LEFT JOIN community_article a ON a.news_id = n.id
+        WHERE n.id = #{id}
+          AND n.is_deleted = 0
+    </select>
+
+    <select id="selectPublicArticle" resultType="java.util.HashMap">
+        SELECT
+            n.*,
+            a.author_user_id,
+            CASE WHEN n.community_managed = 1 THEN COALESCE(a.state,'AI_PENDING') ELSE CASE n.publish_status WHEN 1 THEN 'PUBLISHED' WHEN 2 THEN 'HIDDEN' ELSE 'DRAFT' END END article_state,
+            a.revision,
+            a.ai_verdict,
+            a.ai_reason,
+            a.ai_model,
+            a.review_note,
+            COALESCE(a.created_at,n.gmt_create) article_created_at
+        FROM cms_news n
+        LEFT JOIN community_article a ON a.news_id = n.id
+        WHERE n.id = #{id}
+          AND n.is_deleted = 0
+    </select>
+
+    <select id="countPublicArticle" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM cms_news n
+        LEFT JOIN community_article a ON a.news_id = n.id
+        WHERE n.id = #{id}
+          AND n.is_deleted = 0
+          AND n.publish_status = 1
+          AND n.publish_at&lt;=CURRENT_TIMESTAMP
+          AND (n.community_managed = 0
+              OR a.state = 'PUBLISHED')
+    </select>
+
+    <select id="selectArticleActions" resultType="java.util.HashMap">
+        SELECT is_liked,is_collected
+        FROM news_user_action
+        WHERE news_id = #{id}
+          AND user_id = #{viewer}
+          AND is_deleted = 0
+    </select>
+
+    <select id="selectAuthorProfile" resultType="java.util.HashMap">
+        SELECT nickname,avatar_url
+        FROM user_profile
+        WHERE user_id = #{author}
+          AND is_deleted = 0
+    </select>
+
+    <select id="lockSubmission" resultType="java.util.HashMap" useCache="false" flushCache="true">
+        SELECT a.*
+        FROM community_article a
+        JOIN cms_news n ON n.id = a.news_id
+        WHERE a.news_id = #{id}
+          AND n.is_deleted = 0
+        FOR UPDATE
+    </select>
+
+    <update id="updateReview">
+        UPDATE community_article
+        SET state = #{state},review_note = #{note},reviewed_by = #{admin},reviewed_at = CURRENT_TIMESTAMP,updated_at = CURRENT_TIMESTAMP
+        WHERE news_id = #{id}
+    </update>
+
+    <update id="updatePublicationStatus">
+        UPDATE cms_news
+        SET publish_status = #{status},publish_at = CURRENT_TIMESTAMP,gmt_modified = CURRENT_TIMESTAMP
+        WHERE id = #{id}
+    </update>
+
+    <update id="retryReview">
+        UPDATE community_article
+        SET state = 'AI_PENDING',ai_verdict = 'PENDING',updated_at = CURRENT_TIMESTAMP
+        WHERE news_id = #{id}
+    </update>
+
+    <insert id="insertModerationLog">
+        INSERT INTO community_moderation_log(target_type,target_id,revision,actor_type,actor_id,decision,note)
+        VALUES(#{type},#{targetId},#{revision},#{actorType},#{actorId},#{decision},#{note})
+    </insert>
+</mapper>

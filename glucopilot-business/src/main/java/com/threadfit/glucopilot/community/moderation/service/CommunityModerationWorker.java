@@ -1,9 +1,9 @@
 package com.threadfit.glucopilot.community.moderation.service;
 
-import com.threadfit.glucopilot.ai.business.moderation.ContentModerationService;
-import com.threadfit.glucopilot.ai.business.moderation.ModerationRequest;
-import com.threadfit.glucopilot.ai.business.moderation.ModerationResult;
-import com.threadfit.glucopilot.ai.business.moderation.ModerationVerdict;
+import com.threadfit.glucopilot.ai.business.moderation.service.ContentModerationService;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationRequest;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationResult;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.EnableScheduling;

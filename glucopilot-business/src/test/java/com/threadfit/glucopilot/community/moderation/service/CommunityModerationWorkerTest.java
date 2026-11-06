@@ -10,10 +10,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.threadfit.glucopilot.ai.business.moderation.ContentModerationService;
-import com.threadfit.glucopilot.ai.business.moderation.ModerationRequest;
-import com.threadfit.glucopilot.ai.business.moderation.ModerationResult;
-import com.threadfit.glucopilot.ai.business.moderation.ModerationVerdict;
+import com.threadfit.glucopilot.ai.business.moderation.service.ContentModerationService;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationRequest;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationResult;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
 
 import org.junit.jupiter.api.Test;
 

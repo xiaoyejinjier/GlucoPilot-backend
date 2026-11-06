@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.moderation;
+package com.threadfit.glucopilot.ai.business.moderation.service.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -26,6 +26,9 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
 import java.util.List;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationRequest;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationResult;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
 
 /**
  * 审核能力实现（{@link ModelContentModerationService}）的接线与失败语义。

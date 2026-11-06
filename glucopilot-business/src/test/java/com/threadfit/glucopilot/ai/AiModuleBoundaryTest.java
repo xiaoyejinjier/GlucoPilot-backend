@@ -91,7 +91,7 @@ class AiModuleBoundaryTest {
         String bad = "import com.threadfit.glucopilot.community.article.Article;";
         assertFalse(FORBIDDEN.stream().noneMatch(bad::contains), "守卫必须能识别社区模块依赖");
 
-        String good = "import com.threadfit.glucopilot.ai.business.moderation.ModerationVerdict;";
+        String good = "import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;";
         assertTrue(FORBIDDEN.stream().noneMatch(good::contains), "ai 内部互相引用不算违规");
     }
 }

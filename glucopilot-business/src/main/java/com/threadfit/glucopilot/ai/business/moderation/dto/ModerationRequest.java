@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.moderation;
+package com.threadfit.glucopilot.ai.business.moderation.dto;
 
 import java.util.List;
 

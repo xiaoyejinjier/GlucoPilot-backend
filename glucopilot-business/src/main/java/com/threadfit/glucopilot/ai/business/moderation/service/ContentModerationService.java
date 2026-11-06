@@ -1,4 +1,7 @@
-package com.threadfit.glucopilot.ai.business.moderation;
+package com.threadfit.glucopilot.ai.business.moderation.service;
+
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationRequest;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationResult;
 
 /**
  * 内容审核能力：{@link ModerationRequest 一段文字} 进，{@link ModerationResult 判定结果} 出。

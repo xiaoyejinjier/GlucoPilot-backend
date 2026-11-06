@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.translation;
+package com.threadfit.glucopilot.ai.business.translation.service.impl;
 
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;

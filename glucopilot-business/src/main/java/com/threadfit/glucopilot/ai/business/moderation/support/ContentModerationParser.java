@@ -1,10 +1,11 @@
-package com.threadfit.glucopilot.ai.business.moderation;
+package com.threadfit.glucopilot.ai.business.moderation.support;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
 
 /**
  * 把模型输出解析成 {@link ModerationVerdict}（纯函数，无依赖，可单测）。

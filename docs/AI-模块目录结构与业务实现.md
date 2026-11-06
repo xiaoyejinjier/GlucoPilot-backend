@@ -96,11 +96,21 @@ ai/
     ├── meal/{controller,dto,service,impl}
     ├── ocr/{controller,dto,entity,mapper,service,impl,config}
     ├── speech/{controller,dto,config,service}
-    ├── moderation/                 内容审核能力（解析/判定/类别），业务侧只留节拍器与队列
-    └── translation/                中英翻译能力（EnglishTranslator + ModelEnglishTranslator）
+    ├── moderation/{dto,support,service,service/impl}
+    └── translation/{service,service/impl}
 ```
 
 `business/` 下前四个是「带 HTTP 与表的业务域」，后两个是「收束进来的 AI 能力」：它们没有 controller、不碰业务表，只接收 `ModerationRequest` / `(kind, source)` 并返回判定与译文。这个区分是刻意的——能力包可以被任何业务模块调用，业务包不能反向进 `ai`（`AiModuleBoundaryTest` 守）。
+
+两个能力包的内部划分和其它业务域同一套规则，只是没有 controller/entity/mapper：
+
+| 子包 | 放什么 | moderation | translation |
+|---|---|---|---|
+| `dto/` | 跨越服务接口的数据结构 | `ModerationRequest`、`ModerationResult`、`ModerationVerdict` | —（入参就是 `(kind, Map)`） |
+| `support/` | 无状态辅助件（解析、词表、校验） | `ContentModerationParser`、`ModerationCategories` | —（校验是实现的私有方法） |
+| `service/` | 接口 | `ContentModerationService` | `EnglishTranslator` |
+| `service/impl/` | 实现 | `ModelContentModerationService` | `ModelEnglishTranslator` |
+| 包根 | `package-info.java` | 能力边界说明 | 能力边界说明 |
 
 顶层包从 14 个（business、config、core、guard、memory、model、prompt、scene、support、tool、vision + business 下 4 个）变成 13 个，但**每个包的判据都能一句话说清**，且 `core`/`guard` 这两个「说不清」的名字消失。
 

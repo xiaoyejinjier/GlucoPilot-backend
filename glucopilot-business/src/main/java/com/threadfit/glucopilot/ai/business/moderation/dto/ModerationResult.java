@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.moderation;
+package com.threadfit.glucopilot.ai.business.moderation.dto;
 
 /**
  * 一次审核的完整产物：结论 + 落库要用的可追溯信息。

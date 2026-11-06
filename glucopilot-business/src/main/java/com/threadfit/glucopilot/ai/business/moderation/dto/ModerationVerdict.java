@@ -1,6 +1,7 @@
-package com.threadfit.glucopilot.ai.business.moderation;
+package com.threadfit.glucopilot.ai.business.moderation.dto;
 
 import java.util.List;
+import com.threadfit.glucopilot.ai.business.moderation.support.ModerationCategories;
 
 /**
  * 一次 AI 判定结果（不可变）。

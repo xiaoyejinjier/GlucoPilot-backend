@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.translation;
+package com.threadfit.glucopilot.ai.business.translation.service.impl;
 
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
@@ -17,6 +17,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.*;
 import java.util.regex.Pattern;
+import com.threadfit.glucopilot.ai.business.translation.service.EnglishTranslator;
 
 /**
  * 中英翻译能力实现：只用「翻译器」这一种角色跟模型说话——没有医疗护栏、没有人设、没有记忆、

@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.moderation;
+package com.threadfit.glucopilot.ai.business.moderation.support;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
 
 /**
  * 审核输出解析（纯函数）。这是"模型输出 → 落库结论"的唯一关卡，因此重点不在"正常情况能解析"， 而在<b>异常路径一律 ERROR 而不是 PASS</b>：

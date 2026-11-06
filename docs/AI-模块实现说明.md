@@ -1061,16 +1061,18 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 
 > 注意文章的 PASS 只是 `PENDING_ADMIN`：AI 初审通过仍需人工终审（先审后发）。评论是 PASS 直接可见、REJECT 直接 `is_hidden=1`（先发后审）。
 
-### 13.3 三个配套类
+### 13.3 审核能力的六个件（`ai/business/moderation`）
 
-| 类 | 职责 |
-| --- | --- |
-| `ContentModerationService`（接口） | `ModerationResult judge(ModerationRequest)` + `String promptVersion()`；**承诺不抛异常**，失败返回 `ERROR` |
-| `ModelContentModerationService`（实现） | `utilityChatClient` + `ai.scenes.moderation` 参数 + 45s 超时 + 解析；`community` 侧只依赖这个接口 |
-| `ModerationRequest` / `ModerationResult` | 入参 `record(kind, title, tags, body)`（含 `promptText()` 摊平）/ 出参 `record(verdict, modelCode, promptVersion)` |
-| `ContentModerationParser` | 逐行 `key：value` 解析；容忍中英文冒号/`=`/Markdown；`MAX_RESPONSE_CHARS=6000`、`MAX_REASON_CHARS=200`；**所有异常路径返回 `ERROR`，不返回 PASS** |
-| `ModerationVerdict` | `record(verdict, category, severity, confidence, reason, hits)` + `PASS/REJECT/ERROR` 三态 |
-| `ModerationCategories` | 12 个类别编码（`porn`/`violence`/`illegal_goods`/`medical_claim`/`medical_advice`/`scam_ad`/`privacy`/`hate_harass`/`political`/`minor`/`pseudo_science`/`off_topic`），`of(code)` 大小写不敏感，未知 → `NONE` |
+包内按职责分四层，和其它业务域同一套规则：`dto/`（跨接口的数据）、`support/`（无状态辅助件）、`service/`（接口）、`service/impl/`（实现）。
+
+| 类 | 所在子包 | 职责 |
+| --- | --- | --- |
+| `ContentModerationService`（接口） | `service/` | `ModerationResult judge(ModerationRequest)` + `String promptVersion()`；**承诺不抛异常**，失败返回 `ERROR` |
+| `ModelContentModerationService`（实现） | `service/impl/` | `utilityChatClient` + `ai.scenes.moderation` 参数 + 45s 超时 + 解析；`community` 侧只依赖接口 |
+| `ModerationRequest` / `ModerationResult` | `dto/` | 入参 `record(kind, title, tags, body)`（含 `promptText()` 摊平）/ 出参 `record(verdict, modelCode, promptVersion)` |
+| `ModerationVerdict` | `dto/` | `record(verdict, category, severity, confidence, reason, hits)` + `PASS/REJECT/ERROR` 三态 |
+| `ContentModerationParser` | `support/` | 逐行 `key：value` 解析；容忍中英文冒号/`=`/Markdown；`MAX_RESPONSE_CHARS=6000`、`MAX_REASON_CHARS=200`；**所有异常路径返回 `ERROR`，不返回 PASS** |
+| `ModerationCategories` | `support/` | 12 个类别编码（`porn`/`violence`/`illegal_goods`/`medical_claim`/`medical_advice`/`scam_ad`/`privacy`/`hate_harass`/`political`/`minor`/`pseudo_science`/`off_topic`），`of(code)` 大小写不敏感，未知 → `NONE` |
 
 **fail closed** 是这里的铁律：解析不出一行可识别的结论 → `ERROR`，而 `ERROR` 既不等于 PASS 也不隐藏内容——它把决定权交回人工。审核链最怕的不是漏判，是「解析失败被当成通过」。
 
@@ -1083,8 +1085,8 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 | 谁 | 管什么 |
 | --- | --- |
 | `localization/LocalizationService` | 缓存表 `content_localization`、`(kind, resource_id, source_hash, locale)` 主键、PENDING 租约与 `retry_after`、批量上限、授权闸（`community.requireReadable`）、`direct()` 纯英文直判 |
-| `ai/business/translation/EnglishTranslator`（接口） | **文本进、文本出**：`translate(kind, source)` + `promptVersion()`。它不知道文章、也不知道缓存表 |
-| `ai/business/translation/ModelEnglishTranslator` | `utilityChatClient` + `ai.scenes.translation`（`json: true`）+ 校验（数字/单位/URL 保真）+ 重试 1 次 |
+| `ai/business/translation/service/EnglishTranslator`（接口） | **文本进、文本出**：`translate(kind, source)` + `promptVersion()`。它不知道文章、也不知道缓存表 |
+| `ai/business/translation/service/impl/ModelEnglishTranslator` | `utilityChatClient` + `ai.scenes.translation`（`json: true`）+ 校验（数字/单位/URL 保真）+ 重试 1 次 |
 
 两个细节值得记：
 

@@ -2,7 +2,7 @@ package com.threadfit.glucopilot.localization;
 
 import static com.threadfit.glucopilot.localization.LocalizationDtos.*;
 
-import com.threadfit.glucopilot.ai.business.translation.EnglishTranslator;
+import com.threadfit.glucopilot.ai.business.translation.service.EnglishTranslator;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.community.shared.service.CommunityService;

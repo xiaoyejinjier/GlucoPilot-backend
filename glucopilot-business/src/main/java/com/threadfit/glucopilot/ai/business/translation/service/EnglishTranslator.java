@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.ai.business.translation;
+package com.threadfit.glucopilot.ai.business.translation.service;
 
 import java.util.Map;
 

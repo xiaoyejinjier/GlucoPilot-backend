@@ -1133,7 +1133,7 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 - **越权一律 404 且不留痕**：`messageDetail` 先校验 `message.sessionId == sessionId`，不匹配按「消息不存在或不属于该会话」返回，避免「用会话 A 的入口试出会话 B 有没有消息 ID」。
 - 权限点在 V53 从 `ai:model:query` 拆成 `ai:chat:audit`（含原始对话，只授超管），并顺带把用量页拆出 `ai:usage:view`：**配置、成本、隐私审计是三类不同的关注点**，不该共用一个权限点。
 - 前端（管理端 `src/views/ai/ChatSessionView.vue`）只在用户点「展开原文」时请求全文，结果缓存在内存、收起即删；这是刻意的——预取会让审计表里堆满「没人真看过」的记录。
-- **分片账本的唯一读出口是 `GET /admin/v1/ai/chat-sessions/{id}/context`，页面入口在同一个抽屉的「上下文构成」区块**：默认收起，展开才请求，用 `flex` 权重画一条按 `contextType` 着色的占比条（系统提示词 / 长期记忆 / 滚动摘要 / 工具摘要 / 历史消息），图例给出每个分片的估算 token。该区块**不写审计**——它只有元数据、没有正文，展开它不等于读了用户内容；这与「读正文必留痕」是两条独立的线。
+- **分片账本的唯一读出口是 `GET /admin/v1/ai/audit/sessions/{id}/context`，页面入口在同一个抽屉的「上下文构成」区块**：默认收起，展开才请求，用 `flex` 权重画一条按 `contextType` 着色的占比条（系统提示词 / 长期记忆 / 滚动摘要 / 工具摘要 / 历史消息），图例给出每个分片的估算 token。该区块**不写审计**——它只有元数据、没有正文，展开它不等于读了用户内容；这与「读正文必留痕」是两条独立的线。
 - 这套分片**不参与任何运行时决策**：下一轮装配不读 `chat_context`（`ChatContextReader` 读的是摘要/工具摘要/长期记忆）、预算校准用厂商返回的真实 `prompt_tokens`、用量报表读 `chat_message`。它的价值只在「这一轮 2900 token 花在哪」的可解释性——这也解释了为什么页面做得很轻：没有它，问答照样正确、成本一分不差。
 
 ---
@@ -1148,13 +1148,13 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 | 工具调用 | `chat_tool_call` | `AiAuditServiceImpl#toolCalls` + `ChatToolCallMapper.selectAuditPage` | `AdminAiAuditController` | 模型调了哪些工具、成没成、花了多久 |
 | 长期记忆 | `chat_user_memory` | `#memories` + `ChatUserMemoryMapper.selectAuditPage` | 同上 | 系统给对方记下了什么 |
 | 滚动摘要 | `chat_session.context_summary`（**不是独立表**） | `#summaries` + `ChatSessionMapper.selectSummaryAuditPage` | 同上 | 摘要有没有把关键信息写丢 |
-| 内容审核 | `community_moderation_hit` | `CommunityModerationMapper.selectHitAuditPage` | `AdminCommunityModerationHitController` | 内容被判成了什么 |
-| 翻译 | `content_localization` | `LocalizationMapper.selectAuditPage` | `AdminLocalizationAuditController` | 文章/昵称翻成了什么、用的哪版提示词 |
+| 内容审核 | `community_moderation_hit` | `CommunityModerationMapper.selectHitAuditPage` → `CommunityModerationHitAuditQuery` | `AdminAiAuditController` | 内容被判成了什么 |
+| 翻译 | `content_localization` | `LocalizationMapper.selectAuditPage` → `LocalizationAuditQueryImpl` | `AdminAiAuditController` | 文章/昵称翻成了什么、用的哪版提示词 |
 | 多模态 | `ocr_task` | `#ocrTasks` + `OcrTaskMapper.selectAuditPage` | `AdminAiAuditController` | 图片识别成功没有、结果多长 |
 
 三条边界，写代码时按这个走：
 
-1. **谁的表谁写 SQL**：`ai/audit` 只读 ai 自有表；内容审核命中与翻译缓存的读接口留在 `community` / `localization` 模块里，不搬到 ai——`AiModuleBoundaryTest` 明确禁止 ai 反向 import 这两个包。代价是两个接口分散在别的模块，收益是依赖方向始终单向。
+1. **路径统一到一个前缀，SQL 留在表主人那里**：十个审计端点全在 `/admin/v1/ai/audit/**`（会话四个在 `/sessions/**`，其余六个在根下），前端只认一套 URL。但 SQL 仍在 `community` / `localization` 里执行——`ai/audit/service` 只声明端口 `ModerationHitAuditQuery` / `TranslationAuditQuery`，两个模块各自提供实现（依赖倒置）。`AiModuleBoundaryTest` 明确禁止 ai 反向 import 这两个包，所以「把 SQL 搬进 ai」这条捷径不能用。
 2. **权限统一挂 `ai:chat:audit`**：这七个页签是同一件事的不同侧面，各挂一个权限点只会让超管反复授权。代价是「能看审计的人也能看翻译缓存元数据」——因此翻译列表只给 200 字译文预览，不给全文。
 3. **敏感内容两段式不变**：会话正文仍要「展开原文」才请求并留痕（14.1）；审核命中按 V43 的隐私设计**只存位置与片段哈希、不存原文**；记忆与摘要给全文是因为它们本就限长（≤200 字 / ≤800 字），截断会让审计答不出问题。
 

@@ -213,7 +213,7 @@ VALUES
     Check '16. 失败行带 errorMsg' ($null -ne $failRow -and $failRow.errorMsg -like '*模糊*') $failRow.errorMsg
 
     # ---------- 7. 内容审核命中（4.36） ----------
-    $r = Call 'GET' "$admin/community/moderation-hits?severity=3" $ah
+    $r = Call 'GET' "$admin/ai/audit/moderation-hits?severity=3" $ah
     $rows = @($r.Json.data.records | Where-Object { $_.reason -like "$marker*" })
     Check '17. 内容审核命中按严重度过滤' ($r.Code -eq 200 -and $rows.Count -eq 1 -and $rows[0].targetType -eq 'ARTICLE') "条数 $($rows.Count)"
     Check '18. 命中明细只给位置与片段哈希、不返回原文' (
@@ -223,7 +223,7 @@ VALUES
     ) "hash=$($rows[0].snippetHash)"
 
     # ---------- 8. 翻译缓存（4.37） ----------
-    $r = Call 'GET' "$admin/localizations/audit?kind=ARTICLE_BODY&status=READY" $ah
+    $r = Call 'GET' "$admin/ai/audit/translations?kind=ARTICLE_BODY&status=READY" $ah
     $rows = @($r.Json.data.records | Where-Object { $_.resourceId -eq $localizationId })
     Check '19. 翻译列表按类型+状态过滤' ($r.Code -eq 200 -and $rows.Count -eq 1 -and $rows[0].promptVer -eq 'translation@v1') "条数 $($rows.Count)"
     Check '20. 译文只给 200 字预览、字数给全量' (
@@ -236,8 +236,8 @@ VALUES
     [void](Call 'GET' "$admin/ai/audit/memories?userId=$userId&includeDeleted=true" $ah)
     [void](Call 'GET' "$admin/ai/audit/summaries?userId=$userId" $ah)
     [void](Call 'GET' "$admin/ai/audit/ocr-tasks?userId=$userId" $ah)
-    [void](Call 'GET' "$admin/community/moderation-hits?severity=3" $ah)
-    [void](Call 'GET' "$admin/localizations/audit?kind=ARTICLE_BODY" $ah)
+    [void](Call 'GET' "$admin/ai/audit/moderation-hits?severity=3" $ah)
+    [void](Call 'GET' "$admin/ai/audit/translations?kind=ARTICLE_BODY" $ah)
     $after = AuditTotal
     Check '21. 六个审计读接口都不写 ops_audit_log' (($after - $before) -eq 0) "新增 $($after - $before) 条"
 }

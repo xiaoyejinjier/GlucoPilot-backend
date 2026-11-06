@@ -36,7 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 运营侧一旦有了删除入口，就等于给「抹掉证据」开了一个口子。
  */
 @RestController
-@RequestMapping("/admin/v1/ai/chat-sessions")
+@RequestMapping("/admin/v1/ai/audit/sessions")
 @RequiredArgsConstructor
 public class AdminChatSessionController {
 

@@ -29,7 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 读对话的能力，因此拆出 {@code ai:chat:audit}（V53）。
  */
 @RestController
-@RequestMapping("/admin/v1/ai/chat-sessions")
+@RequestMapping("/admin/v1/ai/audit/sessions")
 @RequiredArgsConstructor
 public class AdminChatContextController {
 

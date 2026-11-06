@@ -130,11 +130,11 @@ VALUES
 
 try {
     # ---------- 1. 未授权 ----------
-    $r = Call 'GET' "$admin/ai/chat-sessions"
+    $r = Call 'GET' "$admin/ai/audit/sessions"
     Check '1. 无 token 访问列表 → 401' ($r.Code -eq 401) "HTTP $($r.Code)"
 
     # ---------- 2. 列表 ----------
-    $r = Call 'GET' "$admin/ai/chat-sessions?pageNum=1&pageSize=5" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions?pageNum=1&pageSize=5" $ah
     Check '2. 列表 200' ($r.Code -eq 200) "HTTP $($r.Code) $($r.Raw)"
     Check '3. 列表返回 records/total' ($null -ne $r.Json.data.records -and $null -ne $r.Json.data.total) '缺少 data.records 或 data.total'
     $row = @($r.Json.data.records | Where-Object { $_.id -eq $sessionA })[0]
@@ -153,15 +153,15 @@ try {
     }
 
     # ---------- 3. 关键词过滤 ----------
-    $r = Call 'GET' "$admin/ai/chat-sessions?keyword=$stamp" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions?keyword=$stamp" $ah
     $hits = @($r.Json.data.records | Where-Object { $_.id -eq $sessionA -or $_.id -eq $sessionB })
     Check '7. 关键词能按标题命中 E2E 会话' ($r.Code -eq 200 -and $hits.Count -eq 2) "HTTP $($r.Code) 命中 $($hits.Count)"
     $long = 'x' * 51
-    $r = Call 'GET' "$admin/ai/chat-sessions?keyword=$long" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions?keyword=$long" $ah
     Check '8. 关键词 >50 字 → 400/40000' ($r.Code -eq 400 -and $r.Json.code -eq 40000) "HTTP $($r.Code) code=$($r.Json.code)"
 
     # ---------- 4. 消息预览 ----------
-    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionA/messages?pageNum=1&pageSize=20" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions/$sessionA/messages?pageNum=1&pageSize=20" $ah
     Check '9. 消息列表 200' ($r.Code -eq 200) "HTTP $($r.Code) $($r.Raw)"
     $msgs = @($r.Json.data.records)
     Check '10. 消息列表含 2 条' ($msgs.Count -eq 2) "实际 $($msgs.Count)"
@@ -178,13 +178,13 @@ try {
     ) '元数据字段缺失'
 
     # 往前翻：beforeSeq=2 只应返回 seqNo<2 的那条
-    $r2 = Call 'GET' "$admin/ai/chat-sessions/$sessionA/messages?beforeSeq=2" $ah
+    $r2 = Call 'GET' "$admin/ai/audit/sessions/$sessionA/messages?beforeSeq=2" $ah
     $older = @($r2.Json.data.records)
     Check '15. beforeSeq 往前翻只返回更早的消息' ($r2.Code -eq 200 -and $older.Count -eq 1 -and $older[0].seqNo -eq 1) "HTTP $($r2.Code) 条数 $($older.Count)"
 
     # ---------- 5. 全文与审计留痕 ----------
     $before = AuditCount $assistantMsgA
-    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionA/messages/$assistantMsgA" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions/$sessionA/messages/$assistantMsgA" $ah
     Check '16. 全文 200' ($r.Code -eq 200) "HTTP $($r.Code) $($r.Raw)"
     Check '17. 全文返回完整正文' ($r.Json.data.contentText -like '*助手回复正文*') "contentText=$($r.Json.data.contentText)"
     $after = AuditCount $assistantMsgA
@@ -195,24 +195,24 @@ try {
     Check '20. 审计目标指向 chat_message' ($tgt -eq "chat_message/$assistantMsgA") "target=$tgt"
 
     # 再读一次：每次读取都应独立留痕（这是审计的目的，不是 bug）
-    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionA/messages/$assistantMsgA" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions/$sessionA/messages/$assistantMsgA" $ah
     $again = AuditCount $assistantMsgA
     Check '21. 重复读全文再写 1 条审计' (($again - $after) -eq 1 -and $r.Code -eq 200) "新增 $($again - $after) 条"
 
     # ---------- 6. 越权与不存在 ----------
     $beforeB = AuditCount $userMsgB
-    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionA/messages/$userMsgB" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions/$sessionA/messages/$userMsgB" $ah
     $afterB = AuditCount $userMsgB
     Check '22. 用会话 A 的入口读 B 的消息 → 404' ($r.Code -eq 404 -and $r.Json.code -eq 40400) "HTTP $($r.Code) code=$($r.Json.code)"
     Check '23. 越权失败不写审计' (($afterB - $beforeB) -eq 0) "新增 $($afterB - $beforeB) 条"
 
-    $r = Call 'GET' "$admin/ai/chat-sessions/99999999/messages" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions/99999999/messages" $ah
     Check '24. 会话不存在 → 404' ($r.Code -eq 404 -and $r.Json.code -eq 40400) "HTTP $($r.Code) code=$($r.Json.code)"
 
     # ---------- 7. 权限点回归（V53） ----------
     $r = Call 'GET' "$admin/ai/usage" $ah
     Check '25. ai:usage:view 拆分后超管仍可读用量' ($r.Code -eq 200) "HTTP $($r.Code)"
-    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionA/context" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions/$sessionA/context" $ah
     Check '26. 分片审计接口改用 ai:chat:audit 后仍可读' ($r.Code -eq 200) "HTTP $($r.Code)"
 
     # ---------- 8. 上下文构成（管理端「上下文构成」区块的数据源） ----------
@@ -234,12 +234,12 @@ try {
             ($null -eq $r1.shards[0].PSObject.Properties['contentJson'])
         ) '分片里出现了正文字段'
     }
-    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionA/context?round=2" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions/$sessionA/context?round=2" $ah
     $only2 = @($r.Json.data.rounds)
     Check '30. round=2 只返回该轮' ($r.Code -eq 200 -and $only2.Count -eq 1 -and $only2[0].contextRound -eq 2) "HTTP $($r.Code) 轮数 $($only2.Count)"
-    $r = Call 'GET' "$admin/ai/chat-sessions/$sessionB/context" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions/$sessionB/context" $ah
     Check '31. 没有分片记录时返回空列表而不是错误' ($r.Code -eq 200 -and @($r.Json.data.rounds).Count -eq 0) "HTTP $($r.Code) 轮数 $(@($r.Json.data.rounds).Count)"
-    $r = Call 'GET' "$admin/ai/chat-sessions?pageNum=1&pageSize=20" $ah
+    $r = Call 'GET' "$admin/ai/audit/sessions?pageNum=1&pageSize=20" $ah
     $rowA = @($r.Json.data.records | Where-Object { $_.id -eq $sessionA })[0]
     Check '32. 列表的「分片轮次」列 = 2' ($null -ne $rowA -and $rowA.contextRounds -eq 2) "contextRounds=$($rowA.contextRounds)"
     $auditAfter = [long](Sql "SELECT COUNT(*) FROM sugar_health.ops_audit_log WHERE module_code='ai' AND action_code='ai_chat_audit_view';")

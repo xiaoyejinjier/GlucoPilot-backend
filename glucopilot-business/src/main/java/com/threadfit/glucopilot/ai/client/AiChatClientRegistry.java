@@ -5,7 +5,6 @@ import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -54,19 +53,13 @@ public class AiChatClientRegistry {
 
     private final SceneModelResolver sceneModelResolver;
 
-    /** @deprecated 仅 {@link #textModel()} 使用，审核收束后连同该方法一起删除。 */
-    @Deprecated
-    private final ObjectProvider<ChatModel> textChatModels;
-
     public AiChatClientRegistry(@Qualifier("textChatClient") ObjectProvider<ChatClient> textChatClients,
                                @Qualifier("utilityChatClient") ObjectProvider<ChatClient> utilityChatClients,
                                @Qualifier("visionChatClient") ObjectProvider<ChatClient> visionChatClients,
-                               @Qualifier("glucopilotTextChatModel") ObjectProvider<ChatModel> textChatModels,
                                SceneModelResolver sceneModelResolver) {
         this.textChatClients = textChatClients;
         this.utilityChatClients = utilityChatClients;
         this.visionChatClients = visionChatClients;
-        this.textChatModels = textChatModels;
         this.sceneModelResolver = sceneModelResolver;
     }
 
@@ -103,22 +96,6 @@ public class AiChatClientRegistry {
      */
     public boolean utilityAvailable() {
         return utilityChatClients.getIfAvailable() != null;
-    }
-
-    /**
-     * 文本模型（与 {@link #textClient()} 同一个模型，只是不包 ChatClient）。
-     *
-     * @deprecated 正在退场：目前只剩 {@code CommunityModerationWorker} 一个调用方，
-     *     它搬进 {@code ai.business.moderation} 并改用 {@link #utilityClient()} 后会删除。
-     *     新代码不要再依赖它——「怎么拿到模型」只保留三条 client 出口。
-     */
-    @Deprecated
-    public ChatModel textModel() {
-        ChatModel model = textChatModels.getIfAvailable();
-        if (model == null) {
-            throw new BizException(ErrorCode.BIZ_REJECTED, "文本 AI 未启用，请联系管理员配置模型服务");
-        }
-        return model;
     }
 
     /**

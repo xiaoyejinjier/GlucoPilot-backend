@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.community.moderation.service;
+package com.threadfit.glucopilot.ai.business.moderation;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -24,7 +24,7 @@ import java.util.Map;
  * 模型自创的类别直接丢弃（与长期记忆的键白名单同一思路）：留着它会让 "哪类最多/误杀集中在哪类"的统计失真。丢弃后若一条有效命中都不剩而 verdict 又是 REJECT，
  * 视为"模型说有问题但说不出是什么问题" —— 仍然 ERROR，交人工判断。
  */
-public final class CommunityModerationParser {
+public final class ContentModerationParser {
 
     /** 模型输出上限：超过这个长度基本可以确定不是本协议的输出（例如把正文复述了一遍）。 */
     static final int MAX_RESPONSE_CHARS = 6000;
@@ -32,7 +32,7 @@ public final class CommunityModerationParser {
     /** reason 落库前截断到 200 字：再长对运营没有价值，反而把列宽（1000）吃掉。 */
     static final int MAX_REASON_CHARS = 200;
 
-    private CommunityModerationParser() {}
+    private ContentModerationParser() {}
 
     /**
      * 解析模型输出。

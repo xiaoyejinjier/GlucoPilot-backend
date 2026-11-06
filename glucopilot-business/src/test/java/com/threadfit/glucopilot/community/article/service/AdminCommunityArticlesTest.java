@@ -21,7 +21,7 @@ import com.threadfit.glucopilot.community.media.mapper.CommunityArticleImageMapp
 import com.threadfit.glucopilot.community.media.service.CommunityArticleImageService;
 import com.threadfit.glucopilot.community.moderation.mapper.CommunityModerationMapper;
 import com.threadfit.glucopilot.community.moderation.service.CommunityModerationQueue;
-import com.threadfit.glucopilot.community.moderation.service.ModerationVerdict;
+import com.threadfit.glucopilot.ai.business.moderation.ModerationVerdict;
 import com.threadfit.glucopilot.community.notification.mapper.CommunityNotificationMapper;
 import com.threadfit.glucopilot.community.notification.service.CommunityNotificationService;
 import com.threadfit.glucopilot.community.recommendation.mapper.AdminRecommendationMapper;

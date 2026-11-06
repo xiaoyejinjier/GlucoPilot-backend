@@ -35,10 +35,13 @@ public interface LocalizationMapper {
 
     @Insert(
             """
-            INSERT INTO content_localization(kind,resource_id,source_hash,locale,status)
-            VALUES(#{item.kind},#{item.id},#{hash},'en','PENDING')
+            INSERT INTO content_localization(kind,resource_id,source_hash,locale,status,prompt_ver)
+            VALUES(#{item.kind},#{item.id},#{hash},'en','PENDING',#{promptVer})
             """)
-    int insertPending(@Param("item") Item item, @Param("hash") String hash);
+    int insertPending(
+            @Param("item") Item item,
+            @Param("hash") String hash,
+            @Param("promptVer") String promptVer);
 
     @Update(
             "UPDATE content_localization SET status='PENDING',lease_token=#{lease},"

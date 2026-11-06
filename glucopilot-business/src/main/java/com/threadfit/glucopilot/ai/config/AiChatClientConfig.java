@@ -92,17 +92,21 @@ public class AiChatClientConfig {
     }
 
     /**
-     * 摘要专用 ChatClient（② 期）。
+     * 后台任务通用 ChatClient（utility）：无工具、无 Advisor 的「裸」客户端。
      * <p>
      * <b>为什么不复用 {@code textChatClient}</b>：那个 client 上挂着记忆注入 Advisor、
-     * CHAT 场景的提示词 Advisor 与全部工具。用它做摘要会同时发生三件坏事：
-     * ① 把整段历史再塞一遍（摘要自己又变成了对话）；② 把"控糖助手"人设与医疗安全约束注入摘要输入；
-     * ③ 摘要过程中模型可能去调工具查数据，而摘要的语义是"只压缩已发生的原文"。
-     * 所以这里和视觉链路一样**手搓**一个 client：同一个文本模型通道（因此"换模型"仍然只改一处），
-     * 但不带工具、不带 Advisor，系统提示词由 {@code ChatSummaryService} 按请求取 SUMMARY 场景的。
+     * CHAT 场景的提示词 Advisor 与全部工具。拿它做摘要/记忆抽取/翻译会同时发生三件坏事：
+     * ① 把整段历史再塞一遍（摘要自己又变成了对话）；② 把"控糖助手"人设与医疗安全约束注入输入；
+     * ③ 过程中模型可能去调工具查数据，而这类任务的语义是"只处理给定的这段文本"。
+     * 所以这里和视觉链路一样**手搓**一个 client：同一个文本模型通道（"换模型"仍然只改一处），
+     * 但不带工具、不带 Advisor；系统提示词与采样参数由各业务按自己的 {@code SceneCode} 取。
+     * <p>
+     * <b>叫 utility 而不是 summary</b>：它现在服务摘要、长期记忆抽取、社区内容审核、中英翻译四个场景。
+     * 名字跟着「用途类别」而不是「第一个用户」走，避免第二个调用方进来时出现
+     * {@code summaryClient} 却在做翻译这种读代码事故。
      */
     @Bean
-    public ChatClient summaryChatClient(@Qualifier("glucopilotTextChatModel") ChatModel textChatModel,
+    public ChatClient utilityChatClient(@Qualifier("glucopilotTextChatModel") ChatModel textChatModel,
                                         AiPromptTemplateService promptTemplateService) {
         return ChatClient.builder(textChatModel)
                 .defaultTemplateRenderer(promptTemplateService.renderer())

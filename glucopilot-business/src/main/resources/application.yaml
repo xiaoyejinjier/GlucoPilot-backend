@@ -327,6 +327,19 @@ ai:
       # 关掉思维链：分类任务不需要推理链，开了只会让首 token 更慢（摘要场景已踩过读超时）
       thinking: false
 
+    # 中英翻译（社区内容英文版 / 昵称英文化）：把一批「键 → 中文」翻成英文。
+    # 温度取 0：翻译要忠实原文，任何"润色发挥"都会让数字/单位核对失败。
+    # json: 本场景必须开——产物是键集合由调用方给定的扁平 JSON 字典，不开会带回 ```json 围栏。
+    # 提示词同样禁止花括号/方括号（正文在 ai_prompt_template 的 TRANSLATION 场景，V54 播种）。
+    translation:
+      prompt: prompts/translation/system.md
+      version: v1
+      temperature: 0
+      # 一批最多 24 段、总长 ≤3200 字，6000 给足 JSON 键名与英文字数膨胀的余量
+      max-tokens: 6000
+      thinking: false
+      json: true
+
 
 glucopilot:
   mail:

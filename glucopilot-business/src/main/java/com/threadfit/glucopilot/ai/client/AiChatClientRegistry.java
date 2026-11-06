@@ -24,19 +24,18 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>{@link #textClient()}——带工具与记忆的对话客户端（Bean 名 {@code textChatClient}）；
  *       文本场景，以及两阶段里的<b>阶段 2</b>都用它；</li>
- *   <li>{@link #summaryClient()}——无 advisor、无工具的「裸」文本客户端（Bean 名
- *       {@code summaryChatClient}），供摘要与记忆抽取这类「把文本当输入、不希望被
- *       人设/记忆/工具污染」的后台任务使用；</li>
+ *   <li>{@link #utilityClient()}——无 advisor、无工具的「裸」文本客户端（Bean 名
+ *       {@code utilityChatClient}），供摘要、记忆抽取、内容审核、翻译这类「把文本当输入、
+ *       不希望被人设/记忆/工具污染」的后台任务使用；</li>
  *   <li>{@link #visionClient(SceneCode)}——视觉 provider（阿里云百炼 qwen-vl，Bean 名
  *       {@code visionChatClient}）；只用于需要看图的场景的<b>阶段 1</b>，
  *       由 {@code ai.vision.enabled} 守卫。</li>
  * </ul>
  * <p>
- * <b>为什么还要 {@link #textModel()}</b>：社区内容审核直接用 {@link ChatModel} 拼
- * {@code SystemMessage + UserMessage}（见 {@code CommunityModerationWorker} 的类注释），
- * 不需要 ChatClient 的 advisor 链。但那也是「文本模型」这件事的一种用法，取用点应当和其他一样
- * 收在这里——否则业务代码又要各自 {@code @Qualifier("glucopilotTextChatModel")}，
- * 装配知识就重新散出去了。
+ * <b>没有「直接给 ChatModel」的出口</b>：曾经有一个 {@code textModel()}，只服务内容审核与翻译
+ * 两个调用方；它们现在已和其它业务一样改用 ChatClient 装配（审核搬进
+ * {@code ai.business.moderation}、翻译搬进 {@code ai.business.translation}），
+ * 于是「怎么拿到模型」只剩上面三条出口，不再有两套说法。
  * <p>
  * <b>注入必须带 {@code @Qualifier}</b>：容器里有多个 {@code ChatClient} / {@code ChatModel} Bean，
  * 不带限定符的注入会在启动期因候选不唯一失败。全部用 {@link ObjectProvider} 注入，是为了在
@@ -48,23 +47,24 @@ public class AiChatClientRegistry {
 
     private final ObjectProvider<ChatClient> textChatClients;
 
-    private final ObjectProvider<ChatClient> summaryChatClients;
+    private final ObjectProvider<ChatClient> utilityChatClients;
 
     /** 视觉 client 可能不存在（未开启或未配凭据），因此不直接注入实例。 */
     private final ObjectProvider<ChatClient> visionChatClients;
 
-    /** 直接取 ChatModel 的调用方（内容审核）用的入口，可能不存在（无密钥部署）。 */
-    private final ObjectProvider<ChatModel> textChatModels;
-
     private final SceneModelResolver sceneModelResolver;
 
+    /** @deprecated 仅 {@link #textModel()} 使用，审核收束后连同该方法一起删除。 */
+    @Deprecated
+    private final ObjectProvider<ChatModel> textChatModels;
+
     public AiChatClientRegistry(@Qualifier("textChatClient") ObjectProvider<ChatClient> textChatClients,
-                               @Qualifier("summaryChatClient") ObjectProvider<ChatClient> summaryChatClients,
+                               @Qualifier("utilityChatClient") ObjectProvider<ChatClient> utilityChatClients,
                                @Qualifier("visionChatClient") ObjectProvider<ChatClient> visionChatClients,
                                @Qualifier("glucopilotTextChatModel") ObjectProvider<ChatModel> textChatModels,
                                SceneModelResolver sceneModelResolver) {
         this.textChatClients = textChatClients;
-        this.summaryChatClients = summaryChatClients;
+        this.utilityChatClients = utilityChatClients;
         this.visionChatClients = visionChatClients;
         this.textChatModels = textChatModels;
         this.sceneModelResolver = sceneModelResolver;
@@ -80,30 +80,39 @@ public class AiChatClientRegistry {
     }
 
     /**
-     * 摘要 / 记忆抽取使用的「裸」文本客户端。
+     * 后台任务使用的「裸」文本客户端（摘要 / 记忆抽取 / 内容审核 / 翻译都走这里）。
      * <p>
      * 与 {@link #textClient()} 分开是<b>刻意</b>的：那个 client 挂着人设提示词、记忆注入与工具，
-     * 而摘要是「把一段对话压成几句话」的纯文本任务，走同一条链路会得到被人设污染的摘要。
+     * 而这类任务都是「只处理给定的这段文本」，走同一条链路会得到被人设与历史污染的结果。
      */
-    public ChatClient summaryClient() {
-        ChatClient summary = summaryChatClients.getIfAvailable();
-        if (summary == null) {
+    public ChatClient utilityClient() {
+        ChatClient utility = utilityChatClients.getIfAvailable();
+        if (utility == null) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "文本 AI 未启用，请联系管理员配置模型服务");
         }
-        return summary;
+        return utility;
     }
 
     /**
-     * 摘要客户端是否可用。
+     * utility 客户端是否可用。
      * <p>
      * 摘要与记忆抽取都是<b>后台增强</b>：无密钥部署时它们应当安静跳过，而不是每轮对话抛一次异常。
      * 所以这两处先问可用性、再取实例，把「可选」这件事写在调用点上。
+     * <p>
+     * 注意「可用」只代表<b>装配层面</b>有这个 Bean：凭据真的能用与否，要调用一次才知道。
      */
-    public boolean summaryAvailable() {
-        return summaryChatClients.getIfAvailable() != null;
+    public boolean utilityAvailable() {
+        return utilityChatClients.getIfAvailable() != null;
     }
 
-    /** 文本模型（与 {@link #textClient()} 同一个模型，只是不包 ChatClient）。 */
+    /**
+     * 文本模型（与 {@link #textClient()} 同一个模型，只是不包 ChatClient）。
+     *
+     * @deprecated 正在退场：目前只剩 {@code CommunityModerationWorker} 一个调用方，
+     *     它搬进 {@code ai.business.moderation} 并改用 {@link #utilityClient()} 后会删除。
+     *     新代码不要再依赖它——「怎么拿到模型」只保留三条 client 出口。
+     */
+    @Deprecated
     public ChatModel textModel() {
         ChatModel model = textChatModels.getIfAvailable();
         if (model == null) {

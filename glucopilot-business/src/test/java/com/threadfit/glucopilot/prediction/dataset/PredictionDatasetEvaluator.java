@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 用真实 {@link PredictionService}（v1 默认参数）对合成数据集逐条预测并统计误差，仅测试作用域。
+ * 用真实 {@link PredictionService}（PredictionProperties 默认参数）对合成数据集逐条预测并统计误差，仅测试作用域。
  *
  * <p>评估对象为 predictNow（现状预测）；「临床可接受」采用简化 Clarke A 区规则：
  * 双低（预测与实测均 < 3.9）可接受；双高（均 > 16.7）误差 ≤ 2.0 可接受；
@@ -186,7 +186,7 @@ public final class PredictionDatasetEvaluator {
     public static String renderMarkdown(EvalResult r) {
         StringBuilder sb = new StringBuilder();
         sb.append("# 合成数据集预测评估报告\n\n");
-        sb.append("- 算法版本：v1（PredictionProperties 默认参数）\n");
+        sb.append("- 算法版本：v2（PredictionProperties 默认参数）\n");
         sb.append("- 数据集：SyntheticMealDataset（seed=").append(SyntheticMealDataset.SEED).append("）\n");
         sb.append(String.format("- 总样本：%d 条%n", r.n()));
         sb.append("\n## 总体指标\n\n");
@@ -206,7 +206,9 @@ public final class PredictionDatasetEvaluator {
         sb.append("线上公式无此机制，故 MAE 含不可解释方差（模拟真实世界观测误差）。\n");
         sb.append("- 药物/运动修正两模型同构（").append(MED_EFFECT).append("/").append(EX_EFFECT).append("），");
         sb.append("该部分不贡献系统偏差。\n");
-        sb.append("- 基线锁见 SyntheticDatasetTest#baselineMaeGuard：参数改动不得使 MAE 劣化。\n");
+        sb.append("- 本报告不设 MAE 基线锁：合成集由教师模型自洽生成，误差绝对值不代表真实精度；\n");
+        sb.append("  公式正确性由 PredictionServiceTest 手算断言保证，真实精度由 "
+                + "tools/prediction-dataset/evaluate.py --fixed-params 把关。\n");
         return sb.toString();
     }
 

@@ -24,7 +24,7 @@ import java.util.StringJoiner;
 @RequiredArgsConstructor
 public class PredictionService {
 
-    private static final String ALGORITHM_VERSION = "v1";
+    private static final String ALGORITHM_VERSION = "v2";
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal ONE = BigDecimal.ONE;
     private static final BigDecimal TWO = new BigDecimal("2");
@@ -73,22 +73,29 @@ public class PredictionService {
         BigDecimal dEx = ex ? props.getExerciseEffect() : ZERO;
         BigDecimal dCarb = carbs.multiply(portion).multiply(r);
 
-        // 现状预测 = 当前血糖 + 升幅，再做 clamp+舍入边界处理
-        BigDecimal predictNow = roundGlucose(cur.add(dCarb).add(dMed).add(dEx));
-
-        // 反推建议碳水：危险血糖直接 0；否则用「目标 − 当前 − 修正」倒算碳水，并 clamp 到 [0, 上限]
+        // 回归均值收缩：血糖不会原地不动，而是向目标回落的群体规律
+        // （真实队列中餐前血糖每高 1 mmol/L，2h 升幅低约 0.44 mmol/L）
         BigDecimal target = targetOf(health);
+        BigDecimal dShrink = props.getShrinkK().multiply(target.subtract(cur));
+
+        // 现状预测 = 当前血糖 + 收缩项 + 升幅 + 修正，再做 clamp+舍入边界处理
+        BigDecimal predictNow = roundGlucose(cur.add(dShrink).add(dCarb).add(dMed).add(dEx));
+
+        // 反推建议碳水：危险血糖直接 0；否则令 predictSuggest = target 反解碳水，并 clamp 到 [0, 上限]
         BigDecimal suggestCarbs;
         if (cur.compareTo(props.getDangerHigh()) >= 0) {
             suggestCarbs = ZERO;
         } else {
-            BigDecimal raw = target.subtract(cur).subtract(dMed).subtract(dEx)
+            // target = cur + k·(target−cur) + carbs·R + dMed + dEx  ⇒  carbs = [(1−k)(target−cur) − dMed − dEx] / R
+            BigDecimal raw = target.subtract(cur).multiply(ONE.subtract(props.getShrinkK()))
+                    .subtract(dMed).subtract(dEx)
                     .divide(r, DIVIDE_SCALE, RoundingMode.HALF_UP);
             suggestCarbs = clamp(raw, ZERO, props.getCarbsSuggestMax());
         }
 
-        // 建议量预测 = 当前血糖 + 建议碳水升幅 + 修正，同样 clamp+舍入
-        BigDecimal predictSuggest = roundGlucose(cur.add(suggestCarbs.multiply(r)).add(dMed).add(dEx));
+        // 建议量预测 = 当前血糖 + 收缩项 + 建议碳水升幅 + 修正，同样 clamp+舍入（未 clamp 时恰好等于目标）
+        BigDecimal predictSuggest = roundGlucose(
+                cur.add(dShrink).add(suggestCarbs.multiply(r)).add(dMed).add(dEx));
 
         Advices advices = buildAdvices(cur, suggestCarbs, carbs, req.getItems());
         return PredictionDtos.PredictResult.builder()

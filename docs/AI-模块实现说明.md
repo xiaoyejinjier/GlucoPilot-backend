@@ -1138,6 +1138,35 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 
 ---
 
+## 14.2 AI 审计面：七个页签各自读哪张表
+
+会话审计只是「AI 审计」的一个页签。同一个页面（管理端 `/ai/audit` → `AiAuditView.vue`）把模型在业务里留下的**六种流水**聚在一起，全部只读、没有删除与导出：
+
+| 页签 | 表 | Service / Mapper | Controller | 回答的问题 |
+| --- | --- | --- | --- | --- |
+| 会话 | `chat_session` / `chat_message` / `chat_context` | `AdminChatSessionServiceImpl` | `AdminChatSessionController` | 谁在用、聊了什么（见 14.1） |
+| 工具调用 | `chat_tool_call` | `AiAuditServiceImpl#toolCalls` + `ChatToolCallMapper.selectAuditPage` | `AdminAiAuditController` | 模型调了哪些工具、成没成、花了多久 |
+| 长期记忆 | `chat_user_memory` | `#memories` + `ChatUserMemoryMapper.selectAuditPage` | 同上 | 系统给对方记下了什么 |
+| 滚动摘要 | `chat_session.context_summary`（**不是独立表**） | `#summaries` + `ChatSessionMapper.selectSummaryAuditPage` | 同上 | 摘要有没有把关键信息写丢 |
+| 内容审核 | `community_moderation_hit` | `CommunityModerationMapper.selectHitAuditPage` | `AdminCommunityModerationHitController` | 内容被判成了什么 |
+| 翻译 | `content_localization` | `LocalizationMapper.selectAuditPage` | `AdminLocalizationAuditController` | 文章/昵称翻成了什么、用的哪版提示词 |
+| 多模态 | `ocr_task` | `#ocrTasks` + `OcrTaskMapper.selectAuditPage` | `AdminAiAuditController` | 图片识别成功没有、结果多长 |
+
+三条边界，写代码时按这个走：
+
+1. **谁的表谁写 SQL**：`ai/audit` 只读 ai 自有表；内容审核命中与翻译缓存的读接口留在 `community` / `localization` 模块里，不搬到 ai——`AiModuleBoundaryTest` 明确禁止 ai 反向 import 这两个包。代价是两个接口分散在别的模块，收益是依赖方向始终单向。
+2. **权限统一挂 `ai:chat:audit`**：这七个页签是同一件事的不同侧面，各挂一个权限点只会让超管反复授权。代价是「能看审计的人也能看翻译缓存元数据」——因此翻译列表只给 200 字译文预览，不给全文。
+3. **敏感内容两段式不变**：会话正文仍要「展开原文」才请求并留痕（14.1）；审核命中按 V43 的隐私设计**只存位置与片段哈希、不存原文**；记忆与摘要给全文是因为它们本就限长（≤200 字 / ≤800 字），截断会让审计答不出问题。
+
+其它细节：
+
+- **超长关键词一律 400，不静默截断**（`KEYWORD_MAX_CHARS=50`）：静默截断会让运营以为搜的是完整词，实际搜的是前缀。
+- **不加时间区间过滤**：`chat_tool_call`、`chat_user_memory` 等表上没有「按时间范围」的复合索引，加了就是全表扫；需要定位具体时段时用主键游标（工具调用按 `id` 倒序）。
+- **多模态只有 `ocr_task`**：餐食分析 `MealAnalysisServiceImpl.analyze()` 不落库（直接返回结果），所以「AI 看了哪张餐食图」没有可审计的记录——这是当前已知的覆盖缺口，不是页面遗漏。
+- **菜单**：V55 把 V53 建的 2034 行改名为「AI 审计」并指向 `/ai/audit`（权限点不变，已有授权自动指向新页面），管理端路由与静态菜单同步替换掉原来的 `/ai/chat-sessions`。
+
+---
+
 ## 15. 依赖关系一览
 
 谁 depends on 谁（只列跨包的关键边）：

@@ -172,4 +172,32 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
                                            @Param("userId") Long userId,
                                            @Param("status") Integer status,
                                            @Param("keyword") String keyword);
+
+    /**
+     * 审计分页：只列<b>已经有滚动摘要</b>的会话（管理端「AI 审计 → 摘要」）。
+     *
+     * <p>为什么把摘要的读取放在这里而不是新开一张表：摘要就是
+     * {@code chat_session.context_summary} 这一列（V22 的注释已明确「不需要新列」），
+     * 没有摘要就不该出现在这张列表里，否则运营会看到一堆空行。
+     *
+     * <p>这里<b>读全文</b>（{@code SELECT *}），与上面列表刻意折成 0/1 的做法相反：
+     * 审计要判断「摘要有没有丢信息」，只看有没有摘要没有意义。条数由分页兜住，
+     * 且只取 {@code summary-max-chars} 限长过的文本。
+     *
+     * @param keyword 匹配会话标题，可空
+     */
+    @Select("""
+            <script>
+            SELECT * FROM chat_session
+            WHERE is_deleted = 0
+              AND context_summary IS NOT NULL
+              AND context_summary &lt;&gt; ''
+            <if test='userId != null'> AND user_id = #{userId}</if>
+            <if test='keyword != null and keyword != ""'> AND LOCATE(#{keyword}, title) &gt; 0</if>
+            ORDER BY gmt_modified DESC, id DESC
+            </script>
+            """)
+    IPage<ChatSession> selectSummaryAuditPage(IPage<ChatSession> page,
+                                              @Param("userId") Long userId,
+                                              @Param("keyword") String keyword);
 }

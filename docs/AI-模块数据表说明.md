@@ -148,7 +148,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | # | 列 | 类型 | 空 | 默认 | 含义 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `id` | bigint unsigned | NO | 自增 | 主键 |
-| 2 | `scene_code` | varchar(64) | NO | — | 场景编码，对应 `SceneCode.getCode()`（`CHAT`/`CHAT_IMAGE`/`MEAL_ANALYSIS`/`OCR_GLUCOSE`/`SUMMARY`/`MEMORY`/`MODERATION`）；比较用 `BINARY` 区分大小写 |
+| 2 | `scene_code` | varchar(64) | NO | — | 场景编码，对应 `SceneCode.getCode()`（`CHAT`/`CHAT_IMAGE`/`MEAL_ANALYSIS`/`OCR_GLUCOSE`/`SUMMARY`/`MEMORY`/`MODERATION`/`TRANSLATION`）；比较用 `BINARY` 区分大小写 |
 | 3 | `template_name` | varchar(64) | NO | — | 模板名称（人看的） |
 | 4 | `prompt_body` | text | NO | — | 提示词正文；**不能出现成对花括号**（StringTemplate 占位符语法） |
 | 5 | `model_code` | varchar(64) | YES | — | 绑定模型；NULL = 用场景/通道默认 |
@@ -165,7 +165,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 16 | `change_note` | varchar(255) | YES | — | 改动说明（审计与回溯用，如 `V43：…`） |
 | 17 | `config_version` | bigint unsigned | NO | 1 | 乐观锁版本，任何写操作 +1 |
 
-**当前开发库的 8 行**（正好演示「同场景多版本靠 `is_enabled` 选生效版」）：
+**当前开发库的 9 行**（正好演示「同场景多版本靠 `is_enabled` 选生效版」）：
 
 | scene_code | version | 启用 | 正文长度 |
 | --- | --- | --- | --- |
@@ -177,6 +177,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | `MODERATION` | 1 | ✅ | **880** |
 | `OCR_GLUCOSE` | 1 | ✅ | 710 |
 | `SUMMARY` | 1 | ✅ | 781 |
+| `TRANSLATION` | 1 | ✅ | 1034（V54 播种，正文源在 `resources/prompts/translation/system.md`） |
 
 > `scene_code` 用的是 `SceneCode` 枚举名（大写），与 yaml 的 `ai.scenes.<小写 key>` 不是一套写法——库里按枚举 `getCode()` 存，比较时用 `BINARY` 区分大小写。
 > `legacy_chat_system` / `legacy_meal_analysis` / `legacy_glucose_advice` 三行是早期场景编码（V16/V18 改名中间产物，不在枚举里、运行时不会命中），V50 已逻辑删除并在 `change_note` 里记了原因；`CHAT` 的 v2 是真实历史版本，保留以便回滚。

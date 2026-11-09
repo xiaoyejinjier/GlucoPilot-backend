@@ -36,6 +36,22 @@ public class ToolResultDigester {
 
     private static final int MAX_DEPTH = 3;
 
+    /**
+     * 解析用的 mapper：<b>进程内共享一份</b>。
+     * <p>
+     * {@code JsonMapper} 构造一次要建序列化/反序列化缓存，是重量级对象；本类每次工具调用都会走一遍，
+     * 原来每次 {@code digest()} 都 {@code JsonMapper.builder().build()} 一次，属于白白新建。
+     * Jackson 的 mapper 配置完成后是线程安全的，静态复用即可。
+     * <p>
+     * 这里刻意不复用 Spring 注入的 {@code ObjectMapper}（见 {@code JsonUtils}）：本类只用它把字符串
+     * 解析成 {@code JsonNode}，不做"对象 ↔ JSON"的语义转换，因此 Boot 侧的模块/日期格式等配置与它无关，
+     * 也就不必为它引入依赖。
+     */
+    private static final JsonMapper MAPPER = JsonMapper.builder().build();
+
+    /** 压缩空白用；正则 {@code Pattern} 同样只编译一次。 */
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+
     /** 压缩成不超过 maxChars 的摘要文本；无法解析为 JSON 时退化为"压缩空白 + 截断"。 */
     public String digest(String toolResult, int maxChars) {
         if (!StringUtils.hasText(toolResult)) {
@@ -44,14 +60,13 @@ public class ToolResultDigester {
         int limit = Math.max(maxChars, 32);
         String compact;
         try {
-            JsonMapper mapper = JsonMapper.builder().build();
-            JsonNode node = mapper.readTree(toolResult);
+            JsonNode node = MAPPER.readTree(toolResult);
             StringBuilder sb = new StringBuilder();
             write(node, sb, 1);
             compact = sb.toString();
         } catch (RuntimeException e) {
             // 工具返回不一定是 JSON（某些工具直接返回一句中文）。这不是异常情况，退化为文本压缩
-            compact = toolResult.replaceAll("\\s+", " ").trim();
+            compact = WHITESPACE.matcher(toolResult).replaceAll(" ").trim();
         }
         if (compact.length() <= limit) {
             return compact;
@@ -120,7 +135,7 @@ public class ToolResultDigester {
         if (text.length() > MAX_STRING_CHARS) {
             text = text.substring(0, MAX_STRING_CHARS) + "…";
         }
-        sb.append(text.replaceAll("\\s+", " "));
+        sb.append(WHITESPACE.matcher(text).replaceAll(" "));
     }
 
     /** 兜底用的简单压缩（单测/其它模块复用）。 */
@@ -128,7 +143,7 @@ public class ToolResultDigester {
         if (text == null) {
             return null;
         }
-        return text.replaceAll("\\s+", " ").trim();
+        return WHITESPACE.matcher(text).replaceAll(" ").trim();
     }
 
     /** 保留供单测断言用的正则（检查是否出现"共N项"标记）。 */

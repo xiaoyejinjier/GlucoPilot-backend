@@ -65,8 +65,8 @@ class UserChatMemoryExtractionTest {
         when(promptService.systemPrompt(SceneCode.MEMORY)).thenReturn("系统提示词");
         when(resolver.memoryOptionsBuilder()).thenReturn(mock(ChatOptions.Builder.class));
 
-        when(clients.summaryAvailable()).thenReturn(true);
-        when(clients.summaryClient()).thenReturn(chatClient);
+        when(clients.utilityAvailable()).thenReturn(true);
+        when(clients.utilityClient()).thenReturn(chatClient);
         when(chatClient.prompt()).thenReturn(requestSpec);
         when(requestSpec.system(anyString())).thenReturn(requestSpec);
         when(requestSpec.options(any())).thenReturn(requestSpec);

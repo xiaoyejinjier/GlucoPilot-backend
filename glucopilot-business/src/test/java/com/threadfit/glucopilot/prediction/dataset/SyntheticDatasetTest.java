@@ -19,17 +19,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ul>
  *   <li>{@link #generateDatasetFiles()}：@Disabled 手动生成，产物写入 target/prediction-dataset/（seed 固定可随时重生，不进 git）</li>
  *   <li>{@link #datasetShapeGuard()}：常规运行，锁数据集形状（规模 / seed 确定性 / carbsG 自洽 / 标签边界 / 分类码范围）</li>
- *   <li>{@link #baselineMaeGuard()}：常规运行，锁预测误差基线：任何参数改动不得使 MAE 劣化（只能优化后下调）</li>
  * </ul>
+ *
+ * <p>v2 起移除原 {@code baselineMaeGuard}：该锁的教师模型按 v1 线性公式生成标签，
+ * 与 v2（收缩项 + 校准 R）不同构，锁值已无意义；且其 1.036 的 MAE 源自合成集自洽，
+ * 比真实队列（1.784）乐观约一倍。公式正确性现由 {@code PredictionServiceTest} 的
+ * 手算断言保证，真实精度基线由 {@code tools/prediction-dataset/evaluate.py --fixed-params} 把关。
  */
 class SyntheticDatasetTest {
-
-    /**
-     * 基线锚点：v1 默认参数在当前合成集（SEED=20261020）上的 MAE 上限。
-     * 2026-10-21 首次实测 MAE=1.036 锚定（GI 因子与个体差异 CV 25% 构成的不可解释方差为主要贡献），
-     * 略留余量；调优参数只允许下调此值，上调必须先重建数据集并重新说明理由。
-     */
-    private static final double BASELINE_MAE = 1.05;
 
     private static final Path OUTPUT_DIR = Paths.get("target", "prediction-dataset");
 
@@ -87,15 +84,5 @@ class SyntheticDatasetTest {
                     "样本 " + s.sampleId() + " 餐前血糖越界");
             assertTrue(!s.items().isEmpty(), "样本 " + s.sampleId() + " 明细为空");
         }
-    }
-
-    @Test
-    void baselineMaeGuard() {
-        List<MealSample> samples = new SyntheticMealDataset().generate();
-        PredictionDatasetEvaluator.EvalResult result = new PredictionDatasetEvaluator(samples).evaluate();
-
-        assertTrue(result.mae() <= BASELINE_MAE,
-                "预测误差劣化：当前 MAE=" + result.mae() + " 超过基线 " + BASELINE_MAE
-                        + "（调参后须同步重锚基线并说明理由）");
     }
 }

@@ -137,6 +137,15 @@ public class AIProperties {
 
         /** 是否开启思维链；留空继承全局配置（当前对话场景全局关闭） */
         private Boolean thinking;
+
+        /**
+         * 是否要求模型输出 JSON 对象（{@code response_format=json_object}）。
+         * <p>
+         * 放在这里而不是让能力层自己拼 options：一是「某场景要不要 JSON」属于编排参数
+         * （与温度、max-tokens 同类），后台改场景即可改行为；二是避免能力层反向依赖具体协议实现类
+         * （翻译器此前就直接 new 了 {@code OpenAiChatOptions}）。只对文本场景生效。
+         */
+        private Boolean json;
     }
 
     /**

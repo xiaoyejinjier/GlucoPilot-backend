@@ -489,10 +489,10 @@ class AdminAiPromptServiceTest {
         assertEquals(1, active.getStatus());
         assertTrue(active.getActive());
         assertEquals(List.of("foodText"), active.getVariables());
-        // 场景枚举里现在有 7 个（② 期 SUMMARY、③ 期 MEMORY、社区 AI 审核新增 MODERATION）。
+        // 场景枚举随能力扩展而增长（SUMMARY / MEMORY / MODERATION / TRANSLATION…），断言跟枚举走，别写死数字。
         // 这条断言的价值就在于"新增场景必须显式改这里"：后台提示词页的场景下拉是从这里来的，
         // 漏改不会报错，只会在运营页上少一个可选场景。
-        assertEquals(7, list.getScenes().size());
+        assertEquals(SceneCode.values().length, list.getScenes().size());
         // 未连库 → 运行时会用 classpath 内置提示词，接口必须如实汇报来源
         AdminAiPromptDtos.SceneOption chat = list.getScenes().stream()
                 .filter(option -> "CHAT".equals(option.getSceneCode())).findFirst().orElseThrow();

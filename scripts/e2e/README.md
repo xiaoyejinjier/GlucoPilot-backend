@@ -46,7 +46,10 @@ default-character-set=utf8mb4
 | `prompt-e2e.ps1` | 提示词管理 + 场景绑定：阻断式校验（3 个反例）→ 新增草稿 → 草稿原地编辑 + 乐观锁 409 → 启用 → **新会话落库的 `chat_session.system_prompt_ver` 变成新版**（端到端证明"下一条消息用新提示词"）→ 回滚 → 场景参数保存/乐观锁/清空覆盖 | 后端在跑、`E2E_MYSQL_CNF`（会改库：临时提示词版本与场景参数，脚本结束前自行清理/还原；不需 `E2E_DEEPSEEK_KEY`，全程不调模型） |
 | `session-e2e.ps1` | 会话生命周期：新建会话（旧会话必须被结束）→ 历史写入/读取/翻页 → 5.3 列表（排序/预览/状态过滤）→ 已结束会话禁止写入 → 置顶 → 5.4 删除（幂等 + 越权 404 + 消息一并逻辑删除） | 后端在跑、`E2E_MYSQL_CNF`（会改库：临时会话与消息，结束前逻辑删除还原；**不需 `E2E_DEEPSEEK_KEY`**，全程不调模型） |
 | `memory-e2e.ps1` | 记忆深度（② 期）：造 60 条长历史 → **token 预算裁剪**（真实 prompt_tokens 远小于全量历史）→ **异步滚动摘要**生成并写回（断言摘要实质性、含数值、无用药内容）→ 摘要被注入下一轮 → **工具结果摘要**落库与回放 | 后端在跑、`E2E_MYSQL_CNF`、**会真实调用模型**（用应用自己配的密钥，不需 `E2E_DEEPSEEK_KEY`）；会改库并自行逻辑删除还原 |
+| `chat-audit-e2e.ps1` | 后台会话审计：列表元数据（无正文）→ 关键词过滤与 >50 字 400 → 消息预览 ≤200 字且折叠换行 → **只有读全文写 ops_audit_log**（重复读各自留痕、越权失败不留痕）→ 用会话 A 的入口读 B 的消息必须 404 → 上下文构成（2 轮共 5720 token、分片按 `sort_no` 升序、`?round=2` 只回该轮、无记录返回空列表、**读分片不写审计**、列表「分片轮次」列 = 2）→ `ai:usage:view` / `ai:chat:audit` 拆分后的权限回归（共 33 条） | 后端在跑、`E2E_MYSQL_CNF`（会造两个临时会话 + 4 条消息 + 5 条 `chat_context` 分片，结束时逻辑删会话与消息、物理删分片；**不需 `E2E_DEEPSEEK_KEY`**，全程不调模型） |
 | `mock-data.ps1` | 生成近一个月的血糖/饮食/健康档案模拟数据（标记 `【模拟数据】`，便于清理） | `E2E_MYSQL_CNF` |
+| `ai-audit-e2e.ps1` | 后台「AI 审计」六个新页签：工具调用（按成败/工具名过滤、失败带 `errorType`、只给 `resultDigest`）→ 长期记忆（默认不含已删除、`includeDeleted=true` 才带上、内容给全文、关键词 >50 字 400）→ 滚动摘要（给全文、`summaryChars` 与正文一致）→ 多模态（成功/失败行、结果只给 200 字预览、耗时由 `finished_at - gmt_create` 近似）→ 内容审核命中（只给位置与 64 位片段哈希、**不返回原文**）→ 翻译缓存（类型+状态过滤、200 字预览）→ **六个读接口都不写 `ops_audit_log`**（共 21 条） | 后端在跑、`E2E_MYSQL_CNF`（会往 `chat_tool_call`/`chat_user_memory`/`ocr_task`/`community_moderation_hit`/`content_localization` 造带 `【E2E审计】` 标记的夹具，结束时按标记物理删；**不需 `E2E_DEEPSEEK_KEY`**，全程不调模型） |
+| `translation-e2e.ps1` | 中英翻译（V54 收束到 `ai.business.translation`）：中文文章摘要首次 PENDING/READY 且带 `sourceHash` → 轮询到 READY、标题/摘要无汉字、`content_localization.prompt_ver='translation@v1'` → 重复请求直接命中缓存（`sourceHash` 不变）→ 纯英文昵称与 `用户_xxx` 本地直判 READY（不请求模型）→ 不可读文章 200 + `UNAVAILABLE` | 后端在跑、`E2E_MYSQL_CNF`、**会真实调用模型 1~2 次**；会造一篇临时文章（结束时删文章与译文缓存）并临时改 mock 用户昵称后还原 |
 
 示例：
 

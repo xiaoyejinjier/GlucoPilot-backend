@@ -95,8 +95,22 @@ ai/
     ├── chat/{controller,dto,entity,mapper,service,impl,support}
     ├── meal/{controller,dto,service,impl}
     ├── ocr/{controller,dto,entity,mapper,service,impl,config}
-    └── speech/{controller,dto,config,service}
+    ├── speech/{controller,dto,config,service}
+    ├── moderation/{dto,support,service,service/impl}
+    └── translation/{service,service/impl}
 ```
+
+`business/` 下前四个是「带 HTTP 与表的业务域」，后两个是「收束进来的 AI 能力」：它们没有 controller、不碰业务表，只接收 `ModerationRequest` / `(kind, source)` 并返回判定与译文。这个区分是刻意的——能力包可以被任何业务模块调用，业务包不能反向进 `ai`（`AiModuleBoundaryTest` 守）。
+
+两个能力包的内部划分和其它业务域同一套规则，只是没有 controller/entity/mapper：
+
+| 子包 | 放什么 | moderation | translation |
+|---|---|---|---|
+| `dto/` | 跨越服务接口的数据结构 | `ModerationRequest`、`ModerationResult`、`ModerationVerdict` | —（入参就是 `(kind, Map)`） |
+| `support/` | 无状态辅助件（解析、词表、校验） | `ContentModerationParser`、`ModerationCategories` | —（校验是实现的私有方法） |
+| `service/` | 接口 | `ContentModerationService` | `EnglishTranslator` |
+| `service/impl/` | 实现 | `ModelContentModerationService` | `ModelEnglishTranslator` |
+| 包根 | `package-info.java` | 能力边界说明 | 能力边界说明 |
 
 顶层包从 14 个（business、config、core、guard、memory、model、prompt、scene、support、tool、vision + business 下 4 个）变成 13 个，但**每个包的判据都能一句话说清**，且 `core`/`guard` 这两个「说不清」的名字消失。
 
@@ -200,7 +214,7 @@ requireActive → 幂等检查 → tryAcquireToken(roundKey) → [视觉阶段1]
 
 ### 9. 记忆与摘要（MEMORY / SUMMARY）
 
-**摘要**：`ChatCompletionServiceImpl` done 阶段调 `chatSummaryService.maybeSummarizeAsync(userId, sessionId)`；`ChatSummaryServiceImpl:runSummarize` 读会话已有摘要 → 取候选消息（保留最近 keep 条不参与）→ 用 **summaryChatClient**（无工具、无 advisor）生成 → 截断到 `summary-max-chars` → `updateSummary(sessionId, text, uptoId)`（`upto` 指针防重复摘要）。
+**摘要**：`ChatCompletionServiceImpl` done 阶段调 `chatSummaryService.maybeSummarizeAsync(userId, sessionId)`；`ChatSummaryServiceImpl:runSummarize` 读会话已有摘要 → 取候选消息（保留最近 keep 条不参与）→ 用 **utilityChatClient**（无工具、无 advisor）生成 → 截断到 `summary-max-chars` → `updateSummary(sessionId, text, uptoId)`（`upto` 指针防重复摘要）。
 
 **长期记忆**：`extractAsync` 单飞（`chat-memory-extract:<sessionId>`）→ 读最近 N 条消息 → 拼「已知记忆 + 对话原文」→ 生成 → **C 批起可走结构化输出**（`call().entity(MemoryPayload.class)` + `StructuredOutputValidationAdvisor`）→ 候选过四道闸（键白名单/置信度/危险词/长度）→ `dedupeByKey` → `upsert`。注入侧由 `ChatMemoryReadAdvisor` 取 `forInjection(userId)` 拼进系统消息。
 
@@ -217,16 +231,18 @@ requireActive → 幂等检查 → tryAcquireToken(roundKey) → [视觉阶段1]
 | `AiRuntimeConfigServiceImpl` | 模型清单快照（DB 优先，yaml 兜底） | `snapshot()`（60s TTL）、`pickDefault(candidates, fallback, pool)`、`toSpec(row)` |
 | `AiSceneBindingServiceImpl` | 场景绑定快照 | `binding(scene)`（永不 null，未配置返回 `SceneBinding.INHERIT`） |
 | `SceneModelResolver` | 场景 → 模型 + 参数（唯一决策点） | `modelCode(scene)`、`judgeBinding(scene)`、`optionsFor(scene)`、`quietOptions(...)`（摘要/记忆关思维链） |
-| `AiChatClientRegistry` | client / model 取用 | `textClient()`、`summaryClient()`、`summaryAvailable()`、`visionClient(scene)`、`textModel()` |
+| `AiChatClientRegistry` | client / model 取用 | `textClient()`、`utilityClient()`、`utilityAvailable()`、`visionClient(scene)` |
 | `AiRuntimeStatusServiceImpl` | 「为什么是这个模型」 | `status()`：逐场景给 `source=binding/default/fallback` + `issues` |
 | `AdminAiUsageController` / `AiUsageServiceImpl` | 用量（天 × 模型） | `report(start, end)`，只统计 `chat_message` 已落库 token |
 
 **路由链**：场景绑定（DB，视觉还要求能力含 vision）→ 用途默认（DB：`is_default` → 唯一启用 → 最近修改）→ yaml 通道兜底。
 
-### 12. 内容审核（community 模块的 AI 侧）
+### 12. 内容审核（AI 侧在 `ai/business/moderation`，表在 community）
 
-- `CommunityModerationWorker`（`@Scheduled`，5s 轮询）：`queue.claim()` → 取 `clients.textModel()` → 45s 超时调用 → `CommunityModerationParser.parse` → `queue.finish(...)`；**任何异常都落 ERROR，不放行**。
+- `CommunityModerationWorker`（`@Scheduled`，5s 轮询）：`queue.claim()` → `moderation.judge(ModerationRequest)` → `queue.finish(...)`；**只做节拍，不碰提示词/模型/解析**，任何异常都落 ERROR，不放行。
+- `ContentModerationService`（接口）/ `ModelContentModerationService`（实现）：`clients.utilityClient()` + `prompts.systemPrompt(MODERATION)` + 45s 超时 + `ContentModerationParser.parse`；**接口承诺不抛异常**，失败返回 `ERROR`。
 - `CommunityModerationQueue`：`claimArticle`/`claimComment`（`FOR UPDATE SKIP LOCKED`，3 分钟僵尸回收）、`finishArticle`/`finishComment`（状态 + 版本条件更新）、`insertHits`、`setCommentHidden`（人工隐藏/恢复，「只升不降」：机器能加严、不能替人放宽）。
+- 中英翻译同理：`LocalizationService` 管缓存/租约/权限闸，`ai/business/translation/ModelEnglishTranslator` 负责「文本进英文出」，提示词在 `ai_prompt_template` 的 `TRANSLATION` 场景（V54 播种）。
 
 ### 13. 横切：工具链 / 护栏 / 观测
 
@@ -242,10 +258,10 @@ requireActive → 幂等检查 → tryAcquireToken(roundKey) → [视觉阶段1]
 | CHAT_IMAGE | `VisionAnalyzer:73`（由 `ChatCompletionServiceImpl:598` 调起）→ 阶段 2 回 `ChatCompletionServiceImpl:253` | `visionChatClient` → `textChatClient` |
 | MEAL_ANALYSIS | `MealAnalysisServiceImpl:67` | `visionChatClient` |
 | OCR_GLUCOSE | `OcrTaskServiceImpl:134` | `visionChatClient` |
-| SUMMARY | `ChatSummaryServiceImpl:263`（`maybeSummarizeAsync` 在 `:100`） | `summaryChatClient`（与 MEMORY 共用） |
-| MEMORY | `UserChatMemoryServiceImpl:396`（`summaryAvailable()` 在 `:279/:308`） | `summaryChatClient` |
-| MODERATION | `CommunityModerationWorker:88` | `registry.textModel()`（直接 ChatModel，手拼 SystemMessage） |
-| 英文翻译（非场景） | `ModelEnglishTranslator:106` | `registry.textModel()` |
+| SUMMARY | `ChatSummaryServiceImpl:263`（`maybeSummarizeAsync` 在 `:100`） | `utilityChatClient`（与 MEMORY 共用） |
+| MEMORY | `UserChatMemoryServiceImpl:396`（`utilityAvailable()` 在 `:279/:308`） | `utilityChatClient` |
+| MODERATION | `CommunityModerationWorker` → `ModelContentModerationService` | `utilityChatClient`（提示词与参数取自 `ai.scenes.moderation`） |
+| TRANSLATION | `LocalizationService:302` → `ModelEnglishTranslator` | `utilityChatClient`（`ai.scenes.translation`，`json: true`） |
 | 语音转写 | `SpeechTranscriptionService:52` | 裸 `RestClient` → dashscope ASR |
 
 ---

@@ -98,7 +98,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      */
     @Override
     public void maybeSummarizeAsync(Long userId, Long sessionId) {
-        if (!clients.summaryAvailable() || sessionId == null) {
+        if (!clients.utilityAvailable() || sessionId == null) {
             return;
         }
         String key = SUMMARY_KEY_PREFIX + sessionId;
@@ -127,7 +127,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      * @return 是否成功写入摘要
      */
     boolean runSummarize(Long userId, Long sessionId) {
-        if (!clients.summaryAvailable()) {
+        if (!clients.utilityAvailable()) {
             return false;
         }
         try {
@@ -260,7 +260,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      */
     private String callModel(String input) {
         String system = promptTemplateService.systemPrompt(SceneCode.SUMMARY);
-        String content = clients.summaryClient().prompt()
+        String content = clients.utilityClient().prompt()
                 .system(system)
                 // 关思维链 + 输出封顶：摘要要"快"而不是"想得多"，详见 SceneModelResolver.summaryOptionsBuilder
                 .options(sceneModelResolver.summaryOptionsBuilder())

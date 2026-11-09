@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.community.moderation.service;
+package com.threadfit.glucopilot.ai.business.moderation.support;
 
 import java.util.LinkedHashMap;
 import java.util.List;

@@ -5,6 +5,7 @@ import static com.threadfit.glucopilot.localization.dto.LocalizationDtos.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.threadfit.glucopilot.ai.business.translation.service.EnglishTranslator;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.mybatis.MyBatisTestMappers;
 import com.threadfit.glucopilot.community.shared.support.CommunityTestMappers;
@@ -70,6 +71,13 @@ class LocalizationServiceTest {
                         new ClassPathResource("db/migration/V39__english_content_cache.sql"));
         migration.setSqlScriptEncoding("UTF-8");
         migration.populate(migrationConnection);
+        // V54 给缓存表补了提示词版本列；本用例只跑 V39 建表，这里按同一列定义补上。
+        // H2 在 MODE=MySQL 下执行 ALTER TABLE ADD COLUMN 后会重建这张表，把 V39 的 CHECK 表达式
+        // 弄成空串（之后任何插入都报 "Check constraint invalid: chk_cl_kind: "），所以先摘掉这两条约束。
+        // 取值约束本身由 V39 的 DDL 在 MySQL 上保证，用例关心的是服务行为，不是 H2 的约束实现。
+        jdbc.execute("ALTER TABLE content_localization DROP CONSTRAINT chk_cl_kind");
+        jdbc.execute("ALTER TABLE content_localization DROP CONSTRAINT chk_cl_status");
+        jdbc.execute("ALTER TABLE content_localization ADD COLUMN prompt_ver VARCHAR(32)");
         jdbc.update("INSERT INTO user_account(id) VALUES(1),(2),(3)");
         jdbc.update(
                 "INSERT INTO user_profile(user_id,nickname)"
@@ -82,12 +90,12 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
-                        (kind, source) -> {
+                        translator((kind, source) -> {
                             calls.incrementAndGet();
                             var out = new LinkedHashMap<String, String>();
                             source.forEach((key, value) -> out.put(key, "English " + value));
                             return out;
-                        },
+                        }),
                         new ObjectMapper());
     }
 
@@ -109,6 +117,22 @@ class LocalizationServiceTest {
         assertEquals(Map.of("body", ""), result.source());
         assertEquals(Map.of("body", ""), result.translated());
         assertEquals(0, calls.get());
+    }
+
+    /** 翻译器接口现在是「文本进、文本出」+ 提示词版本；用例只关心前者，版本号固定。 */
+    private static EnglishTranslator translator(
+            java.util.function.BiFunction<String, Map<String, String>, Map<String, String>> body) {
+        return new EnglishTranslator() {
+            @Override
+            public Map<String, String> translate(String kind, Map<String, String> source) {
+                return body.apply(kind, source);
+            }
+
+            @Override
+            public String promptVersion() {
+                return "translation@v1";
+            }
+        };
     }
 
     private Request request(String kind, String id, boolean retry) {
@@ -203,12 +227,12 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
-                        (kind, source) -> {
+                        translator((kind, source) -> {
                             count.incrementAndGet();
                             if (source.containsKey("j0_title") || "文章甲".equals(source.get("title")))
                                 throw new IllegalArgumentException("Untranslatable item");
                             return Map.of("title", "Healthy article", "summary", "Healthy summary");
-                        },
+                        }),
                         new ObjectMapper());
         var initial =
                 service.localize(
@@ -249,7 +273,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
-                        (kind, source) -> {
+                        translator((kind, source) -> {
                             count.incrementAndGet();
                             entered.countDown();
                             try {
@@ -258,7 +282,7 @@ class LocalizationServiceTest {
                                 Thread.currentThread().interrupt();
                             }
                             throw new IllegalStateException("Stopped");
-                        },
+                        }),
                         new ObjectMapper());
         service.localize(
                 2,
@@ -351,7 +375,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
-                        (kind, source) -> {
+                        translator((kind, source) -> {
                             count.incrementAndGet();
                             started.countDown();
                             try {
@@ -360,7 +384,7 @@ class LocalizationServiceTest {
                                 Thread.currentThread().interrupt();
                             }
                             throw new IllegalStateException("Unavailable");
-                        },
+                        }),
                         new ObjectMapper());
         get(2, "ARTICLE_PREVIEW", "10");
         assertTrue(started.await(1, TimeUnit.SECONDS));
@@ -388,7 +412,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
-                        (kind, source) -> {
+                        translator((kind, source) -> {
                             entered.countDown();
                             try {
                                 new CountDownLatch(1).await();
@@ -396,7 +420,7 @@ class LocalizationServiceTest {
                                 Thread.currentThread().interrupt();
                             }
                             throw new IllegalStateException("Stopped");
-                        },
+                        }),
                         new ObjectMapper());
         get(2, "ARTICLE_PREVIEW", "10");
         assertTrue(entered.await(1, TimeUnit.SECONDS));
@@ -405,8 +429,8 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
-                        (kind, source) ->
-                                Map.of("title", "Recovered title", "summary", "Recovered summary"),
+                        translator((kind, source) ->
+                                Map.of("title", "Recovered title", "summary", "Recovered summary")),
                         new ObjectMapper());
         assertEquals(
                 "Recovered title", ready(2, "ARTICLE_PREVIEW", "10").translated().get("title"));

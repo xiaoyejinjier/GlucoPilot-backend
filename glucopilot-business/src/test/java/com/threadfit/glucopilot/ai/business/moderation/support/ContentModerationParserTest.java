@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.community.moderation.service;
+package com.threadfit.glucopilot.ai.business.moderation.support;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
 
 /**
  * 审核输出解析（纯函数）。这是"模型输出 → 落库结论"的唯一关卡，因此重点不在"正常情况能解析"， 而在<b>异常路径一律 ERROR 而不是 PASS</b>：
@@ -18,14 +19,14 @@ import org.junit.jupiter.api.Test;
  *
  * 另外固定住"宽容度"：中文冒号/英文冒号/等号、Markdown 列表符号与代码围栏、大写 verdict。
  */
-class CommunityModerationParserTest {
+class ContentModerationParserTest {
 
     // ---------------------------------------------------------------- 正常路径
 
     @Test
     void 解析通过的判定() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         verdict：PASS
                         category：none
@@ -44,7 +45,7 @@ class CommunityModerationParserTest {
     @Test
     void 解析拒绝的判定并取严重度最高的命中作主类别() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         verdict：REJECT
                         category：scam_ad
@@ -67,7 +68,7 @@ class CommunityModerationParserTest {
     @Test
     void 宽容解析各种装饰与分隔符() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         ```text
                         - **verdict: reject**
@@ -89,7 +90,7 @@ class CommunityModerationParserTest {
     @Test
     void verdict写成协议说明时取更严格的一侧() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         verdict：PASS 或 REJECT
                         category：pseudo_science
@@ -105,16 +106,16 @@ class CommunityModerationParserTest {
 
     @Test
     void 空输出是ERROR而不是通过() {
-        assertTrue(CommunityModerationParser.parse(null).isError());
-        assertTrue(CommunityModerationParser.parse("   ").isError());
+        assertTrue(ContentModerationParser.parse(null).isError());
+        assertTrue(ContentModerationParser.parse("   ").isError());
     }
 
     @Test
     void 超长输出是ERROR() {
         String raw =
-                "verdict：PASS\nreason：" + "字".repeat(CommunityModerationParser.MAX_RESPONSE_CHARS);
+                "verdict：PASS\nreason：" + "字".repeat(ContentModerationParser.MAX_RESPONSE_CHARS);
 
-        ModerationVerdict verdict = CommunityModerationParser.parse(raw);
+        ModerationVerdict verdict = ContentModerationParser.parse(raw);
 
         assertTrue(verdict.isError());
         assertTrue(verdict.reason().contains("超过"));
@@ -123,16 +124,16 @@ class CommunityModerationParserTest {
     @Test
     void 缺少verdict是ERROR() {
         assertTrue(
-                CommunityModerationParser.parse("category：porn\nseverity：3\nreason：x").isError());
+                ContentModerationParser.parse("category：porn\nseverity：3\nreason：x").isError());
         assertTrue(
-                CommunityModerationParser.parse("verdict：MAYBE\nreason：x").isError(),
+                ContentModerationParser.parse("verdict：MAYBE\nreason：x").isError(),
                 "不在三态里的取值不能当成通过，也不能当成拒绝");
     }
 
     @Test
     void 拒绝但类别全部越界时是ERROR() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         verdict：REJECT
                         category：广告嫌疑（自创类别）
@@ -147,7 +148,7 @@ class CommunityModerationParserTest {
     @Test
     void 越界类别只丢弃那一条其它命中仍生效() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         verdict：REJECT
                         category：自创类别
@@ -167,7 +168,7 @@ class CommunityModerationParserTest {
     @Test
     void 严重度与置信度越界被夹紧() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         verdict：REJECT
                         category：porn
@@ -183,7 +184,7 @@ class CommunityModerationParserTest {
     @Test
     void 缺少严重度与置信度时用类别默认值() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         verdict：REJECT
                         category：medical_claim
@@ -197,7 +198,7 @@ class CommunityModerationParserTest {
     @Test
     void 理由为空时用类别中文名兜底() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         """
                         verdict：REJECT
                         category：privacy
@@ -211,11 +212,11 @@ class CommunityModerationParserTest {
     @Test
     void 超长理由被截断且保持单行() {
         ModerationVerdict verdict =
-                CommunityModerationParser.parse(
+                ContentModerationParser.parse(
                         "verdict：PASS\nreason：" + "说明".repeat(300) + "\n下一行");
 
         assertFalse(verdict.isError());
-        assertTrue(verdict.reason().length() <= CommunityModerationParser.MAX_REASON_CHARS);
+        assertTrue(verdict.reason().length() <= ContentModerationParser.MAX_REASON_CHARS);
         assertFalse(verdict.reason().contains("\n"), "落库前必须压成单行，否则会把列宽撑爆");
     }
 }

@@ -32,7 +32,8 @@
 | --- | --- | --- |
 | 迁移 | `V43__community_moderation_ai.sql` | 替代原计划的 `V29`（版本号被社区模块占用） |
 | 提示词进库 | `SceneCode.MODERATION` + `ai.scenes.moderation` + `prompts/moderation/system.md` + V43 播种 v1 | 按设计 §8，**替代**原先硬编码在 Worker 里的 `SYSTEM` 常量 |
-| 输出协议 | `CommunityModerationParser`（逐行字段清单） | 因提示词要过 ST 模板（禁花括号），JSON 输出改为**字段清单**，见 §8 |
+| 输出协议 | `ai.business.moderation.support.ContentModerationParser`（逐行字段清单） | 因提示词要过 ST 模板（禁花括号），JSON 输出改为**字段清单**，见 §8 |
+| 能力收束 | 判定与解析移到 `ai/business/moderation`（`ContentModerationService` + `ModelContentModerationService`），`community` 侧只留 `CommunityModerationWorker` 节拍器与 `CommunityModerationQueue` | 2026-11 收束：AI 相关逻辑集中到 ai 模块，业务模块只调方法；依赖方向固定为 `community → ai` |
 | 类别枚举 | `ModerationCategories`（12 类） | 按设计 §5.6 |
 | 结构化证据 | `community_moderation_hit`（新表）+ 文章/评论的 `ai_category/ai_severity/ai_confidence/ai_prompt_ver` | 按设计 §5.3，但**只记类别/严重度/置信度**；`start_offset/snippet_hash` 暂空（提示词未要求模型回吐原句，解析器已支持 `evidence` 行，后续放开即可） |
 | 评论审核 | `community_comment` 11 个新列 + `claimComment/finishComment` + `is_hidden` + `VISIBLE_COMMENT` 过滤 | 按设计 D5（先发后审、命中即隐藏）；**V43 用两步默认值**：历史评论标 `SKIPPED`，避免上线当天全量重审 |

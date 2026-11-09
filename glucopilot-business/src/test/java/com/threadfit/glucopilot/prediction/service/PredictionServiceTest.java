@@ -36,6 +36,8 @@ class PredictionServiceTest {
     }
 
     // ---- 七类：无补充基线 / 份量 / 药物 / 运动 / 档案分档 / 目标锚点 / 边界 ----
+    // 期望值按 v2 公式手算：predictNow = cur + 0.441×(target−cur) + carbs×portion×R + dMed + dEx
+    // 默认 target=7.8；cur=6.0 时收缩项 = 0.441×1.8 = 0.7938
 
     @Test
     void baselineNoSupplement() {
@@ -43,10 +45,13 @@ class PredictionServiceTest {
 
         PredictionDtos.PredictResult r = service.predict(USER_ID, request("lunch", "6.0", "60"));
 
-        assertValue("8.4", r.getPredictNow());
+        // 6.0 + 0.7938 + 60×0.0194(1.164) = 7.9578 → 8.0
+        assertValue("8.0", r.getPredictNow());
+        // 反解碳水 = 0.559×1.8 ÷ 0.0194 = 51.865979 → 51.9；回代恰为 7.8
         assertValue("7.8", r.getPredictSuggest());
-        assertEquals("v1", r.getAlgorithmVersion());
-        assertEquals("建议本餐摄入碳水约 45 g（约米饭 173 g）", r.getSuggestText());
+        assertValue("51.9", r.getSuggestCarbs());
+        assertEquals("v2", r.getAlgorithmVersion());
+        assertEquals("建议本餐摄入碳水约 52 g（约米饭 199 g）", r.getSuggestText());
     }
 
     @Test
@@ -57,7 +62,8 @@ class PredictionServiceTest {
 
         PredictionDtos.PredictResult r = service.predict(USER_ID, req);
 
-        assertValue("7.2", r.getPredictNow());
+        // 6.0 + 0.7938 + 60×0.5×0.0194(0.582) = 7.3758 → 7.4
+        assertValue("7.4", r.getPredictNow());
     }
 
     @Test
@@ -66,7 +72,9 @@ class PredictionServiceTest {
         PredictionDtos.PredictRequest req = request("lunch", "6.0", "60");
         req.setMedicationTaken(true);
 
-        assertValue("7.9", service.predict(USER_ID, req).getPredictNow());
+        // medEffect=0 的行为锁：服药餐残差实证为 +0.64（方向与 v1 的 -0.5 相反），
+        // 置 0 后 medicationTaken 不改变预测，与 baseline 8.0 一致；入参仅留档采集
+        assertValue("8.0", service.predict(USER_ID, req).getPredictNow());
     }
 
     @Test
@@ -75,13 +83,14 @@ class PredictionServiceTest {
         PredictionDtos.PredictRequest req = request("lunch", "6.0", "60");
         req.setExerciseDone(true);
 
-        assertValue("8.1", service.predict(USER_ID, req).getPredictNow());
+        // 7.9578 − 0.3 = 7.6578 → 7.7
+        assertValue("7.7", service.predict(USER_ID, req).getPredictNow());
     }
 
     @Test
     void typeBuckets() {
-        // R：0/3/4→0.04、1→0.06、2→0.05（注意：方案 §7 案例 5 中「1→8.8」为笔误，按系数正确值应为 9.6）
-        Object[][] cases = {{0, "8.4"}, {1, "9.6"}, {2, "9.0"}, {3, "8.4"}, {4, "8.4"}};
+        // v2 R：0/3/4→0.0194、1→0.0290、2→0.0242；基础项 6.0 + 0.7938
+        Object[][] cases = {{0, "8.0"}, {1, "8.5"}, {2, "8.2"}, {3, "8.0"}, {4, "8.0"}};
         for (Object[] c : cases) {
             int type = (Integer) c[0];
             String expected = (String) c[1];
@@ -98,7 +107,7 @@ class PredictionServiceTest {
         PredictionDtos.PredictResult r = service.predict(USER_ID, request("lunch", "6.0", "0"));
 
         assertValue("7.8", r.getPredictSuggest());
-        assertEquals("建议本餐摄入碳水约 45 g（约米饭 173 g）", r.getSuggestText());
+        assertEquals("建议本餐摄入碳水约 52 g（约米饭 199 g）", r.getSuggestText());
     }
 
     @Test
@@ -107,8 +116,9 @@ class PredictionServiceTest {
 
         PredictionDtos.PredictResult r = service.predict(USER_ID, request("lunch", "6.0", "0"));
 
+        // 目标 6.4：反解碳水 = 0.559×0.4 ÷ 0.0194 = 11.525773 → 11.5，约米饭 44 g
         assertValue("6.4", r.getPredictSuggest());
-        assertEquals("建议本餐摄入碳水约 10 g（约米饭 38 g）", r.getSuggestText());
+        assertEquals("建议本餐摄入碳水约 12 g（约米饭 44 g）", r.getSuggestText());
     }
 
     @Test
@@ -126,7 +136,8 @@ class PredictionServiceTest {
 
         PredictionDtos.PredictResult r = service.predict(USER_ID, request("lunch", "6.0", "0"));
 
-        assertValue("6.0", r.getPredictNow());
+        // v2 下无碳水也会向目标收缩：6.0 + 0.7938 = 6.7938 → 6.8
+        assertValue("6.8", r.getPredictNow());
         assertValue("7.8", r.getPredictSuggest());
     }
 
@@ -136,14 +147,17 @@ class PredictionServiceTest {
 
         PredictionDtos.PredictResult r = service.predict(USER_ID, request("lunch", "15.0", "0"));
 
-        assertValue("15.0", r.getPredictNow());
-        assertValue("15.0", r.getPredictSuggest());
+        // 15.0 + 0.441×(7.8−15.0) = 15.0 − 3.1752 = 11.8248 → 11.8
+        assertValue("11.8", r.getPredictNow());
+        assertValue("11.8", r.getPredictSuggest());
         assertEquals("当前血糖偏高，建议暂缓进食并继续监测，必要时就医", r.getSuggestText());
     }
 
     @Test
     void clampsOutOfRangeToHighBound() {
-        when(healthProfileService.healthViewOf(USER_ID)).thenReturn(health(1, null, null));
+        // v2 有收缩项后，仅靠「高当前血糖 + 碳水」已无法突破上限，
+        // 故用高位目标（39.9）令收缩项为正：39.0 + 0.3969 + 50×0.029(1.45) = 40.8469 → clamp 39.9
+        when(healthProfileService.healthViewOf(USER_ID)).thenReturn(health(1, "39.9", null));
 
         PredictionDtos.PredictResult r = service.predict(USER_ID, request("lunch", "39.0", "50"));
 
@@ -158,9 +172,9 @@ class PredictionServiceTest {
 
         PredictionDtos.PredictResult r = service.predict(USER_ID, request("lunch", "6.0", "60"));
 
-        assertValue("8.4", r.getPredictNow());
+        assertValue("8.0", r.getPredictNow());
         assertValue("7.8", r.getPredictSuggest());
-        assertEquals("v1", r.getAlgorithmVersion());
+        assertEquals("v2", r.getAlgorithmVersion());
         verify(healthProfileService).healthViewOf(USER_ID);
     }
 
@@ -188,10 +202,13 @@ class PredictionServiceTest {
 
         PredictionDtos.PredictResult r = service.predict(USER_ID, req);
 
-        assertEquals("米饭 139g · 红烧肉 正常 · 青菜 正常 · 可乐 不建议 · 薯片 不建议", r.getSuggestText());
-        assertValue("45.0", r.getSuggestCarbs());
-        // 结构化建议与文案同源：削减档给克重/0，保量档 null（正常）
-        assertSuggest(r.getSuggestItems(), "米饭", "139");
+        // 待削量 = 93 − 51.865979 = 41.134021；主缩档碳水 30+15=45，削不完故不触发均衡分摊
+        // 41.13 介于 主缩档一半(22.5) 与 全部(45) 之间 → 语气「建议替换为无糖/少糖」
+        assertEquals("米饭 正常 · 红烧肉 正常 · 青菜 正常 · 可乐 建议替换为无糖/少糖 · 薯片 建议替换为无糖/少糖",
+                r.getSuggestText());
+        assertValue("51.9", r.getSuggestCarbs());
+        // 结构化建议与文案同源：替换档给克重 0，保量/均衡档 null（正常）
+        assertSuggest(r.getSuggestItems(), "米饭", null);
         assertSuggest(r.getSuggestItems(), "红烧肉", null);
         assertSuggest(r.getSuggestItems(), "青菜", null);
         assertSuggest(r.getSuggestItems(), "可乐", "0");
@@ -206,11 +223,11 @@ class PredictionServiceTest {
                 item("可乐", 8, "300", "25"),
                 item("奶茶", 8, "300", "25")));
 
-        assertEquals("可乐 减半 · 奶茶 减半", service.predict(USER_ID, req).getSuggestText());
-        // 减半语气 → 结构化建议取半量克重
+        // 建议碳水 51.9 > 实际 50，待削量为负 → 全部保持原量，不再触发「减半」
+        assertEquals("可乐 正常 · 奶茶 正常", service.predict(USER_ID, req).getSuggestText());
         PredictionDtos.PredictResult r = service.predict(USER_ID, req);
-        assertSuggest(r.getSuggestItems(), "可乐", "150");
-        assertSuggest(r.getSuggestItems(), "奶茶", "150");
+        assertSuggest(r.getSuggestItems(), "可乐", null);
+        assertSuggest(r.getSuggestItems(), "奶茶", null);
     }
 
     @Test
@@ -235,8 +252,8 @@ class PredictionServiceTest {
         PredictionDtos.PredictRequest req = request("lunch", "6.0", "100");
         req.setItems(List.of(item("米饭", 1, "100", "100")));
 
-        // 建议克重 45g，不低于主食保底 30g
-        assertEquals("米饭 45g", service.predict(USER_ID, req).getSuggestText());
+        // 建议碳水 51.865979 → 米饭克重 51.865979 g → 52 g，不低于主食保底 30 g
+        assertEquals("米饭 52g", service.predict(USER_ID, req).getSuggestText());
     }
 
     @Test

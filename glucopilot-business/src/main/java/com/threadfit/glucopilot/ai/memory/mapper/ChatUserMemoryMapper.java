@@ -1,8 +1,10 @@
 package com.threadfit.glucopilot.ai.memory.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import com.threadfit.glucopilot.ai.memory.entity.ChatUserMemoryEntity;
 
@@ -45,4 +47,28 @@ public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
      */
     @Delete("DELETE FROM chat_user_memory WHERE user_id = #{userId}")
     int purgeByUserId(@Param("userId") Long userId);
+
+    /**
+     * 审计分页（管理端「AI 审计 → 记忆」）。
+     *
+     * <p>{@code includeDeleted} 的取舍：默认只看生效行，因为运营日常要回答的是
+     * 「系统现在记着什么」；但审计要能回答「曾经记过什么、什么时候被抹掉的」，
+     * 所以给了显式开关，而不是干脆把已删行滤掉——滤掉就等于失去了核查删除行为的能力。
+     *
+     * <p>排序用 {@code gmt_modified DESC}：记忆是「最新覆盖最旧」的更新型数据，
+     * 按创建时间排会把刚被改写的老记忆压到后面。
+     */
+    @Select("<script>"
+            + "SELECT * FROM chat_user_memory WHERE 1 = 1"
+            + "<if test='!includeDeleted'> AND is_deleted = 0</if>"
+            + "<if test='userId != null'> AND user_id = #{userId}</if>"
+            + "<if test='memoryKey != null'> AND memory_key = #{memoryKey}</if>"
+            + "<if test='keyword != null'> AND LOCATE(#{keyword}, memory_text) &gt; 0</if>"
+            + " ORDER BY gmt_modified DESC, id DESC"
+            + "</script>")
+    IPage<ChatUserMemoryEntity> selectAuditPage(IPage<ChatUserMemoryEntity> page,
+                                                @Param("userId") Long userId,
+                                                @Param("memoryKey") String memoryKey,
+                                                @Param("keyword") String keyword,
+                                                @Param("includeDeleted") boolean includeDeleted);
 }

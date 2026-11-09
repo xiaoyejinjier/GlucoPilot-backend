@@ -10,6 +10,7 @@ import com.threadfit.glucopilot.ai.scene.service.AiSceneBindingService;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
@@ -296,8 +297,19 @@ public class SceneModelResolver {
                 thinkingApplied = true;
             }
         }
-        if (boundEndpoint == null && temperature == null && maxTokens == null && !thinkingApplied) {
-            // 三个字段都给不出时：继承模型自身的参数，不额外发请求级 options
+        boolean jsonApplied = false;
+        if (!scene.isRequiresVision() && Boolean.TRUE.equals(config.getJson())) {
+            // 要求 JSON 对象输出：翻译这类「键集合由调用方给定」的场景必须开，否则模型会包 ```json 围栏
+            // 或加一层 wrapper。放在这里统一处理，能力层就不必认识 OpenAiChatOptions。
+            builder.responseFormat(
+                    OpenAiChatModel.ResponseFormat.builder()
+                            .type(OpenAiChatModel.ResponseFormat.Type.JSON_OBJECT)
+                            .build());
+            jsonApplied = true;
+        }
+        if (boundEndpoint == null && temperature == null && maxTokens == null && !thinkingApplied
+                && !jsonApplied) {
+            // 四个字段都给不出时：继承模型自身的参数，不额外发请求级 options
             return null;
         }
         if (!modelSet && spec != null) {

@@ -149,27 +149,24 @@ public class AdminCommunityHttpTest {
     }
 
     @Test
-    void mutationsRequireBothAdminRoleAndWritePermissionAndUseCurrentOpsId() {
+    void mutationsRequireWritePermissionAndUseCurrentOpsId() {
         try (var context = new AnnotationConfigApplicationContext(Config.class)) {
             var controller = context.getBean(AdminCommunityController.class);
             var review = new PublicationDtos.Review(3, "APPROVE", "通过");
-            for (String[] permissions :
-                    List.of(new String[] {"content:news:edit"}, new String[] {"ROLE_admin"})) {
-                SecurityContextHolder.getContext()
-                        .setAuthentication(
-                                new TestingAuthenticationToken("ops", "n/a", permissions));
-                assertThrows(AccessDeniedException.class, () -> controller.review(7, review));
-                assertThrows(AccessDeniedException.class, () -> controller.retry(7));
-                assertThrows(
-                        AccessDeniedException.class,
-                        () ->
-                                context.getBean(AdminCommunityReportController.class)
-                                        .resolve(9, new ReportDtos.Resolution("DISMISS", "说明")));
-            }
+            // 只有 ROLE_admin、没有 content:news:edit：仍然拒绝——角色不能代替权限点
+            SecurityContextHolder.getContext()
+                    .setAuthentication(new TestingAuthenticationToken("ops", "n/a", "ROLE_admin"));
+            assertThrows(AccessDeniedException.class, () -> controller.review(7, review));
+            assertThrows(AccessDeniedException.class, () -> controller.retry(7));
+            assertThrows(
+                    AccessDeniedException.class,
+                    () ->
+                            context.getBean(AdminCommunityReportController.class)
+                                    .resolve(9, new ReportDtos.Resolution("DISMISS", "说明")));
+            // 有 content:news:edit、没有 admin 角色：放行——谁能拿到这个权限点，谁就能治理社区
             SecurityContextHolder.getContext()
                     .setAuthentication(
-                            new TestingAuthenticationToken(
-                                    "ops", "n/a", "ROLE_admin", "content:news:edit"));
+                            new TestingAuthenticationToken("ops", "n/a", "content:news:edit"));
             RequestContext.setOpsId(99L);
             controller.review(7, review);
             controller.retry(7);

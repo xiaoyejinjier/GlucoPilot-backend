@@ -71,7 +71,7 @@ public class UserReminderServiceTest {
                         + " VARCHAR(32),resolved_at TIMESTAMP(3),feedback_read_at TIMESTAMP(3))");
         var migration =
                 new ResourceDatabasePopulator(
-                        new ClassPathResource("db/migration/V53__user_reminder_reads.sql"));
+                        new ClassPathResource("db/migration/V56__user_reminder_reads.sql"));
         migrationConnection = ds.getConnection();
         migration.populate(migrationConnection);
         jdbc.update("INSERT INTO user_account(id) VALUES(1),(2)");

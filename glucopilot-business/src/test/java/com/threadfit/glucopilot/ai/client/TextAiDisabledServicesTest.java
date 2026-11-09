@@ -38,7 +38,7 @@ class TextAiDisabledServicesTest {
             .withBean(AiChatClientRegistry.class, () -> {
                 // 无密钥部署：registry 拿不到 summary client，摘要/记忆抽取按"可选"静默跳过
                 AiChatClientRegistry registry = mock(AiChatClientRegistry.class);
-                when(registry.summaryAvailable()).thenReturn(false);
+                when(registry.utilityAvailable()).thenReturn(false);
                 return registry;
             })
             .withBean(JsonUtils.class, () -> mock(JsonUtils.class))

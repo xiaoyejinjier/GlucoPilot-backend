@@ -148,6 +148,26 @@ class ChatHistoryAssemblerTest {
     }
 
     @Test
+    void 本轮的系统提示词排在最前() {
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                List.of(new UserMessage("第一条"), new AssistantMessage("好的")),
+                List.of(new SystemMessage("场景提示词：你是控糖助手"), new UserMessage("本轮")),
+                "用户早餐前 6.8", List.of(), 100);
+
+        assertEquals(5, result.messages().size(), "系统提示词 + 附加上下文 + 2 条历史 + 1 条本轮");
+        assertInstanceOf(SystemMessage.class, result.messages().get(0));
+        assertEquals("场景提示词：你是控糖助手", result.messages().get(0).getText(),
+                "人设与医疗约束必须排在历史之前，否则多轮对话里这条约束会被历史淹没");
+        assertInstanceOf(SystemMessage.class, result.messages().get(1));
+        assertTrue(result.messages().get(1).getText().contains("更早对话的摘要"));
+        assertEquals("第一条", result.messages().get(2).getText());
+        assertEquals("好的", result.messages().get(3).getText());
+        assertEquals("本轮", result.messages().get(4).getText());
+        assertEquals(ChatContextShard.KEY_SYSTEM_PROMPT, result.shards().get(0).contextKey(),
+                "分片账本的第一片必须还是系统提示词，与实际位置一致");
+    }
+
+    @Test
     void 工具摘要只留最近若干条() {
         properties.getMemory().setToolReplayMaxItems(2);
 

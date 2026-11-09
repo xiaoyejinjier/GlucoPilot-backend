@@ -24,12 +24,16 @@ import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
  *
  * <h2>装配顺序（与最终消息顺序一致）</h2>
  * <ol>
- *   <li>调用方已经把系统提示词放在最前（{@code DynamicPromptAdvisor}），本类不动它；</li>
- *   <li>附加上下文（更早对话摘要 + 最近工具结果摘要）：作为<b>一条</b> {@link SystemMessage} 插在最前，
- *       并显式标注"不是本轮原话"，避免模型把摘要当成用户刚说的话去回应；</li>
+ *   <li>本轮消息里的 {@link SystemMessage}（{@code DynamicPromptAdvisor} 注入的场景提示词）：
+ *       提到<b>最前</b>，人设与医疗约束因此永远在第一条。调用方已经把它放进了 {@code current}，
+ *       本类负责把它从"本轮新增消息"里拆出来，否则它会落在历史之后；</li>
+ *   <li>附加上下文（长期记忆 + 更早对话摘要 + 最近工具结果摘要）：作为<b>一条</b> {@link SystemMessage}
+ *       接在场景提示词之后，并显式标注"不是本轮原话"，避免模型把摘要当成用户刚说的话去回应；</li>
  *   <li>历史（从老到新，可能被预算裁掉最老的部分）；</li>
- *   <li>本轮消息（调用方传入的 {@code current}，<b>永不裁剪</b>）。</li>
+ *   <li>本轮的非系统消息（用户提问、图片等，<b>永不裁剪</b>）。</li>
  * </ol>
+ * 这三段附加上下文的分片顺序（系统提示 → 记忆 → 摘要 → 工具结果 → 历史）与上面的消息顺序一致，
+ * 所以 {@code chat_context} 账本记录的位置就是实际发出去的位置。
  *
  * <h2>保底与超预算</h2>
  * 无论预算多紧，都至少保留 {@code ai.memory.keep-recent-messages} 条最近历史：
@@ -158,13 +162,27 @@ public class ChatHistoryAssembler {
         }
         java.util.Collections.reverse(kept);
 
+        // 本轮消息里的 SystemMessage（场景提示词）必须留在最前：调用方（DynamicPromptAdvisor）
+        // 已经把它放进了 current，但 current 是"本轮新增消息"，直接接在历史后面会让
+        // 人设与医疗约束落到历史之后、紧贴用户提问——多轮对话里这条约束的位置就变了。
+        // 所以先把它拆出来，再按 [提示词, 记忆/摘要, 历史, 本轮] 重排。
+        List<Message> leadingSystems = new ArrayList<>();
+        List<Message> currentBody = new ArrayList<>(safeCurrent.size());
+        for (Message message : safeCurrent) {
+            if (message instanceof SystemMessage) {
+                leadingSystems.add(message);
+            } else {
+                currentBody.add(message);
+            }
+        }
+
         // 去掉"历史末尾与本轮重复"的那条用户消息。
         // 背景：接口 2.24 先把用户消息落库、2.25 再开流，而记忆是从库里读的——于是本轮这条
         // 既在历史末尾、又在 current 里。不去重就会把同一句话送两遍（白花 token，还容易让模型
         // 以为用户重复问了一次）。这条规则从旧版 Advisor 的 merge(...) 原样搬过来。
         // 被去掉的那条不再进 prompt，分片里的历史 token 也要跟着扣掉，
         // 否则"分片之和"会比实际发出的 prompt 多出整整一条消息
-        Message removedDuplicate = dropTrailingDuplicate(kept, safeCurrent);
+        Message removedDuplicate = dropTrailingDuplicate(kept, currentBody);
         int droppedDuplicate = removedDuplicate == null ? 0 : 1;
         if (removedDuplicate != null) {
             historyTokens -= tokenEstimator.estimateMessage(textOf(removedDuplicate));
@@ -173,12 +191,13 @@ public class ChatHistoryAssembler {
         List<ChatContextShard> shards = buildShards(fixedOverhead, memorySection, summarySection, toolSection,
                 memoryUsed, summaryUsed, toolDigestUsed, historyTokens);
 
-        List<Message> messages = new ArrayList<>(keptCount + safeCurrent.size() + 1);
+        List<Message> messages = new ArrayList<>(leadingSystems.size() + keptCount + currentBody.size() + 1);
+        messages.addAll(leadingSystems);
         if (contextMessage != null) {
             messages.add(contextMessage);
         }
         messages.addAll(kept);
-        messages.addAll(safeCurrent);
+        messages.addAll(currentBody);
         return new Assembled(List.copyOf(messages),
                 new Stats(keptCount, safeHistory.size() - keptCount - droppedDuplicate, used, budget,
                         summaryUsed, toolDigestUsed),

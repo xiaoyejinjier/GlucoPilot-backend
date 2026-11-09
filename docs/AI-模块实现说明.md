@@ -389,7 +389,7 @@ private ChatRequest withMemory(ChatRequest request) {
 
 > **红线**：Advisor 的回调不在请求线程上，**绝对不能碰 `RequestContext`**（ThreadLocal）。userId 只能从 `request.context()` 的 advisor 参数里拿。
 
-### 6.2 `ChatHistoryAssembler`（309 行）：预算怎么花
+### 6.2 `ChatHistoryAssembler`（329 行）：预算怎么花
 
 ```java
 public record Assembled(List<Message> messages, Stats stats, List<ChatContextShard> shards) {}
@@ -407,8 +407,12 @@ public record Stats(int keptHistory, int droppedHistory, int estimatedTokens, in
 3. `used = fixedOverhead + estimate(contextMessage) + Σ estimate(current)`；
 4. **从最新往回装**：`kept.size() < windowMessages` 且（`kept.size() < keepRecentMessages` 无条件保底 **或** `used + cost <= budget`），否则 break；
 5. 反转成时间正序；
-6. `dropTrailingDuplicate(kept, current)`：历史末尾若与本轮用户消息重复则去掉一条（token 也要跟着扣，否则分片之和比真实 prompt 多一条）；
-7. `buildShards(...)` 产出分片清单，顺序固定「系统提示 → 长期记忆 → 摘要 → 工具摘要 → 历史消息」。
+6. 先把本轮里的 `SystemMessage`（`DynamicPromptAdvisor` 注入的场景提示词）拆出来留待放最前——调用方已经把它放进了 `current`，而 `current` 是"本轮新增消息"，直接接在历史后面会让人设与医疗约束落到历史之后；
+7. `dropTrailingDuplicate(kept, currentBody)`：历史末尾若与本轮用户消息重复则去掉一条（token 也要跟着扣，否则分片之和比真实 prompt 多一条）；
+8. 按 `[场景提示词, 附加上下文, 历史, 本轮非系统消息]` 重排；
+9. `buildShards(...)` 产出分片清单，顺序固定「系统提示 → 长期记忆 → 摘要 → 工具摘要 → 历史消息」，与上面的消息顺序一致。
+
+**顺序由两个类共同保证**：`DynamicPromptAdvisor` 负责把提示词放到请求最前，本类负责拼历史时不把它挤到后面。只改一边就会出现「首轮正常、第二轮起提示词落到历史后面」——曾经的真实缺陷就是这样漏过 940 个用例的（两边各自的单测都只检查自己那一半），回归用例是 `AdvisorChainOrderTest`（把两条 advisor 串成一条链后断言最终 prompt）。
 
 「保底条数优先」= `keepRecentMessages` 之内的消息即使超预算也保留：最近几轮是语义连贯的最小成本，宁可超一点也不能断在这儿。日志里那句「超预算：保底条数优先」就出自这里。
 
@@ -1239,7 +1243,7 @@ ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessi
 | --- | --- |
 | AI 相关测试类 | 47 个（`ai/**` 下） |
 | 全量单测 | 934 用例，0 失败 0 错误 5 跳过（112 套件） |
-| 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`DynamicPromptAdvisorTest`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包） |
+| 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`DynamicPromptAdvisorTest`、`AdvisorChainOrderTest`（两条 advisor 串成一条链后的消息顺序）、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包） |
 | 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
 | 迁移 | Flyway v54（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`） |
 

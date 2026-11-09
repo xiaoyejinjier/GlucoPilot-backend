@@ -22,9 +22,14 @@ import org.springframework.web.bind.annotation.RestController;
  * <h2>为什么不提供写/删</h2>
  * 分片与业务数据同生命周期，删会话时该不该跟着删仍然是产品决定；在它变成决定之前不给"顺手删掉"
  * 的入口（账号注销的物理删除走 {@code ChatContextMapper.purgeByUserId}，是另一条合规路径）。
+ *
+ * <h2>权限为什么是 ai:chat:audit 而不是 ai:model:query</h2>
+ * 分片回答的是「这一轮的提示词/记忆/摘要各占多少预算」，它描述的是<b>某次真实对话</b>；
+ * 配合会话 ID 可以定位到具体用户。{@code ai:model:query} 的语义是"能看模型配置"，不该顺带获得
+ * 读对话的能力，因此拆出 {@code ai:chat:audit}（V53）。
  */
 @RestController
-@RequestMapping("/admin/v1/ai/chat-sessions")
+@RequestMapping("/admin/v1/ai/audit/sessions")
 @RequiredArgsConstructor
 public class AdminChatContextController {
 
@@ -32,7 +37,7 @@ public class AdminChatContextController {
 
     /** 查某个会话的分片审计；{@code round} 可选，缺省返回全部轮次。 */
     @GetMapping("/{sessionId}/context")
-    @PreAuthorize("@ss.hasPermi('ai:model:query')")
+    @PreAuthorize("@ss.hasPermi('ai:chat:audit')")
     public ApiResponse<ChatContextDtos.ContextView> context(@PathVariable Long sessionId,
                                                             @RequestParam(required = false) Integer round) {
         return ApiResponse.ok(queryService.view(sessionId, round));

@@ -131,11 +131,11 @@ public class AiChatClientConfig {
 
 `medicalGuard()` 这个 `@Bean` 可能返回 **null**：`ai.guard.enabled=false` 或敏感词为空时打一条 WARN（「医疗安全硬拦截未启用」）并返回 null，`advisors(...)` 里做非空过滤——即「关掉守卫」是合法配置，不是启动失败。
 
-### 2.3 第二个 ChatClient：`summaryChatClient`
+### 2.3 第二个 ChatClient：`utilityChatClient`
 
 ```java
-@Bean("summaryChatClient")
-public ChatClient summaryChatClient(@Qualifier("glucopilotTextChatModel") ChatModel textChatModel,
+@Bean("utilityChatClient")
+public ChatClient utilityChatClient(@Qualifier("glucopilotTextChatModel") ChatModel textChatModel,
                                     AiPromptTemplateService promptTemplateService) {
     return ChatClient.builder(textChatModel)
             .defaultTemplateRenderer(promptTemplateService.renderer())
@@ -143,7 +143,9 @@ public ChatClient summaryChatClient(@Qualifier("glucopilotTextChatModel") ChatMo
 }
 ```
 
-无工具、无 advisor。摘要与记忆抽取都用它：它们要的是「一段文本进、一段文本出」，任何历史注入/提示词替换都会污染输入。注意它绑的是**自动装配的那个 ChatModel**（`glucopilotTextChatModel`），不是 `DynamicChatModel`——摘要是后台批处理，不该跟着前台场景绑定走。
+无工具、无 advisor。摘要、记忆抽取、内容审核、中英翻译都用它：它们要的是「一段文本进、一段文本出」，任何历史注入/提示词替换都会污染输入。注意它绑的是**自动装配的那个 ChatModel**（`glucopilotTextChatModel`），不是 `DynamicChatModel`——这些是后台任务，不该跟着前台会话的记忆与人设走。
+
+> 2026-11 收束时从 `summaryChatClient` 改名而来：它服务的场景从 2 个变成 4 个，名字再叫 summary 会误导后来者。
 
 ---
 
@@ -496,7 +498,7 @@ AiPromptTemplateService.validateRenderable(text, config.getVariables(), "classpa
 类别：medical_advice
 严重度：3
 ```
-而不是 `{"verdict": "REJECT"}`。解析侧 `CommunityModerationParser` 因此写成逐行 `key：value`，容忍中英文冒号、`=`、Markdown。
+而不是 `{"verdict": "REJECT"}`。解析侧 `ContentModerationParser` 因此写成逐行 `key：value`，容忍中英文冒号、`=`、Markdown。
 
 ### 7.3 `DynamicPromptAdvisor`：替换，不是追加
 
@@ -983,7 +985,9 @@ public SpeechDtos.Result transcribe(Long userId, SpeechDtos.Request request) {
 
 设计文档在 `docs/AI-社区内容审核设计.md`，这里只讲实现骨架。
 
-### 13.1 `CommunityModerationWorker`：定时捞任务
+### 13.1 `CommunityModerationWorker`：只剩节拍
+
+收束后它不再碰提示词、模型与解析——**只负责「多久捞一次」与「捞到之后交给谁」**：
 
 ```java
 @Scheduled(initialDelayString = "${community.moderation.initial-delay:10000}",
@@ -991,23 +995,20 @@ public SpeechDtos.Result transcribe(Long userId, SpeechDtos.Request request) {
 public void runOnce() {
     CommunityModerationQueue.Job job = queue.claim();          // 文章优先，其次评论
     if (job == null) { return; }
-    ChatModel model = models.getIfAvailable();
-    if (model == null) { throw new IllegalStateException("文本模型不可用（ai.model.chat 未启用或未配置凭据）"); }
+    ModerationResult result;
     try {
-        ChatAnswer answer = Mono.fromCallable(() -> call(model, job))
-                .subscribeOn(Schedulers.boundedElastic())
-                .timeout(Duration.ofSeconds(45))                // 单条 45s 上限，超时按失败处理
-                .block();
-        CommunityModerationParser.parse(answer.text()) ...
-        queue.finish(job, verdict, answer.modelCode(), promptVer());
+        result = moderation.judge(request(job));               // ai/business/moderation
     } catch (RuntimeException e) {
-        // 失败不放行：文章停在 AI_ERROR（不会自动发布），评论不隐藏但也不算通过
-        queue.finish(job, ModerationVerdict.error("AI 初审暂不可用，请重新初审；未自动发布文章"), "", promptVer());
+        // 能力层承诺不抛异常，这里只是最后一道保险：失败不放行
+        result = new ModerationResult(ModerationVerdict.error("AI 初审暂不可用，请重新初审；未自动发布文章"), "", "");
     }
+    queue.finish(job, result.verdict(), result.modelCode(), result.promptVersion());
 }
 ```
 
-`payload(job)` 用**纯文本字段清单**而不是 JSON：
+判断逻辑在 `ModelContentModerationService`：`clients.utilityClient()` → `prompts.systemPrompt(MODERATION)` → 45s 超时 → `ContentModerationParser.parse` → 失败转 `ERROR`。**`community` 侧不再 import 任何模型类**，这条单向依赖由 `AiModuleBoundaryTest` 守着。
+
+`ModerationRequest.promptText()` 用**纯文本字段清单**而不是 JSON：
 
 ```
 类型：文章
@@ -1018,6 +1019,8 @@ public void runOnce() {
 ```
 
 理由同 §7.2：提示词里不能出现成对花括号，让模型照抄 JSON 等于自找解析失败。
+
+`modelCode` 取 `response.getMetadata().getModel()`——**落库的必须是真被调用的那个模型**，而不是「按配置应该是的那个」。两者不一致时，排查只能靠这一列。
 
 `modelCode` 取 `response.getMetadata().getModel()`——**落库的必须是真被调用的那个模型**，而不是「按配置应该是的那个」。两者不一致时，排查只能靠这一列。
 
@@ -1058,15 +1061,37 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 
 > 注意文章的 PASS 只是 `PENDING_ADMIN`：AI 初审通过仍需人工终审（先审后发）。评论是 PASS 直接可见、REJECT 直接 `is_hidden=1`（先发后审）。
 
-### 13.3 三个配套类
+### 13.3 审核能力的六个件（`ai/business/moderation`）
 
-| 类 | 职责 |
-| --- | --- |
-| `CommunityModerationParser` | 逐行 `key：value` 解析；容忍中英文冒号/`=`/Markdown；`MAX_RESPONSE_CHARS=6000`、`MAX_REASON_CHARS=200`；**所有异常路径返回 `ERROR`，不返回 PASS** |
-| `ModerationVerdict` | `record(verdict, category, severity, confidence, reason, hits)` + `PASS/REJECT/ERROR` 三态 |
-| `ModerationCategories` | 12 个类别编码（`porn`/`violence`/`illegal_goods`/`medical_claim`/`medical_advice`/`scam_ad`/`privacy`/`hate_harass`/`political`/`minor`/`pseudo_science`/`off_topic`），`of(code)` 大小写不敏感，未知 → `NONE` |
+包内按职责分四层，和其它业务域同一套规则：`dto/`（跨接口的数据）、`support/`（无状态辅助件）、`service/`（接口）、`service/impl/`（实现）。
+
+| 类 | 所在子包 | 职责 |
+| --- | --- | --- |
+| `ContentModerationService`（接口） | `service/` | `ModerationResult judge(ModerationRequest)` + `String promptVersion()`；**承诺不抛异常**，失败返回 `ERROR` |
+| `ModelContentModerationService`（实现） | `service/impl/` | `utilityChatClient` + `ai.scenes.moderation` 参数 + 45s 超时 + 解析；`community` 侧只依赖接口 |
+| `ModerationRequest` / `ModerationResult` | `dto/` | 入参 `record(kind, title, tags, body)`（含 `promptText()` 摊平）/ 出参 `record(verdict, modelCode, promptVersion)` |
+| `ModerationVerdict` | `dto/` | `record(verdict, category, severity, confidence, reason, hits)` + `PASS/REJECT/ERROR` 三态 |
+| `ContentModerationParser` | `support/` | 逐行 `key：value` 解析；容忍中英文冒号/`=`/Markdown；`MAX_RESPONSE_CHARS=6000`、`MAX_REASON_CHARS=200`；**所有异常路径返回 `ERROR`，不返回 PASS** |
+| `ModerationCategories` | `support/` | 12 个类别编码（`porn`/`violence`/`illegal_goods`/`medical_claim`/`medical_advice`/`scam_ad`/`privacy`/`hate_harass`/`political`/`minor`/`pseudo_science`/`off_topic`），`of(code)` 大小写不敏感，未知 → `NONE` |
 
 **fail closed** 是这里的铁律：解析不出一行可识别的结论 → `ERROR`，而 `ERROR` 既不等于 PASS 也不隐藏内容——它把决定权交回人工。审核链最怕的不是漏判，是「解析失败被当成通过」。
+
+---
+
+### 13.4 中英翻译：`ai/business/translation`
+
+`localization` 模块原来自己拼 `OpenAiChatOptions`、自己写 `SYSTEM` 常量、自己取 `ChatModel`。收束后职责切成两半：
+
+| 谁 | 管什么 |
+| --- | --- |
+| `localization/LocalizationService` | 缓存表 `content_localization`、`(kind, resource_id, source_hash, locale)` 主键、PENDING 租约与 `retry_after`、批量上限、授权闸（`community.requireReadable`）、`direct()` 纯英文直判 |
+| `ai/business/translation/service/EnglishTranslator`（接口） | **文本进、文本出**：`translate(kind, source)` + `promptVersion()`。它不知道文章、也不知道缓存表 |
+| `ai/business/translation/service/impl/ModelEnglishTranslator` | `utilityChatClient` + `ai.scenes.translation`（`json: true`）+ 校验（数字/单位/URL 保真）+ 重试 1 次 |
+
+两个细节值得记：
+
+- **提示词版本进缓存键**：`source_hash = SHA-256(CACHE_VERSION + promptVersion() + 源文本)`。改一版提示词就等于全量失效重翻，否则旧译文会永远留在库里；`content_localization.prompt_ver`（V54 新增）是为了事后能回答「这条译文是哪版提示词产的」。
+- **必须 `.messages(...)` 不能 `.user(...)`**：`ChatClient.user(String)` 会把入参当模板渲染，而翻译的入参是 `{"title":"…"}` 这样的 JSON——花括号一进来就被 StringTemplate 当变量表达式。`SystemMessage` + `UserMessage` 是唯一安全写法，审核链路同理。
 
 ---
 
@@ -1088,6 +1113,57 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 - 提示词：`refreshNow()` 立即重载库表快照。
 - 场景：绑定查询本身很轻，直接查。
 - API Key：落库前 `AiModelCipher.encrypt`，读出时 `decryptOrNull`，列表页 `mask`。
+
+---
+
+## 14.1 会话审计面：只读两段式 + 读正文留痕
+
+后台看用户对话，本质是「运维在读别人的隐私」，所以这一面刻意做成**两段式**，而不是一个万能查询接口。
+
+| 关注点 | 表 | Service | Controller | 权限点 |
+| --- | --- | --- | --- | --- |
+| 会话清单 | `chat_session`（+ `user_profile` 昵称、`chat_context` 轮次计数） | `AdminChatSessionServiceImpl#list` | `AdminChatSessionController` | `ai:chat:audit` |
+| 消息预览 | `chat_message` | `#messages` | 同上 | `ai:chat:audit` |
+| 单条全文 | `chat_message` | `#messageDetail` | 同上 | `ai:chat:audit` |
+| 分片账本 | `chat_context` | `ChatContextService` | `AdminChatContextController` | `ai:chat:audit` |
+
+- **列表与预览都不返回正文**。预览 200 字封顶（`PREVIEW_MAX_CHARS`），先折叠空白再截断加 `…`，所以字符串最长 201 字符；图片取 `media_caption`、语音取 `asr_text`，都没有就按类型给 `[图片]`/`[语音]`/`[空消息]`。
+- **全文接口是唯一出口**，且每次调用都写一条 `ops_audit_log`：`module_code=ai`、`action_code=ai_chat_audit_view`、`target_type=chat_message`、`target_id=消息ID`，`detail_json` 只放 `{"sessionId":N}` —— **正文不进审计**，审计只回答「谁在什么时候看了哪条」。
+- **不提供按正文关键词搜索**：那等于隐式的全文批量读取，会绕过上面的留痕。会话列表的关键词只匹配标题与用户昵称。
+- **越权一律 404 且不留痕**：`messageDetail` 先校验 `message.sessionId == sessionId`，不匹配按「消息不存在或不属于该会话」返回，避免「用会话 A 的入口试出会话 B 有没有消息 ID」。
+- 权限点在 V53 从 `ai:model:query` 拆成 `ai:chat:audit`（含原始对话，只授超管），并顺带把用量页拆出 `ai:usage:view`：**配置、成本、隐私审计是三类不同的关注点**，不该共用一个权限点。
+- 前端（管理端 `src/views/ai/ChatSessionView.vue`）只在用户点「展开原文」时请求全文，结果缓存在内存、收起即删；这是刻意的——预取会让审计表里堆满「没人真看过」的记录。
+- **分片账本的唯一读出口是 `GET /admin/v1/ai/audit/sessions/{id}/context`，页面入口在同一个抽屉的「上下文构成」区块**：默认收起，展开才请求，用 `flex` 权重画一条按 `contextType` 着色的占比条（系统提示词 / 长期记忆 / 滚动摘要 / 工具摘要 / 历史消息），图例给出每个分片的估算 token。该区块**不写审计**——它只有元数据、没有正文，展开它不等于读了用户内容；这与「读正文必留痕」是两条独立的线。
+- 这套分片**不参与任何运行时决策**：下一轮装配不读 `chat_context`（`ChatContextReader` 读的是摘要/工具摘要/长期记忆）、预算校准用厂商返回的真实 `prompt_tokens`、用量报表读 `chat_message`。它的价值只在「这一轮 2900 token 花在哪」的可解释性——这也解释了为什么页面做得很轻：没有它，问答照样正确、成本一分不差。
+
+---
+
+## 14.2 AI 审计面：七个页签各自读哪张表
+
+会话审计只是「AI 审计」的一个页签。同一个页面（管理端 `/ai/audit` → `AiAuditView.vue`）把模型在业务里留下的**六种流水**聚在一起，全部只读、没有删除与导出：
+
+| 页签 | 表 | Service / Mapper | Controller | 回答的问题 |
+| --- | --- | --- | --- | --- |
+| 会话 | `chat_session` / `chat_message` / `chat_context` | `AdminChatSessionServiceImpl` | `AdminChatSessionController` | 谁在用、聊了什么（见 14.1） |
+| 工具调用 | `chat_tool_call` | `AiAuditServiceImpl#toolCalls` + `ChatToolCallMapper.selectAuditPage` | `AdminAiAuditController` | 模型调了哪些工具、成没成、花了多久 |
+| 长期记忆 | `chat_user_memory` | `#memories` + `ChatUserMemoryMapper.selectAuditPage` | 同上 | 系统给对方记下了什么 |
+| 滚动摘要 | `chat_session.context_summary`（**不是独立表**） | `#summaries` + `ChatSessionMapper.selectSummaryAuditPage` | 同上 | 摘要有没有把关键信息写丢 |
+| 内容审核 | `community_moderation_hit` | `CommunityModerationMapper.selectHitAuditPage` → `CommunityModerationHitAuditQuery` | `AdminAiAuditController` | 内容被判成了什么 |
+| 翻译 | `content_localization` | `LocalizationMapper.selectAuditPage` → `LocalizationAuditQueryImpl` | `AdminAiAuditController` | 文章/昵称翻成了什么、用的哪版提示词 |
+| 多模态 | `ocr_task` | `#ocrTasks` + `OcrTaskMapper.selectAuditPage` | `AdminAiAuditController` | 图片识别成功没有、结果多长 |
+
+三条边界，写代码时按这个走：
+
+1. **路径统一到一个前缀，SQL 留在表主人那里**：十个审计端点全在 `/admin/v1/ai/audit/**`（会话四个在 `/sessions/**`，其余六个在根下），前端只认一套 URL。但 SQL 仍在 `community` / `localization` 里执行——`ai/audit/service` 只声明端口 `ModerationHitAuditQuery` / `TranslationAuditQuery`，两个模块各自提供实现（依赖倒置）。`AiModuleBoundaryTest` 明确禁止 ai 反向 import 这两个包，所以「把 SQL 搬进 ai」这条捷径不能用。
+2. **权限统一挂 `ai:chat:audit`**：这七个页签是同一件事的不同侧面，各挂一个权限点只会让超管反复授权。代价是「能看审计的人也能看翻译缓存元数据」——因此翻译列表只给 200 字译文预览，不给全文。
+3. **敏感内容两段式不变**：会话正文仍要「展开原文」才请求并留痕（14.1）；审核命中按 V43 的隐私设计**只存位置与片段哈希、不存原文**；记忆与摘要给全文是因为它们本就限长（≤200 字 / ≤800 字），截断会让审计答不出问题。
+
+其它细节：
+
+- **超长关键词一律 400，不静默截断**（`KEYWORD_MAX_CHARS=50`）：静默截断会让运营以为搜的是完整词，实际搜的是前缀。
+- **不加时间区间过滤**：`chat_tool_call`、`chat_user_memory` 等表上没有「按时间范围」的复合索引，加了就是全表扫；需要定位具体时段时用主键游标（工具调用按 `id` 倒序）。
+- **多模态只有 `ocr_task`**：餐食分析 `MealAnalysisServiceImpl.analyze()` 不落库（直接返回结果），所以「AI 看了哪张餐食图」没有可审计的记录——这是当前已知的覆盖缺口，不是页面遗漏。
+- **菜单**：V55 把 V53 建的 2034 行改名为「AI 审计」并指向 `/ai/audit`（权限点不变，已有授权自动指向新页面），管理端路由与静态菜单同步替换掉原来的 `/ai/chat-sessions`。
 
 ---
 
@@ -1115,10 +1191,13 @@ AiChatClientRegistry ──► ChatClient(ObjectProvider), SceneModelResolver
 VisionAnalyzer ──► AiChatClientRegistry, AiPromptTemplateService, MediaFileConstant
 MealAnalysisServiceImpl ──► MediaFileService, VisionAnalyzer, MealFoodCatalogService, JsonUtils, IdempotencyStore
 OcrTaskServiceImpl ──► OcrTaskMapper, MediaFileService, VisionAnalyzer, JsonUtils, IdempotencyStore, Executor
-CommunityModerationWorker ──► CommunityModerationQueue, ChatModel(ObjectProvider), AiPromptTemplateService, SceneModelResolver
-UserChatMemoryServiceImpl ──► summaryChatClient, ChatMessageMapper, ChatMemoryMapper, AiPromptTemplateService,
+CommunityModerationWorker ──► CommunityModerationQueue, ContentModerationService
+ContentModerationService ──► AiChatClientRegistry, AiPromptTemplateService, SceneModelResolver, ContentModerationParser
+ModelEnglishTranslator ──► AiChatClientRegistry, AiPromptTemplateService, SceneModelResolver, JsonUtils
+LocalizationService ──► EnglishTranslator, LocalizationMapper
+UserChatMemoryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatMemoryMapper, AiPromptTemplateService,
                               SceneModelResolver, ChatRoundGuard, Executor
-ChatSummaryServiceImpl ──► summaryChatClient, ChatMessageMapper, ChatSessionMapper, ChatRoundGuard, Executor
+ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessionMapper, ChatRoundGuard, Executor
 ```
 
 三个「反向依赖」是刻意避免的：
@@ -1126,6 +1205,8 @@ ChatSummaryServiceImpl ──► summaryChatClient, ChatMessageMapper, ChatSessi
 - `core` 不依赖 `business`（否则场景解析要跟着业务变）。
 - `ChatMemoryReadAdvisor` 不依赖 `ChatCompletionService`（Advisor 是被 ChatClient 调的，反向依赖会成环）。
 - `VisionAnalyzer` 不认识饮食/OCR（业务语义留在业务 Service 里）。
+
+**AI 模块也不依赖业务模块**：`ai/**` 里不允许出现 `community` / `localization` 的 import（`AiModuleBoundaryTest` 扫源码守着）。审核与翻译的「AI 侧」都在 `ai/business/{moderation,translation}`，业务侧只留表操作、状态机与节拍器。
 
 ---
 
@@ -1156,11 +1237,11 @@ ChatSummaryServiceImpl ──► summaryChatClient, ChatMessageMapper, ChatSessi
 
 | 层次 | 数量/内容 |
 | --- | --- |
-| AI 相关测试类 | 44 个（`ai/**` 下） |
-| 全量单测 | 747 用例，0 失败 0 错误 2 跳过（110 套件） |
-| 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`DynamicPromptAdvisorTest`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`CommunityModerationParserTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库） |
-| 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29 |
-| 迁移 | Flyway v49（V45–49 是 V46 能力化、V48 capability、V49 场景参数） |
+| AI 相关测试类 | 47 个（`ai/**` 下） |
+| 全量单测 | 934 用例，0 失败 0 错误 5 跳过（112 套件） |
+| 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`DynamicPromptAdvisorTest`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包） |
+| 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
+| 迁移 | Flyway v54（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`） |
 
 测试约定（新写测试要遵守）：
 

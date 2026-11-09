@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.localization;
 
 import static com.threadfit.glucopilot.localization.LocalizationDtos.*;
 
+import com.threadfit.glucopilot.ai.business.translation.service.EnglishTranslator;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.community.shared.service.CommunityService;
@@ -25,6 +26,8 @@ public class LocalizationService {
             org.slf4j.LoggerFactory.getLogger(LocalizationService.class);
     // Corrected numeric-heading handling starts fresh jobs instead of reusing older failures.
     private static final String CACHE_VERSION = "en-v3:";
+    /** 汉字探测：只用来判断'这段还有中文吗'，与具体实现无关，因此留在本层。 */
+    private static final java.util.regex.Pattern HAN = java.util.regex.Pattern.compile("\\p{IsHan}");
     private static final Set<String> KINDS =
             Set.of("ARTICLE_PREVIEW", "ARTICLE_BODY", "PROFILE_NAME");
     private final LocalizationMapper mapper;
@@ -164,7 +167,7 @@ public class LocalizationService {
         var cached = cache(item, hash);
         if (cached == null) {
             try {
-                mapper.insertPending(item, hash);
+                mapper.insertPending(item, hash, translator.promptVersion());
             } catch (org.springframework.dao.DuplicateKeyException ignored) {
             }
             cached = cache(item, hash);
@@ -240,7 +243,7 @@ public class LocalizationService {
 
     private Map<String, String> direct(Item item, Map<String, String> source) {
         if (source.values().stream()
-                .noneMatch(value -> ModelEnglishTranslator.HAN.matcher(value).find())) {
+                .noneMatch(value -> HAN.matcher(value).find())) {
             return source;
         }
         if (item.kind().equals("PROFILE_NAME")) {
@@ -274,6 +277,9 @@ public class LocalizationService {
                             MessageDigest.getInstance("SHA-256")
                                     .digest(
                                             (CACHE_VERSION
+                                                            // 提示词版本进哈希：换提示词 = 换产出，旧缓存必须立刻失效，
+                                                            // 否则「改了提示词却只对没被翻过的文章生效」这种问题极难发现
+                                                            + translator.promptVersion()
                                                             + json.writeValueAsString(
                                                                     new TreeMap<>(source)))
                                                     .getBytes(StandardCharsets.UTF_8)));

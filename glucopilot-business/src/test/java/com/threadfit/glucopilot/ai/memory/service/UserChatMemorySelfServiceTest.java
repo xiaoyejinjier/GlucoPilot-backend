@@ -375,8 +375,8 @@ class UserChatMemorySelfServiceTest {
     /** 把 mock 的 ChatClient 包成 registry：记忆抽取只通过 registry 取客户端。 */
     private static AiChatClientRegistry registryWith(ChatClient client) {
         AiChatClientRegistry registry = mock(AiChatClientRegistry.class);
-        when(registry.summaryAvailable()).thenReturn(true);
-        when(registry.summaryClient()).thenReturn(client);
+        when(registry.utilityAvailable()).thenReturn(true);
+        when(registry.utilityClient()).thenReturn(client);
         return registry;
     }
 }

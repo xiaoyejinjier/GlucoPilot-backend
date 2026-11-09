@@ -1,6 +1,8 @@
 package com.threadfit.glucopilot.ai.business.chat.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
@@ -120,4 +122,82 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
     /** 账号注销：物理删除该用户全部会话（历史删除态一并清掉）。 */
     @Delete("DELETE FROM chat_session WHERE user_id = #{userId}")
     int purgeByUserId(@Param("userId") Long userId);
+
+    /**
+     * 管理端会话列表（只读）。
+     *
+     * <h2>为什么用自写 SQL 而不是 LambdaQueryWrapper</h2>
+     * 列表要两样实体上没有的东西：用户昵称（{@code user_profile.nickname}，跨表）与
+     * 「有没有滚动摘要」（把 {@code context_summary} 非空折成 0/1，避免把 MEDIUMTEXT 整段读出来）。
+     * 用 Wrapper 得先分页再逐会话补查，N+1 且分页总数会与展示的昵称筛选不一致——
+     * 关键词要能按昵称搜，就必须在同一张结果集里过滤。
+     *
+     * <h2>为什么按 {@code COALESCE(last_msg_at, gmt_create)} 倒序</h2>
+     * {@code chat_session} 没有"更新时间"的语义列（{@code gmt_modified} 只随行变更刷新），
+     * 而运营关心的是"最近有人说话的会话"。新建但还没发过消息的会话用创建时间参与排序。
+     *
+     * @param page    分页参数（MyBatis-Plus 分页插件负责 count 与 LIMIT）
+     * @param userId  按用户过滤，可空
+     * @param status  会话状态 0 归档 / 1 进行中 / 2 已结束，可空
+     * @param keyword 匹配会话标题或用户昵称，可空
+     */
+    @Select("""
+            <script>
+            SELECT s.id,
+                   s.user_id,
+                   s.title,
+                   s.session_status,
+                   s.session_type,
+                   s.model_code,
+                   s.system_prompt_ver,
+                   s.msg_count,
+                   s.last_msg_at,
+                   s.gmt_create,
+                   (CASE WHEN s.context_summary IS NULL OR s.context_summary = '' THEN 0 ELSE 1 END) AS has_summary,
+                   (SELECT p.nickname FROM user_profile p WHERE p.user_id = s.user_id AND p.is_deleted = 0 LIMIT 1) AS user_nickname
+            FROM chat_session s
+            WHERE s.is_deleted = 0
+            <if test='userId != null'> AND s.user_id = #{userId}</if>
+            <if test='status != null'> AND s.session_status = #{status}</if>
+            <if test='keyword != null and keyword != ""'>
+              AND ( LOCATE(#{keyword}, s.title) > 0
+                    OR EXISTS (SELECT 1 FROM user_profile p2
+                               WHERE p2.user_id = s.user_id AND p2.is_deleted = 0
+                                 AND LOCATE(#{keyword}, p2.nickname) > 0) )
+            </if>
+            ORDER BY COALESCE(s.last_msg_at, s.gmt_create) DESC, s.id DESC
+            </script>
+            """)
+    IPage<AdminSessionHit> selectAdminPage(IPage<AdminSessionHit> page,
+                                           @Param("userId") Long userId,
+                                           @Param("status") Integer status,
+                                           @Param("keyword") String keyword);
+
+    /**
+     * 审计分页：只列<b>已经有滚动摘要</b>的会话（管理端「AI 审计 → 摘要」）。
+     *
+     * <p>为什么把摘要的读取放在这里而不是新开一张表：摘要就是
+     * {@code chat_session.context_summary} 这一列（V22 的注释已明确「不需要新列」），
+     * 没有摘要就不该出现在这张列表里，否则运营会看到一堆空行。
+     *
+     * <p>这里<b>读全文</b>（{@code SELECT *}），与上面列表刻意折成 0/1 的做法相反：
+     * 审计要判断「摘要有没有丢信息」，只看有没有摘要没有意义。条数由分页兜住，
+     * 且只取 {@code summary-max-chars} 限长过的文本。
+     *
+     * @param keyword 匹配会话标题，可空
+     */
+    @Select("""
+            <script>
+            SELECT * FROM chat_session
+            WHERE is_deleted = 0
+              AND context_summary IS NOT NULL
+              AND context_summary &lt;&gt; ''
+            <if test='userId != null'> AND user_id = #{userId}</if>
+            <if test='keyword != null and keyword != ""'> AND LOCATE(#{keyword}, title) &gt; 0</if>
+            ORDER BY gmt_modified DESC, id DESC
+            </script>
+            """)
+    IPage<ChatSession> selectSummaryAuditPage(IPage<ChatSession> page,
+                                              @Param("userId") Long userId,
+                                              @Param("keyword") String keyword);
 }

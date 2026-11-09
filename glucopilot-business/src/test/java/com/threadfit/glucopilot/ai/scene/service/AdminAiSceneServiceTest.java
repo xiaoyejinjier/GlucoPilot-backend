@@ -276,8 +276,8 @@ class AdminAiSceneServiceTest {
 
         AdminAiSceneDtos.SceneList list = service.list();
 
-        // ② 期 SUMMARY、③ 期 MEMORY、社区 AI 审核新增 MODERATION，共 7 个
-        assertEquals(7, list.getRecords().size());
+        // 断言跟场景枚举走：新增场景（如 TRANSLATION）不需要再改这里
+        assertEquals(SceneCode.values().length, list.getRecords().size());
         assertEquals(1, list.getModels().size());
         assertEquals("DeepSeek Flash", list.getModels().get(0).getName());
         assertEquals("DeepSeek（OpenAI 兼容）", list.getModels().get(0).getProviderName());

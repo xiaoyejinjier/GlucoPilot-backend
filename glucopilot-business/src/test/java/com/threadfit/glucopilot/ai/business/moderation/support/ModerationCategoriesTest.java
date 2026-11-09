@@ -1,4 +1,4 @@
-package com.threadfit.glucopilot.community.moderation.service;
+package com.threadfit.glucopilot.ai.business.moderation.support;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;

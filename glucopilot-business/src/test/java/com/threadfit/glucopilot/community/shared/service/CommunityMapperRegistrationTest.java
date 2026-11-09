@@ -66,6 +66,47 @@ class CommunityMapperRegistrationTest {
             assertEquals(10, context.getBeansOfType(BaseMapper.class).size());
             assertTrue(context.getBeansOfType(CommunityArticleQuery.class).isEmpty());
             assertTrue(context.getBeansOfType(ArticleAccessSql.class).isEmpty());
+
+            // 与接口同路径的XML由MyBatis加载，验证生产扫描不会遗漏迁移后的SQL。
+            for (Class<?> mapper :
+                    new Class<?>[] {
+                        com.threadfit.glucopilot.community.message.mapper.CommunityMessageMapper
+                                .class,
+                        AdminMessageMapper.class,
+                        com.threadfit.glucopilot.community.comment.mapper.CommunityCommentMapper
+                                .class,
+                        com.threadfit.glucopilot.community.comment.mapper
+                                .AdminCommunityCommentMapper.class,
+                        com.threadfit.glucopilot.community.follow.mapper.CommunityFollowMapper
+                                .class,
+                        com.threadfit.glucopilot.community.profile.mapper.CommunityProfileMapper
+                                .class,
+                        com.threadfit.glucopilot.community.article.mapper.CommunityPublicationMapper
+                                .class,
+                        CommunityRecommendationMapper.class,
+                        AdminRecommendationMapper.class
+                    }) {
+                for (var method : mapper.getDeclaredMethods()) {
+                    var statement =
+                            sessions.getConfiguration()
+                                    .getMappedStatement(mapper.getName() + "." + method.getName());
+                    assertEquals(
+                            mapper.getName().replace('.', '/') + ".xml", statement.getResource());
+                }
+            }
+
+            // 迁到XML后，锁查询仍须绕过缓存并保留FOR UPDATE。
+            var lock =
+                    sessions.getConfiguration()
+                            .getMappedStatement(
+                                    "com.threadfit.glucopilot.community.message.mapper."
+                                            + "CommunityMessageMapper.lockMessageParticipants");
+            assertFalse(lock.isUseCache());
+            assertTrue(lock.isFlushCacheRequired());
+            assertTrue(
+                    lock.getBoundSql(java.util.Map.of("firstUser", 1L, "secondUser", 2L))
+                            .getSql()
+                            .contains("FOR UPDATE"));
         }
     }
 }

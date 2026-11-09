@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 与Java接口同路径、同名，MyBatis注册接口时自动加载；id对应接口方法名。 -->
+<mapper namespace="com.threadfit.glucopilot.community.profile.mapper.CommunityProfileMapper">
+    <select id="countActiveUser" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM user_account u
+        WHERE u.id = #{userId}
+          AND u.is_deleted = 0
+          AND u.account_status = 1
+    </select>
+
+    <select id="selectUserProfile" resultType="java.util.HashMap">
+        SELECT
+            u.id,
+            COALESCE(NULLIF(p.nickname,''),'社区用户') nickname,
+            COALESCE(p.avatar_url,'') avatar_url,
+            COALESCE(p.bio,'') bio
+        FROM user_account u
+        LEFT JOIN user_profile p ON p.user_id = u.id
+          AND p.is_deleted = 0
+        WHERE u.id = #{id}
+          AND u.is_deleted = 0
+          AND u.account_status = 1
+    </select>
+
+    <select id="selectBloggerProfile" resultType="java.util.HashMap">
+        SELECT b.*,u.id linked_id
+        FROM community_blogger b
+        LEFT JOIN user_account u ON u.id = b.user_id
+          AND u.is_deleted = 0
+          AND u.account_status = 1
+        WHERE b.id = #{id}
+          AND b.enabled = 1
+    </select>
+
+    <select id="selectArticleUsers" resultType="java.lang.Long">
+        SELECT b.user_id
+        FROM cms_news n
+        JOIN community_blogger b ON b.id = n.blogger_id
+        JOIN user_account u ON u.id = b.user_id
+          AND u.is_deleted = 0
+          AND u.account_status = 1
+        WHERE n.id = #{newsId}
+          AND n.is_deleted = 0
+    </select>
+
+    <select id="selectArticleBlogger" resultType="java.lang.Long">
+        SELECT blogger_id
+        FROM cms_news
+        WHERE id = #{newsId}
+          AND is_deleted = 0
+    </select>
+
+    <select id="countProfileSearch" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM user_account u
+        LEFT JOIN user_profile p ON p.user_id = u.id
+          AND p.is_deleted = 0
+        WHERE u.is_deleted = 0
+          AND u.account_status = 1
+          AND u.id&lt;&gt;#{viewer}
+          AND LOCATE(#{keyword},COALESCE(p.nickname,''))&gt;0
+    </select>
+
+    <select id="selectProfileSearchIds" resultType="java.lang.Long">
+        SELECT u.id
+        FROM user_account u
+        LEFT JOIN user_profile p ON p.user_id = u.id
+          AND p.is_deleted = 0
+        WHERE u.is_deleted = 0
+          AND u.account_status = 1
+          AND u.id&lt;&gt;#{viewer}
+          AND LOCATE(#{keyword},COALESCE(p.nickname,''))&gt;0
+        ORDER BY u.id DESC
+        LIMIT #{limit}
+        OFFSET #{offset}
+    </select>
+</mapper>

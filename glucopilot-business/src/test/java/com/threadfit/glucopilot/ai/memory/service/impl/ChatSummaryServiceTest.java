@@ -80,8 +80,8 @@ class ChatSummaryServiceTest {
     void setUp() {
         chatClient = mock(ChatClient.class);
         clients = mock(AiChatClientRegistry.class);
-        when(clients.summaryAvailable()).thenReturn(true);
-        when(clients.summaryClient()).thenReturn(chatClient);
+        when(clients.utilityAvailable()).thenReturn(true);
+        when(clients.utilityClient()).thenReturn(chatClient);
         requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
         callSpec = mock(ChatClient.CallResponseSpec.class);
         when(chatClient.prompt()).thenReturn(requestSpec);

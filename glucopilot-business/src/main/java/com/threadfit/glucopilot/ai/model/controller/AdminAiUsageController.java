@@ -17,8 +17,9 @@ import java.time.LocalDate;
  * AI 用量报表（只读）。
  *
  * <h2>权限</h2>
- * 用 {@code ai:model:query}：能看模型清单的人就能看这些模型花了多少，不需要 {@code ai:model:manage}
- * （那是改配置的权限）。
+ * 用 {@code ai:usage:view}（V53 从 {@code ai:model:query} 拆出）：用量是成本视角，
+ * 与"能改模型配置"（{@code ai:model:manage}）、"能看模型清单/诊断"（{@code ai:model:query}）
+ * 是三类不同的关注点。这一页只含「天 × 模型」的聚合数字，不涉及任何用户对话内容。
  *
  * <h2>参数</h2>
  * 两个日期都可空：全空 → 最近 7 天；只给 {@code endDate} → 以它为终点往前推 7 天；
@@ -32,7 +33,7 @@ public class AdminAiUsageController {
     private final AiUsageService service;
 
     @GetMapping
-    @PreAuthorize("@ss.hasPermi('ai:model:query')")
+    @PreAuthorize("@ss.hasPermi('ai:usage:view')")
     public ApiResponse<AiUsageDtos.Report> report(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {

@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 与Java接口同路径、同名，MyBatis注册接口时自动加载；id对应接口方法名。 -->
+<mapper namespace="com.threadfit.glucopilot.community.message.mapper.CommunityMessageMapper">
+    <!-- 对方是否发过消息给我：用于判断是否已获得回复、可继续发送。 -->
+    <select id="countReceivedMessages" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM community_message
+        WHERE sender_id = #{peer}
+          AND recipient_id = #{viewer}
+    </select>
+
+    <!-- 我是否已向对方发过消息：未互关、未获回复时，只允许首条。 -->
+    <select id="countSentMessages" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM community_message
+        WHERE sender_id = #{viewer}
+          AND recipient_id = #{peer}
+    </select>
+
+    <!-- 【并发锁】锁有效的双方账号记录，直到Service事务结束；查询ID不代表修改账号资料。
+         XML中的useCache=false、flushCache=true确保锁查询实际访问数据库。 -->
+    <select id="lockMessageParticipants" resultType="java.lang.Long" useCache="false" flushCache="true">
+        SELECT id
+        FROM user_account
+        WHERE id IN (#{firstUser}, #{secondUser})
+          AND is_deleted = 0
+          AND account_status = 1
+        ORDER BY id
+        FOR UPDATE
+    </select>
+
+    <!-- 【幂等查询】以发送者+请求编号读取已保存消息；空列表表示尚未处理。 -->
+    <select id="selectMessageRequest"
+            resultType="com.threadfit.glucopilot.community.message.entity.CommunityMessage" useCache="false" flushCache="true">
+        SELECT *
+        FROM community_message
+        WHERE sender_id = #{viewer}
+          AND client_request_id = #{clientRequestId}
+        FOR UPDATE
+    </select>
+
+    <!-- 【消息落库】V29中的uk_cm_request唯一索引防止同一发送者重复使用同一编号保存消息。 -->
+    <insert id="insertMessage">
+        INSERT INTO community_message (
+            sender_id,
+            recipient_id,
+            content,
+            client_request_id
+        ) VALUES (
+            #{viewer},
+            #{peer},
+            #{content},
+            #{clientRequestId}
+        )
+    </insert>
+
+    <!-- 插入成功或触发唯一键冲突后，按同一编号读回最终消息，供Service核对并返回。 -->
+    <select id="selectSavedMessage"
+            resultType="com.threadfit.glucopilot.community.message.entity.CommunityMessage" useCache="false" flushCache="true">
+        SELECT *
+        FROM community_message
+        WHERE sender_id = #{viewer}
+          AND client_request_id = #{clientRequestId}
+        FOR UPDATE
+    </select>
+
+    <!-- 【游标分页】仅查双方消息；id小于beforeId避免重复，倒序取最近的若干条。 -->
+    <select id="selectMessagesBefore" resultType="com.threadfit.glucopilot.community.message.entity.CommunityMessage">
+        SELECT *
+        FROM community_message
+        WHERE (
+            (sender_id = #{viewer} AND recipient_id = #{peer})
+            OR (sender_id = #{peer} AND recipient_id = #{viewer})
+        )
+        <if test="beforeId != null">
+            AND id &lt; #{beforeId}
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="countConversationMessage" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM community_message
+        WHERE id = #{id}
+          AND (
+              (sender_id = #{viewer} AND recipient_id = #{peer})
+              OR (sender_id = #{peer} AND recipient_id = #{viewer})
+          )
+    </select>
+
+    <!-- 仅把对方发给我的、截至through且尚未读的消息标为已读。 -->
+    <update id="markMessagesRead">
+        UPDATE community_message
+        SET read_at = CURRENT_TIMESTAMP
+        WHERE sender_id = #{peer}
+          AND recipient_id = #{viewer}
+          AND id &lt;= #{through}
+          AND read_at IS NULL
+    </update>
+
+    <select id="countConversations" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM (
+            SELECT
+                CASE WHEN sender_id = #{viewer} THEN recipient_id ELSE sender_id END AS peer_id,
+                MAX(id) AS last_id,
+                SUM(
+                    CASE WHEN recipient_id = #{viewer} AND read_at IS NULL
+                        THEN 1 ELSE 0 END
+                ) AS unread_count
+            FROM community_message
+            WHERE sender_id = #{viewer}
+              OR recipient_id = #{viewer}
+            GROUP BY peer_id
+        ) t
+        JOIN user_account u ON u.id = t.peer_id
+          AND u.is_deleted = 0
+          AND u.account_status = 1
+    </select>
+
+    <select id="selectConversations" resultType="com.threadfit.glucopilot.community.message.entity.CommunityConversationRow">
+        SELECT t.peer_id, t.unread_count, m.*
+        FROM (
+            SELECT
+                CASE WHEN sender_id = #{viewer} THEN recipient_id ELSE sender_id END AS peer_id,
+                MAX(id) AS last_id,
+                SUM(
+                    CASE WHEN recipient_id = #{viewer} AND read_at IS NULL
+                        THEN 1 ELSE 0 END
+                ) AS unread_count
+            FROM community_message
+            WHERE sender_id = #{viewer}
+              OR recipient_id = #{viewer}
+            GROUP BY peer_id
+        ) t
+        JOIN user_account u ON u.id = t.peer_id
+          AND u.is_deleted = 0
+          AND u.account_status = 1
+        JOIN community_message m ON m.id = t.last_id
+        ORDER BY t.last_id DESC
+        LIMIT #{limit}
+        OFFSET #{offset}
+    </select>
+
+    <select id="selectUnread" resultType="java.util.HashMap">
+        SELECT t.unread_count, m.id, m.sender_id
+        FROM (
+            SELECT COUNT(*) AS unread_count, MAX(m.id) AS latest_id
+            FROM community_message m
+            JOIN user_account u ON u.id = m.sender_id
+              AND u.is_deleted = 0
+              AND u.account_status = 1
+            WHERE m.recipient_id = #{viewer}
+              AND m.read_at IS NULL
+        ) t
+        LEFT JOIN community_message m ON m.id = t.latest_id
+    </select>
+</mapper>

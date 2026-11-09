@@ -1,6 +1,8 @@
 package com.threadfit.glucopilot.ai.business.chat.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
@@ -168,4 +170,23 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
      */
     @Delete("DELETE FROM chat_message WHERE user_id = #{userId}")
     int purgeByUserId(@Param("userId") Long userId);
+
+    /**
+     * 管理端按会话倒序翻消息（只读，审计页用）。
+     *
+     * <p>与 C 端 {@code selectHistory} 的区别：那边按 {@code beforeSeqNo} 往前翻且要求
+     * {@code user_id} 归属，这边是运营视角（不校验归属，由 Controller 的权限点把关），
+     * 并且不做"只看有正文的消息"的过滤——审计要能看到"这一轮只有图片"的占位行。
+     */
+    @Select("""
+            <script>
+            SELECT * FROM chat_message
+            WHERE session_id = #{sessionId} AND is_deleted = 0
+            <if test='beforeSeq != null'> AND seq_no &lt; #{beforeSeq}</if>
+            ORDER BY seq_no DESC, id DESC
+            </script>
+            """)
+    IPage<ChatMessage> selectAdminPage(IPage<ChatMessage> page,
+                                       @Param("sessionId") Long sessionId,
+                                       @Param("beforeSeq") Integer beforeSeq);
 }

@@ -276,7 +276,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     /** 会话结束时调用：异步抽取该会话的长期记忆。不阻塞、不抛异常。 */
     @Override
     public void extractAsync(Long userId, Long sessionId, String reason) {
-        if (!clients.summaryAvailable() || userId == null || sessionId == null) {
+        if (!clients.utilityAvailable() || userId == null || sessionId == null) {
             return;
         }
         String key = EXTRACT_KEY_PREFIX + sessionId;
@@ -305,7 +305,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * @return 写入/覆盖的记忆条数
      */
     int runExtract(Long userId, Long sessionId, String reason) {
-        if (!clients.summaryAvailable()) {
+        if (!clients.utilityAvailable()) {
             return 0;
         }
         try {
@@ -393,7 +393,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * 本轮一条都不写（记忆是增强项，写半截比不写更糟）。
      */
     private List<MemoryCandidate> extractCandidates(String input) {
-        var prompt = clients.summaryClient().prompt()
+        var prompt = clients.utilityClient().prompt()
                 .system(promptTemplateService.systemPrompt(SceneCode.MEMORY))
                 .options(sceneModelResolver.memoryOptionsBuilder())
                 .user(input);

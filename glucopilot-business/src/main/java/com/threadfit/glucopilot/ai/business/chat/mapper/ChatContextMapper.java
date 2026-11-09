@@ -1,6 +1,10 @@
 package com.threadfit.glucopilot.ai.business.chat.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Select;
+
+import java.util.Collection;
+import java.util.List;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatContextEntity;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
@@ -26,4 +30,22 @@ public interface ChatContextMapper extends BaseMapper<ChatContextEntity> {
      */
     @Delete("DELETE FROM chat_context WHERE user_id = #{userId}")
     int purgeByUserId(@Param("userId") Long userId);
+
+    /**
+     * 批量取"每个会话记了几轮分片"，供管理端列表一次性标注。
+     *
+     * <p>刻意做成<b>批量</b>而不是逐会话查：列表一页 20 行，逐行查就是 20 次往返；
+     * 这里一条 {@code IN (...)} 带 {@code GROUP BY}，配合 {@code idx_cc_session_round}
+     * 走索引。调用方必须保证集合非空（空集合会生成 {@code IN ()} 语法错误）。
+     */
+    @Select("""
+            <script>
+            SELECT session_id, COUNT(DISTINCT context_round) AS rounds
+            FROM chat_context
+            WHERE session_id IN
+            <foreach collection='sessionIds' item='id' open='(' separator=',' close=')'>#{id}</foreach>
+            GROUP BY session_id
+            </script>
+            """)
+    List<SessionRoundCount> selectRoundCounts(@Param("sessionIds") Collection<Long> sessionIds);
 }

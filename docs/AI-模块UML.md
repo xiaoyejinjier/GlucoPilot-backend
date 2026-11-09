@@ -98,7 +98,7 @@ classDiagram
     }
     class AiChatClientConfig {
         +textChatClient() ChatClient
-        +summaryChatClient() ChatClient
+        +utilityChatClient() ChatClient
         +medicalGuard() Advisor
     }
     class AiVisionClientConfig {
@@ -151,7 +151,7 @@ classDiagram
 | Bean | 来源 | 工具 | Advisor | 为什么 |
 | --- | --- | --- | --- | --- |
 | `textChatClient` | **clone 框架注入的 `ChatClient.Builder`** | ✅ `defaultTools` | ✅ 医疗护栏 / 记忆 / 动态提示词 | 工具由自动装配 Builder 上的 `ToolCallingAdvisor` 执行，自己 `ChatClient.builder()` 会静默丢工具与观测 |
-| `summaryChatClient` | `ChatClient.builder(glucopilotTextChatModel)` | ❌ | ❌ | 摘要/记忆抽取是内部任务，不该带人设、记忆、工具 |
+| `utilityChatClient` | `ChatClient.builder(glucopilotTextChatModel)` | ❌ | ❌ | 摘要 / 记忆抽取 / 内容审核 / 中英翻译都是内部任务，不该带人设、记忆、工具（原来只服务摘要，故曾名 `summaryChatClient`） |
 | `visionChatClient` | `ChatClient.builder(glucopilotVisionChatModel)` | ❌ | ❌ | 视觉通道只做单轮识别，参数由 `ai.vision.*` 烤进模型 |
 
 两个 ChatModel：`glucopilotTextChatModel` 是 `@Primary` 的 `DynamicChatModel`（委托），`glucopilotVisionChatModel` 非 Primary、`yamlFallback=null`。2026-11 协议统一后容器里**只剩这两个**（DeepSeek starter 已移除），`ChatClientAutoConfiguration` 的单值 `ChatModel` 参数固定拿到 `@Primary` 那个；两者的 `yamlFallback` 都为 null，yaml 规格由 `ChatModelFactory` 现造。
@@ -307,7 +307,7 @@ classDiagram
 
 ![§5 记忆与摘要类图](uml/05-memory.png)
 
-两个 `*ServiceImpl` 都：单飞（`ChatRoundGuard` 按 sessionId 加键）→ 由 `SceneModelResolver` 给参数 → 用 `summaryChatClient`（无 advisor）调模型 → 解析 → 写库。区别是摘要写 `chat_session.context_summary`，记忆写 `chat_user_memory`。
+两个 `*ServiceImpl` 都：单飞（`ChatRoundGuard` 按 sessionId 加键）→ 由 `SceneModelResolver` 给参数 → 用 `utilityChatClient`（无 advisor）调模型 → 解析 → 写库。区别是摘要写 `chat_session.context_summary`，记忆写 `chat_user_memory`。
 
 ---
 

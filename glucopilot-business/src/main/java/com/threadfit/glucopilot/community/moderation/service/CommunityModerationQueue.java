@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.community.moderation.service;
 
 import static com.threadfit.glucopilot.community.shared.support.ProjectionValues.*;
 
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.community.article.dto.PublicationDtos;

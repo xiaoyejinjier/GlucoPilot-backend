@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.community.moderation.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.threadfit.glucopilot.community.moderation.entity.CommunityModerationHit;
 
 import org.apache.ibatis.annotations.*;
@@ -97,4 +98,23 @@ public interface CommunityModerationMapper extends BaseMapper<CommunityModeratio
                 + " separator=','>(#{hit.targetType},#{hit.targetId},#{hit.revision},'AI',#{hit.categoryCode},#{hit.severity},#{hit.confidence},#{hit.reason},#{hit.modelCode},#{hit.promptVer})</foreach></script>"
                 + " ")
     int insertHits(@Param("hits") List<CommunityModerationHit> hits);
+
+    /**
+     * 审计分页（管理端「AI 审计 → 内容审核」）：只读，按 id 倒序。
+     *
+     * <p>可按目标类型 / 类别 / 严重度过滤，都传 null 时就是「最近所有命中」。
+     * 不加时间区间：表上已有 {@code idx_cmh_category(category_code, created_at)}，
+     * 真要「查某天」时再加区间条件即可，现在不为猜测写 SQL。
+     */
+    @Select("<script>"
+            + "SELECT * FROM community_moderation_hit WHERE 1 = 1"
+            + "<if test='targetType != null'> AND target_type = #{targetType}</if>"
+            + "<if test='categoryCode != null'> AND category_code = #{categoryCode}</if>"
+            + "<if test='severity != null'> AND severity = #{severity}</if>"
+            + " ORDER BY id DESC"
+            + "</script>")
+    IPage<CommunityModerationHit> selectHitAuditPage(IPage<CommunityModerationHit> page,
+                                                    @Param("targetType") String targetType,
+                                                    @Param("categoryCode") String categoryCode,
+                                                    @Param("severity") Integer severity);
 }

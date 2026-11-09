@@ -62,7 +62,20 @@ public enum SceneCode {
      * 审核结论直接决定内容是否可见，所以提示词版本标签会随结论落库（{@code ai_prompt_ver}），
      * 以便事后回答"当时是用哪一版提示词判的"。
      */
-    MODERATION("moderation", false, "社区内容审核");
+    MODERATION("moderation", false, "社区内容审核"),
+
+    /**
+     * 中英翻译（社区内容英文版 / 昵称英文化）。
+     * <p>
+     * 单列场景的理由与 {@link #MODERATION} 相同，另有一条更硬的：它的产出要<b>长期缓存</b>。
+     * 缓存键里编进了提示词版本，所以「换提示词 → 旧缓存全失效」是自动的；若把提示词留在代码里，
+     * 就只能靠人工改 {@code CACHE_VERSION} 常量来失效缓存，迟早会忘。
+     * <p>
+     * 参数特征：产物是**扁平 JSON 字典**（键集合由调用方给定），因此需要 JSON 模式
+     * （yaml {@code json: true} → {@code response_format=json_object}）；温度取 0（要忠实，不要润色）；
+     * 不需要工具、不需要视觉。
+     */
+    TRANSLATION("translation", false, "中英翻译");
 
     private final String configKey;
     /** 是否需要视觉（多模态）模型：true 的场景在视觉 provider 接入前不可用。 */

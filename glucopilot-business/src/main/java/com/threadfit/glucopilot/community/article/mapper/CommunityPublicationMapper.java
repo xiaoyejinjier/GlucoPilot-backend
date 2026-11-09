@@ -63,6 +63,8 @@ public interface CommunityPublicationMapper extends BaseMapper<CommunityArticle>
 
     int updateArticleContent(
             @Param("title") String title,
+            @Param("titlePinyin") String titlePinyin,
+            @Param("titlePinyinInitials") String titlePinyinInitials,
             @Param("summary") String summary,
             @Param("body") String body,
             @Param("contentType") int contentType,
@@ -80,6 +82,9 @@ public interface CommunityPublicationMapper extends BaseMapper<CommunityArticle>
             @Param("query") CommunityArticleQuery query,
             @Param("limit") int limit,
             @Param("offset") long offset);
+
+    /** 热榜等：published+readable + newsIds IN，无推荐排序。 */
+    List<Map<String, Object>> selectArticlesByIds(@Param("query") CommunityArticleQuery query);
 
     List<Map<String, Object>> selectArticle(@Param("id") long id);
 

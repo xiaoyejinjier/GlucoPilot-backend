@@ -70,6 +70,12 @@
                 WHERE ah.news_id = n.id
                   AND ah.user_id = #{query.viewer})
         </if>
+        <if test='query.newsIds != null and query.newsIds.size() &gt; 0'>
+              AND n.id IN
+              <foreach collection='query.newsIds' item='nid' open='(' separator=',' close=')'>
+                  #{nid}
+              </foreach>
+        </if>
         <if test='query.tag != null and query.tag != ""'>
               AND EXISTS(
                 SELECT 1
@@ -131,6 +137,8 @@
         </if>
         <if test='query.keyword != null and query.keyword != ""'>
               AND (LOCATE(#{query.keyword},n.title)&gt;0
+                OR LOCATE(#{query.keyword},COALESCE(n.title_pinyin,''))&gt;0
+                OR LOCATE(#{query.keyword},COALESCE(n.title_pinyin_initials,''))&gt;0
                 <if test='query.adminSearch'>
                       OR EXISTS(
                         SELECT 1
@@ -365,7 +373,14 @@
 
     <update id="updateArticleContent">
         UPDATE cms_news
-        SET title = #{title},summary_text = #{summary},content_body = #{body},content_type = #{contentType},publish_status = 0,gmt_modified = CURRENT_TIMESTAMP
+        SET title = #{title},
+            title_pinyin = #{titlePinyin},
+            title_pinyin_initials = #{titlePinyinInitials},
+            summary_text = #{summary},
+            content_body = #{body},
+            content_type = #{contentType},
+            publish_status = 0,
+            gmt_modified = CURRENT_TIMESTAMP
         WHERE id = #{id}
           AND is_deleted = 0
     </update>
@@ -413,6 +428,21 @@
         <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.orderBy"/>
         LIMIT #{limit}
         OFFSET #{offset}
+    </select>
+
+    <!-- 热榜灌装：同一套 published+readable，按 id IN 一次取出；排序由调用方保序。 -->
+    <select id="selectArticlesByIds" resultType="java.util.HashMap">
+        SELECT
+            n.*,
+            a.author_user_id,
+            CASE WHEN n.community_managed = 1 THEN COALESCE(a.state,'AI_PENDING') ELSE CASE n.publish_status WHEN 1 THEN 'PUBLISHED' WHEN 2 THEN 'HIDDEN' ELSE 'DRAFT' END END article_state,
+            a.revision,
+            a.ai_verdict,
+            a.ai_reason,
+            a.ai_model,
+            a.review_note,
+            COALESCE(a.created_at,n.gmt_create) article_created_at
+        <include refid="articleSearchFrom"/>
     </select>
 
     <select id="selectArticle" resultType="java.util.HashMap">

@@ -8,6 +8,7 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.model.BaseEntity;
 import com.threadfit.glucopilot.common.mybatis.SoftDeletes;
 import com.threadfit.glucopilot.community.article.service.CommunityPublicationService;
+import com.threadfit.glucopilot.community.search.TitlePinyin;
 import com.threadfit.glucopilot.content.dto.AdminCmsDtos;
 import com.threadfit.glucopilot.content.entity.CmsBanner;
 import com.threadfit.glucopilot.content.entity.CmsNews;
@@ -52,7 +53,10 @@ public class AdminCmsService {
     public AdminCmsDtos.NewsItem saveNews(AdminCmsDtos.NewsSaveRequest req) {
         cmsMediaService.validateVideoUrl(req.getVideoUrl());
         CmsNews row = req.getId() == null ? new CmsNews() : requireNews(req.getId());
-        row.setTitle(req.getTitle().trim());
+        String title = req.getTitle().trim();
+        row.setTitle(title);
+        row.setTitlePinyin(TitlePinyin.full(title));
+        row.setTitlePinyinInitials(TitlePinyin.initials(title));
         row.setSummaryText(req.getSummary());
         row.setChannelCode(DEFAULT_CHANNEL_CODE);
         row.setContentType("video".equalsIgnoreCase(req.getType()) ? 2 : 1);

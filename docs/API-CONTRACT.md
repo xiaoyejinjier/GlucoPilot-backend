@@ -1,5 +1,27 @@
 # API 契约
 
+## 2026-11-09 社区热度排行榜（热榜专用公式 + Redis ZSET）
+
+`GET /api/v1/community/hot-articles`：需 C 端登录。可选 `limit`（默认 10，最大 10）。返回 `{ records, generatedAt, total }`：`records` 元素与社区 feed 的 `Article` 相同；`total` 为本次实际返回条数（经当前用户可见性与「减少此类内容」过滤后可能不足 10）；`generatedAt` 为榜单快照生成时间（ISO-8601）。
+
+**热榜专用打分（方案 C，不同于推荐 V1 的 popularity）**：
+
+```
+raw = 3*like_count + 5*collect_count + 4*有效评论数 + 1*去重浏览数
+score = LN(1+raw) / POWER(发布至今天数小时差 + 12, 1.5)
+```
+
+有效评论：`community_comment` 中顶级评论（`reply_to_comment_id IS NULL`）且 `is_deleted=0`、`is_hidden=0`；去重浏览：`community_article_view` 行数。候选为已发布、到达发布时间、作者有效的文章。时间衰减避免旧帖永久霸榜；与推荐里的 `min(1,ln(1+H)/ln(101))` 口径分离，推荐 `sort=RECOMMEND` 行为不变。
+
+实现：MySQL 全量重算为权威，结果写入 Redis ZSET（member=`newsId`，score=热榜分）；读路径 `ZREVRANGE WITHSCORES` 多取 id，再 **一次** `published+readable + id IN` 批量灌装（与 feed 列表同口径，无逐条 `get`）。缓存健壮约定：
+
+- **穿透**：空榜写入占位 member `__empty__`；读侧区分 HIT / EMPTY / MISS，EMPTY 视为缓存命中，**不再打 MySQL**。
+- **击穿**：物理 TTL（默认 30min）+ 逻辑新鲜度（默认 2min，meta `generatedAt|logicalExpireAt`）。逻辑过期仍返回旧榜，**异步**抢锁重建；MISS 同样异步重建，请求线程**不 sleep**，直接吃进程快照或空，**禁止无锁全员 SQL / 禁止请求线程同步全量重算**。
+- **雪崩 / Redis 宕机**：同 JVM 内 MySQL **单飞** + 进程短快照。接口仍 200。
+- **锁**：SETNX value 为 UUID；释放用 Lua 比对 value 再删，避免误删他人锁。
+
+定时重建 + 双 key `RENAME` 切换。不在点赞/浏览主链路强绑增量更新。无新表。
+
 ## 2026-11-05 用户提醒查看与已读
 
 - `PUT /api/v1/user-reminders/read-all?date=YYYY-MM-DD`：弹窗顶部“全部已读”。在同一可重复读事务中，将指定日期异常实测、全部未读公开回复及六类信息统一标记已读；回复分批处理，不限于弹窗当前展示的3条。使用本次事务快照，不删除原记录，事务失败整体回滚，后到的新内容继续保持未读。
@@ -87,6 +109,8 @@ DataExportService的任务、健康记录及PDF文件持久化由JdbcTemplate替
 ## 社区个性化推荐（2026-10-28）
 
 `GET /api/v1/community/articles` 新增可选 `sort=RECOMMEND|LATEST`，默认RECOMMEND；following=true或keyword非空时按LATEST处理。返回原Article分页结构，标签筛选、审核发布、作者有效性、文章受众和用户隐藏偏好继续在SQL排序分页前执行；本人文章和管理员文章接口保持原顺序。非法sort返回40000。
+
+`keyword`（去空白后最多80字）支持标题汉字字面子串，以及标题全拼/声母子串（如 `tang`→「控糖」、`kt`→「控糖」）；昵称条件仍仅字面匹配。多音字取库默认读音，不做分词搜索引擎。
 
 推荐V1复用community_article_view、news_user_action、community_article_tag/community_tag和community_follow，无新表或模型服务。以近30个自然日（含当天）的本人有效行为构建标签兴趣：阅读1、当前点赞3、当前收藏5；按14天半衰期衰减，保留兴趣最高的64个标签并进行L2归一化。已下架、不可读、已隐藏、作者失效文章及停用标签不参与兴趣。按文章启用标签向量计算余弦相似度；综合得分为60×相似度＋15×归一化热度＋15×7天新鲜度＋10×关注作者。热度为min(1,ln(1+点赞数+2×收藏数+0.1×去重浏览数)/ln(101))，新鲜度为1/(1+已发布小时数/168)。同分按发布时间、ID倒序；无兴趣历史时自然回落到热度/新鲜度/关注排序，无标签新文章也能入选。权重为明确规则初值，不是训练或评测结果。
 

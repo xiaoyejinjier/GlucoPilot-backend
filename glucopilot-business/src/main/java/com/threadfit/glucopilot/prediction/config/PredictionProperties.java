@@ -38,8 +38,12 @@ public class PredictionProperties {
     private BigDecimal rType3 = new BigDecimal("0.0194");
     private BigDecimal rType4 = new BigDecimal("0.0194");
 
-    /** 药物修正（服药后对升幅的削减，mmol/L）；数据集无干净对照，沿用 v1 待临床确认。 */
-    private BigDecimal medEffect = new BigDecimal("-0.5");
+    /**
+     * 药物修正（服药后对升幅的修正，mmol/L）。v2 起置 0：
+     * ShanghaiT2DM 实证显示服药餐残差反而 +0.64（患者内配对口径）——口服降糖药为慢性背景效应，
+     * medicationTaken 入参保留采集，待真实用户「服药餐 + 餐后实测」数据回流后再实证校准。
+     */
+    private BigDecimal medEffect = BigDecimal.ZERO;
 
     /** 运动修正（运动后对升幅的削减，mmol/L）；数据集无运动字段，无法验证，沿用 v1。 */
     private BigDecimal exerciseEffect = new BigDecimal("-0.3");

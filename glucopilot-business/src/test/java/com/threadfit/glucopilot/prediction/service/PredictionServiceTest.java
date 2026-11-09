@@ -72,8 +72,9 @@ class PredictionServiceTest {
         PredictionDtos.PredictRequest req = request("lunch", "6.0", "60");
         req.setMedicationTaken(true);
 
-        // 7.9578 − 0.5 = 7.4578 → 7.5
-        assertValue("7.5", service.predict(USER_ID, req).getPredictNow());
+        // medEffect=0 的行为锁：服药餐残差实证为 +0.64（方向与 v1 的 -0.5 相反），
+        // 置 0 后 medicationTaken 不改变预测，与 baseline 8.0 一致；入参仅留档采集
+        assertValue("8.0", service.predict(USER_ID, req).getPredictNow());
     }
 
     @Test

@@ -569,7 +569,7 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | --- | --- | --- |
 | `POST /api/v1/predictions/meal-glucose` | C 端登录 | 餐后 1h 血糖两段式预测（现状 / 建议文案 / 按建议量再预测），`nodeCode` 须为餐点节点（`breakfast` / `lunch` / `dinner`） |
 
-请求体字段：`nodeCode`（必填，餐点）、`currentGlucose`（必填，`(0,40)` mmol/L）、`carbsG`（必填，≥0）、`items`（可空，≤50，每项 `foodName` 必填 ≤64、`categoryCode` 必填 `1-9` 且**透传不落库**——前端从 food 库选食时详情自然带 `category_code` 填入、`weightG` / `carbsG` 可空 ≥0）、`portionRatio`（可空，`(0,2]`，默认 1.0）、`medicationTaken`（可空布尔，默认未服药）、`exerciseDone`（可空布尔，默认未运动）、补充原文（可空，≤200）。
+请求体字段：`nodeCode`（必填，餐点）、`currentGlucose`（必填，`(0,40)` mmol/L）、`carbsG`（必填，≥0）、`items`（可空，≤50，每项 `foodName` 必填 ≤64、`categoryCode` 必填 `1-9` 且**透传不落库**——前端从 food 库选食时详情自然带 `category_code` 填入、`weightG` / `carbsG` 可空 ≥0）、`portionRatio`（可空，`(0,2]`，默认 1.0）、`medicationTaken`（可空布尔，默认未服药；v2 起不改变预测结果，仅采集留档用于后续校准）、`exerciseDone`（可空布尔，默认未运动）、补充原文（可空，≤200）。
 
 响应 `data`：`predictNow`（现状预测）、`suggestText`（建议文案——`items` 非空走分食物建议，为空退回碳水换算，均不调 LLM）、`predictSuggest`（按建议量再预测）、`suggestCarbs`（推荐总碳水 g，1 位小数；危险高血糖场景为 0）、`suggestItems`（分食物结构化建议，与 `suggestText` 同源派生；每项 `foodName` + `suggestWeight`：数值=建议吃 Xg、`0`=不建议、`null`=保持原份量（正常）；整体降级/暂缓进食/无明细场景为空数组）、`algorithmVersion`（`"v2"`——2026-11 起：引入回归均值收缩项 `shrinkK=0.441`，响应系数按 ShanghaiT2DM 真实队列校准，历史 v1 口径见 git；算法数值/系数/文案变更时升级）。预测数值均收口到 `[0.1, 39.9]` 并保留 1 位小数。
 

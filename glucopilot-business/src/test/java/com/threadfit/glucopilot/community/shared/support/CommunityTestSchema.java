@@ -25,6 +25,12 @@ public final class CommunityTestSchema {
             s.execute(
                     "ALTER TABLE community_blogger ADD COLUMN IF NOT EXISTS enabled INT DEFAULT 1");
             s.execute("ALTER TABLE cms_news ADD COLUMN IF NOT EXISTS blogger_id BIGINT DEFAULT 1");
+            // V58 标题拼音列：社区测试从 V1 抽表，不跑完整 Flyway，需在此补列，否则 MyBatis 读写 cms_news 会报列不存在
+            s.execute(
+                    "ALTER TABLE cms_news ADD COLUMN IF NOT EXISTS title_pinyin VARCHAR(512)");
+            s.execute(
+                    "ALTER TABLE cms_news ADD COLUMN IF NOT EXISTS title_pinyin_initials"
+                            + " VARCHAR(128)");
             s.execute(
                     "CREATE TABLE IF NOT EXISTS community_follow(follower_id BIGINT,target_key"
                             + " VARCHAR(32),following INT,PRIMARY KEY(follower_id,target_key))");

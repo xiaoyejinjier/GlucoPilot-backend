@@ -1,6 +1,6 @@
 package com.threadfit.glucopilot.localization.mapper;
 
-import com.threadfit.glucopilot.localization.LocalizationDtos.Item;
+import com.threadfit.glucopilot.localization.dto.LocalizationDtos.Item;
 import com.threadfit.glucopilot.localization.entity.LocalizationCacheRow;
 import com.threadfit.glucopilot.localization.entity.LocalizationSourceRow;
 
@@ -23,7 +23,7 @@ public interface LocalizationMapper {
 
     @Select(
             "SELECT COUNT(*) FROM user_account WHERE id=#{viewer} AND is_deleted=0 AND"
-                + " account_status=1")
+                    + " account_status=1")
     long countActiveUser(@Param("viewer") long viewer);
 
     @SelectProvider(type = LocalizationSql.class, method = "source")

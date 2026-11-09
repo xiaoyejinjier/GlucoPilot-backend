@@ -1,5 +1,17 @@
 # API 契约
 
+## 2026-11-05 用户提醒查看与已读
+
+- `PUT /api/v1/user-reminders/read-all?date=YYYY-MM-DD`：弹窗顶部“全部已读”。在同一可重复读事务中，将指定日期异常实测、全部未读公开回复及六类信息统一标记已读；回复分批处理，不限于弹窗当前展示的3条。使用本次事务快照，不删除原记录，事务失败整体回滚，后到的新内容继续保持未读。
+
+- `GET /api/v1/user-reminders?date=YYYY-MM-DD&pageNum=1&pageSize=3`：当前用户的未读提醒；返回 `{date,alerts,replies}`，alerts为指定日期的异常实测，replies为未读管理员公开回复的PageResult。Item白名单 `{kind,id,revision,recordId,recordDate,nodeCode,nodeName,glucoseValue,recordedAt,userReply,repliedAt,read}`；kind为GLUCOSE或REPLY，revision是该测量/回复快照的服务端摘要。
+- `GET /api/v1/user-reminders/{kind}/{id}`：只读取本人仍有效的提醒详情，已读内容仍可查看；管理员内部备注和处理人不返回。旧测量回复保持关联原快照。
+- `PUT /api/v1/user-reminders/{kind}/{id}/read {revision}`：幂等标记本人当前已展示快照。版本已变更返回40900，不清除新提醒；其他用户、已删除记录或已撤回回复返回40400。
+- `PUT /api/v1/user-reminders/information/{kind}/read`：用户主动点击“全部已读”，kind为MESSAGE/LIKE/COLLECT/COMMENT/FOLLOW/REPORT；私信和互动以本次读取的最大ID为界，举报固定本次未读反馈的ID和处理时间快照，只更新当前用户对应类别，不顺带标记更晚的新消息或旧举报刚获得的新反馈。
+- `PUT /api/v1/community/notifications/{id}/read`：只标记本人该条互动提醒，幂等；无body。原`/notifications/read {kind,throughId}`继续兼容，但新界面不在分类列表加载时自动调用。
+- 记录页“提醒与回复”始终保留入口。异常提醒/公开回复支持查看与手动已读，查看对应内容成功后才提交已读；分类入口不会清空类别。社区互动改为打开具体提醒后单条标记已读，保留旧throughId接口兼容。私信打开具体会话后沿用原有已读边界。
+- V53新增user_reminder_read保存已读快照；修改测量或更新公开回复会再次变为未读，单纯刷新、重新登录不会重置。已读不删除实测、回复或管理员审计，注销时清理本人已读登记。新增SQL使用MyBatis XML。
+
 ## 2026-11-04 异常血糖处理建议保留
 
 保留现有异常处理接口及快照/版本校验：同一recordId的血糖或测量时间被更正时，旧请求返回40900及“血糖记录已更新，请刷新后处理最新数据”；记录不再异常或已删除时保持40400，不允许旧建议自动提交。其他时段新增的独立记录不使当前记录失效。

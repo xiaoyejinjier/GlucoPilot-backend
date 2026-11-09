@@ -23,12 +23,12 @@ XML 与 Java 接口的包路径、文件名相同，MyBatis 注册接口时自�
 
 | 功能 | 业务入口 | MyBatis SQL 与映射 |
 | --- | --- | --- |
-| 异常血糖查询、审批、审计和用户回复 | [GlucoseAlertService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/alert/GlucoseAlertService.java) → [GlucoseAlertRepository](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/alert/GlucoseAlertRepository.java) | [GlucoseAlertMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/mapper/GlucoseAlertMapper.java)、[GlucoseAlertQuery](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/mapper/GlucoseAlertQuery.java)、[GlucoseAlertRows](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/entity/GlucoseAlertRows.java) |
+| 异常血糖查询、审批、审计和用户回复 | [GlucoseAlertService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/alert/service/GlucoseAlertService.java) → [GlucoseAlertRepository](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/alert/repository/GlucoseAlertRepository.java) | [GlucoseAlertMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/mapper/GlucoseAlertMapper.java)、[GlucoseAlertQuery](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/mapper/GlucoseAlertQuery.java)、[GlucoseAlertRows](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/entity/GlucoseAlertRows.java) |
 | 正餐照片读取 | [MealPhotoService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/meal/service/MealPhotoService.java) | [MealPhotoMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/meal/mapper/MealPhotoMapper.java)，复用 `MediaFile` |
 | 用户头像读取 | [AvatarMediaService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/file/service/AvatarMediaService.java) | [AvatarMediaMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/file/mapper/AvatarMediaMapper.java)，复用 `MediaFile` |
-| 周视图的每日推荐吃法预测值汇总 | [MealPredictionStatisticsService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/statistics/weekly/MealPredictionStatisticsService.java) | [MealPredictionStatisticsMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/statistics/mapper/MealPredictionStatisticsMapper.java)、`statistics/entity/DailyMealPredictionRow.java` |
-| 管理端信封提醒：举报、反馈、待审核食品 | [AdminWorkReminderService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/notification/AdminWorkReminderService.java) | [AdminWorkReminderMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/notification/mapper/AdminWorkReminderMapper.java)、`notification/entity/WorkReminderCount.java` |
-| 英文阅读的原文、翻译缓存和任务租约 | [LocalizationService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/LocalizationService.java) | [LocalizationMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/mapper/LocalizationMapper.java)、[LocalizationSql](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/mapper/LocalizationSql.java)、`localization/entity/` |
+| 周视图的每日推荐吃法预测值汇总 | [MealPredictionStatisticsService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/statistics/weekly/service/MealPredictionStatisticsService.java) | [MealPredictionStatisticsMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/statistics/mapper/MealPredictionStatisticsMapper.java)、`statistics/entity/DailyMealPredictionRow.java` |
+| 管理端信封提醒：举报、反馈、待审核食品 | [AdminWorkReminderService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/notification/service/AdminWorkReminderService.java) | [AdminWorkReminderMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/notification/mapper/AdminWorkReminderMapper.java)、`notification/entity/WorkReminderCount.java` |
+| 英文阅读的原文、翻译缓存和任务租约 | [LocalizationService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/service/LocalizationService.java) | [LocalizationMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/mapper/LocalizationMapper.java)、[LocalizationSql](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/mapper/LocalizationSql.java)、`localization/entity/` |
 
 保留的关键规则：
 
@@ -45,17 +45,17 @@ XML 与 Java 接口的包路径、文件名相同，MyBatis 注册接口时自�
 | 板块 | 业务实现位置 | 数据访问位置 |
 | --- | --- | --- |
 | 私信 | `community/message/service/CommunityMessageService.java` | `community/message/mapper/CommunityMessageMapper.java`：双方账号行锁、请求标记查重、权限查询、消息写入 |
-| 血糖记录 | `glucose/record/GlucoseRecordService.java` | `glucose/mapper/GlucoseRecordMapper.java` |
+| 血糖记录 | `glucose/record/service/GlucoseRecordService.java` | `glucose/mapper/GlucoseRecordMapper.java` |
 | 正餐记录 | `meal/service/impl/MealRecordServiceImpl.java` | `meal/mapper/MealRecordMapper.java`、`MealFoodItemMapper.java` |
-| 日、周、月和趋势统计 | `statistics/daily/DailyStatisticsService.java`、`statistics/weekly/WeeklyStatisticsService.java`、`statistics/monthly/MonthlyStatisticsService.java`、`statistics/trend/TrendStatisticsService.java` | 调用记录模块服务，复用血糖与正餐 Mapper；预测汇总使用上表新增 Mapper |
+| 日、周、月和趋势统计 | `statistics/daily/service/DailyStatisticsService.java`、`statistics/weekly/service/WeeklyStatisticsService.java`、`statistics/monthly/service/MonthlyStatisticsService.java`、`statistics/trend/service/TrendStatisticsService.java` | 调用记录模块服务，复用血糖与正餐 Mapper；预测汇总使用上表新增 Mapper |
 | 举报与举报反馈 | `community/report/service/CommunityReportService.java`、`CommunityReportFeedbackService.java` | `community/report/mapper/CommunityReportManagementMapper.java`、`CommunityReportMapper.java` |
-| 用户反馈、管理端反馈 | `user/feedback/FeedbackService.java`、`AdminFeedbackService.java` | `user/mapper/FeedbackMapper.java`，复用用户资料 Mapper |
+| 用户反馈、管理端反馈 | `user/feedback/service/FeedbackService.java`、`AdminFeedbackService.java` | `user/mapper/FeedbackMapper.java`，复用用户资料 Mapper |
 | 食品营养库、食品管理 | `food/service/FoodService.java`、`AdminFoodService.java` | `food/mapper/FoodNutritionMapper.java`、`FoodCategoryMapper.java`；分类/详情的 Redis 读缓存见 `food/README.md` |
 | 管理端社区标签 | `community/tag/service/CommunityTagService.java` | `community/tag/mapper/CommunityTagMapper.java` |
 | 管理端信息管理 | `community/message/service/AdminMessageService.java` | `community/message/mapper/AdminMessageMapper.java` |
-| 管理端用户管理 | `user/admin/AdminUserService.java` | `user/mapper/UserAccountMapper.java`、`UserProfileMapper.java`，复用健康档案、血糖、正餐模块 |
-| 导出任务与 PDF | `export/DataExportService.java` | `export/mapper/DataExportMapper.java`；`export/ExportPdf.java` 负责 PDF 排版 |
-| 管理端九时段记录 | `glucose/admin/AdminHealthRecordService.java` | 复用 `GlucoseRecordMapper`、`MealRecordMapper`、`GlucoseNodeMapper` 和用户 Mapper |
+| 管理端用户管理 | `user/admin/service/AdminUserService.java` | `user/mapper/UserAccountMapper.java`、`UserProfileMapper.java`，复用健康档案、血糖、正餐模块 |
+| 导出任务与 PDF | `export/service/DataExportService.java` | `export/mapper/DataExportMapper.java`；`export/support/ExportPdf.java` 负责 PDF 排版 |
+| 管理端九时段记录 | `glucose/admin/service/AdminHealthRecordService.java` | 复用 `GlucoseRecordMapper`、`MealRecordMapper`、`GlucoseNodeMapper` 和用户 Mapper |
 | 社区推荐 | `community/recommendation/service/CommunityRecommendationService.java` | `CommunityRecommendationMapper.xml` 获取行为并定义评分片段；`CommunityPublicationMapper.xml` 引用评分片段并查询候选排序；XML路径见下文 |
 | 管理端推荐管理 | `community/recommendation/service/AdminRecommendationService.java` | `community/recommendation/mapper/AdminRecommendationMapper.java`，复用用户兴趣计算和文章排序 Mapper |
 

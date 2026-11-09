@@ -1,7 +1,7 @@
 package com.threadfit.glucopilot.notification.mapper;
 
 import com.threadfit.glucopilot.notification.entity.WorkReminderCount;
-import com.threadfit.glucopilot.user.feedback.FeedbackReplyState;
+import com.threadfit.glucopilot.user.feedback.support.FeedbackReplyState;
 
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
@@ -11,7 +11,7 @@ import org.apache.ibatis.annotations.Select;
 public interface AdminWorkReminderMapper {
     @Select(
             "SELECT COUNT(*) total,MAX(created_at) latest_at FROM community_report WHERE"
-                + " state='OPEN'")
+                    + " state='OPEN'")
     WorkReminderCount countReports();
 
     @Select(

@@ -4,10 +4,13 @@ import com.threadfit.glucopilot.common.api.ApiResponse;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.constant.PermCodes;
-import com.threadfit.glucopilot.user.admin.AdminUserService;
+import com.threadfit.glucopilot.user.admin.service.AdminUserService;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
+
 import jakarta.validation.Valid;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,8 +40,7 @@ public class AdminUserController {
     @PutMapping("/{id}/status")
     @PreAuthorize("@ss.hasPermi('" + PermCodes.USER_MANAGE + "')")
     public ApiResponse<AdminUserDtos.UpdatedResult> updateStatus(
-            @PathVariable Long id,
-            @Valid @RequestBody AdminUserDtos.StatusRequest request) {
+            @PathVariable Long id, @Valid @RequestBody AdminUserDtos.StatusRequest request) {
         return ApiResponse.ok(adminUserService.updateStatus(id, request.getAccountStatus()));
     }
 

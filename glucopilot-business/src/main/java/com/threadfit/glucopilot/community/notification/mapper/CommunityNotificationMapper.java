@@ -11,6 +11,8 @@ import java.util.Map;
 /** Community persistence. All values are bound parameters; row locks share Spring transactions. */
 @Mapper
 public interface CommunityNotificationMapper extends BaseMapper<CommunityNotification> {
+    Long countOwnedNoticeId(@Param("viewer") long viewer, @Param("id") long id);
+    int markOneRead(@Param("viewer") long viewer, @Param("id") long id);
 
     @Select(
             "SELECT COUNT(*) FROM user_account WHERE id=#{id} AND is_deleted=0 AND account_status=1"

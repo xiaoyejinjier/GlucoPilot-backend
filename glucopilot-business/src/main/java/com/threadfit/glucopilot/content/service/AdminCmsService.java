@@ -13,8 +13,10 @@ import com.threadfit.glucopilot.content.entity.CmsBanner;
 import com.threadfit.glucopilot.content.entity.CmsNews;
 import com.threadfit.glucopilot.content.mapper.CmsBannerMapper;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
-import com.threadfit.glucopilot.content.media.CmsMediaService;
+import com.threadfit.glucopilot.content.media.service.CmsMediaService;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -29,6 +31,7 @@ public class AdminCmsService {
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
     private static final String[] CHANNELS = {"", "企业动态", "行业快讯", "设备新知", "控糖科普"};
+
     /** 管理端不再采集频道；固定写入控糖科普以兼容存量 C 端按频道查询。 */
     private static final int DEFAULT_CHANNEL_CODE = 4;
 
@@ -38,9 +41,11 @@ public class AdminCmsService {
     private final CommunityPublicationService communityPublicationService;
 
     public List<AdminCmsDtos.NewsItem> listNews() {
-        return newsMapper.selectList(new LambdaQueryWrapper<CmsNews>()
-                        .orderByDesc(CmsNews::getId))
-                .stream().map(this::toNews).toList();
+        return newsMapper
+                .selectList(new LambdaQueryWrapper<CmsNews>().orderByDesc(CmsNews::getId))
+                .stream()
+                .map(this::toNews)
+                .toList();
     }
 
     @Transactional
@@ -72,13 +77,20 @@ public class AdminCmsService {
         } else {
             newsMapper.updateById(row);
         }
-        communityPublicationService.replaceOfficialTags(row.getId(), req.getTagCodes(), req.getCustomTags());
+        communityPublicationService.replaceOfficialTags(
+                row.getId(), req.getTagCodes(), req.getCustomTags());
         return toNews(requireNews(row.getId()));
     }
 
     @Transactional
     public void removeNews(Long id) {
-        softDelete(newsMapper, requireNews(id).getId(), CmsNews::getId, CmsNews::getIsDeleted, CmsNews::getDeletedAt, CmsNews::getDeletedBy);
+        softDelete(
+                newsMapper,
+                requireNews(id).getId(),
+                CmsNews::getId,
+                CmsNews::getIsDeleted,
+                CmsNews::getDeletedAt,
+                CmsNews::getDeletedBy);
     }
 
     @Transactional
@@ -92,10 +104,14 @@ public class AdminCmsService {
     }
 
     public List<AdminCmsDtos.BannerItem> listBanners() {
-        return bannerMapper.selectList(new LambdaQueryWrapper<CmsBanner>()
-                        .orderByAsc(CmsBanner::getSortNo)
-                        .orderByDesc(CmsBanner::getId))
-                .stream().map(this::toBanner).toList();
+        return bannerMapper
+                .selectList(
+                        new LambdaQueryWrapper<CmsBanner>()
+                                .orderByAsc(CmsBanner::getSortNo)
+                                .orderByDesc(CmsBanner::getId))
+                .stream()
+                .map(this::toBanner)
+                .toList();
     }
 
     @Transactional
@@ -117,8 +133,13 @@ public class AdminCmsService {
 
     @Transactional
     public void removeBanner(Long id) {
-        softDelete(bannerMapper, requireBanner(id).getId(),
-                CmsBanner::getId, CmsBanner::getIsDeleted, CmsBanner::getDeletedAt, CmsBanner::getDeletedBy);
+        softDelete(
+                bannerMapper,
+                requireBanner(id).getId(),
+                CmsBanner::getId,
+                CmsBanner::getIsDeleted,
+                CmsBanner::getDeletedAt,
+                CmsBanner::getDeletedBy);
     }
 
     private static <T extends BaseEntity> void softDelete(
@@ -134,14 +155,21 @@ public class AdminCmsService {
     private AdminCmsDtos.NewsItem toNews(CmsNews n) {
         int ch = n.getChannelCode() == null ? 0 : n.getChannelCode();
         String channel = ch >= 1 && ch < CHANNELS.length ? CHANNELS[ch] : "资讯";
-        String status = switch (n.getPublishStatus() == null ? 0 : n.getPublishStatus()) {
-            case 1 -> "published";
-            case 2 -> "unpublished";
-            default -> "draft";
-        };
-        List<AdminCmsDtos.NewsTag> tags = communityPublicationService.tags(n.getId().longValue()).stream()
-                .map(t -> AdminCmsDtos.NewsTag.builder().code(t.code()).name(t.name()).build())
-                .toList();
+        String status =
+                switch (n.getPublishStatus() == null ? 0 : n.getPublishStatus()) {
+                    case 1 -> "published";
+                    case 2 -> "unpublished";
+                    default -> "draft";
+                };
+        List<AdminCmsDtos.NewsTag> tags =
+                communityPublicationService.tags(n.getId().longValue()).stream()
+                        .map(
+                                t ->
+                                        AdminCmsDtos.NewsTag.builder()
+                                                .code(t.code())
+                                                .name(t.name())
+                                                .build())
+                        .toList();
         return AdminCmsDtos.NewsItem.builder()
                 .id(n.getId())
                 .title(n.getTitle())
@@ -221,7 +249,8 @@ public class AdminCmsService {
                 return LocalDateTime.parse(s, FMT);
             }
             if (s.length() >= 19) {
-                return LocalDateTime.parse(s.substring(0, 19), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                return LocalDateTime.parse(
+                        s.substring(0, 19), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
             }
         } catch (Exception ignored) {
             // fall through

@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Update;
 /** 账号注销的社区私有数据清理；公开内容、点赞收藏和私信历史保留。 */
 @Mapper
 public interface CommunityAccountCleanupMapper {
+    int deleteReminderReads(@Param("userId") long userId);
     @Delete("DELETE FROM community_follow WHERE follower_id=#{userId}")
     int deleteFollows(@Param("userId") long userId);
 

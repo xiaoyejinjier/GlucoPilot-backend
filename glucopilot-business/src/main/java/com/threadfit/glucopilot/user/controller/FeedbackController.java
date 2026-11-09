@@ -5,9 +5,12 @@ import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.user.dto.FeedbackDtos;
-import com.threadfit.glucopilot.user.feedback.FeedbackService;
+import com.threadfit.glucopilot.user.feedback.service.FeedbackService;
+
 import jakarta.validation.Valid;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,7 +26,8 @@ public class FeedbackController {
     private final FeedbackService feedbackService;
 
     @PostMapping
-    public ApiResponse<FeedbackDtos.SubmitResult> submit(@Valid @RequestBody FeedbackDtos.SubmitRequest request) {
+    public ApiResponse<FeedbackDtos.SubmitResult> submit(
+            @Valid @RequestBody FeedbackDtos.SubmitRequest request) {
         return ApiResponse.ok(feedbackService.submit(RequestContext.requireUserId(), request));
     }
 

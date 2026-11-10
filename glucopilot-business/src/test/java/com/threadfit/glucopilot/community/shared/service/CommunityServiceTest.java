@@ -105,6 +105,32 @@ class CommunityServiceTest {
     }
 
     @Test
+    void openingOneInteractionDoesNotReadOtherItemsAndCannotReadAnotherUsersNotice() {
+        jdbc.update("INSERT INTO community_blogger(user_id,nickname) VALUES(1,'作者')");
+        jdbc.update(
+                "UPDATE cms_news SET blogger_id=(SELECT id FROM community_blogger WHERE user_id=1)"
+                    + " WHERE id=10");
+        var notices =
+                new CommunityNotificationService(
+                        CommunityTestMappers.mapper(jdbc, CommunityNotificationMapper.class),
+                        service);
+        tx.executeWithoutResult(
+                s -> {
+                    service.notifyAction(2, 10, "LIKE", true);
+                    service.notifyAction(3, 10, "LIKE", true);
+                });
+        var list = notices.list(1, "LIKE", page()).getRecords();
+        assertEquals(2, notices.summary(1).likes());
+        long selected = Long.parseLong(list.getFirst().id());
+        tx.executeWithoutResult(s -> notices.readOne(1, selected));
+        tx.executeWithoutResult(s -> notices.readOne(1, selected));
+        assertEquals(1, notices.summary(1).likes());
+        assertThrows(
+                BizException.class, () -> notices.readOne(2, Long.parseLong(list.getLast().id())));
+        assertEquals(1, notices.summary(1).likes());
+    }
+
+    @Test
     void interactionNotificationsArePrivateIdempotentAndReadByLoadedCategoryRange() {
         jdbc.update("INSERT INTO community_blogger(user_id,nickname) VALUES(1,'作者')");
         jdbc.update(

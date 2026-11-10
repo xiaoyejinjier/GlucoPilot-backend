@@ -201,6 +201,7 @@
               )
         ) THEN 1 ELSE 0 END
     </sql>
+    <!-- 讲解配图：image/CommunityRecommendationMapper/1793863120502.png -->
 
     <!--
         【6. 推荐总分，最高100】上面算的是匹配/热度/新鲜度/关注值，在此乘权重成为分数。

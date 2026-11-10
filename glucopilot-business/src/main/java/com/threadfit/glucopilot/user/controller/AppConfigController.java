@@ -1,8 +1,10 @@
 package com.threadfit.glucopilot.user.controller;
 
 import com.threadfit.glucopilot.common.api.ApiResponse;
-import com.threadfit.glucopilot.user.settings.AppConfigService;
+import com.threadfit.glucopilot.user.settings.service.AppConfigService;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

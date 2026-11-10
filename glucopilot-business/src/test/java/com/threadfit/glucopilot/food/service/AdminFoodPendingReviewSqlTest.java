@@ -16,8 +16,8 @@ import com.threadfit.glucopilot.food.dto.AdminFoodDtos;
 import com.threadfit.glucopilot.food.entity.FoodNutrition;
 import com.threadfit.glucopilot.food.mapper.FoodCategoryMapper;
 import com.threadfit.glucopilot.food.mapper.FoodNutritionMapper;
-import com.threadfit.glucopilot.notification.AdminWorkReminderService;
 import com.threadfit.glucopilot.notification.mapper.AdminWorkReminderMapper;
+import com.threadfit.glucopilot.notification.service.AdminWorkReminderService;
 
 import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
@@ -54,7 +54,7 @@ class AdminFoodPendingReviewSqlTest {
             // H2 requires separate ADD statements; production uses the unchanged MySQL migration.
             ddl.execute(
                     "ALTER TABLE food_nutrition ADD nutrition_source VARCHAR(32) NOT NULL DEFAULT"
-                        + " 'MANUAL'");
+                            + " 'MANUAL'");
             ddl.execute("ALTER TABLE food_nutrition ADD source_model VARCHAR(128)");
             ddl.execute(resource("V30__food_recognition_source_photo.sql"));
             jdbc.update("INSERT INTO food_category(id,category_name) VALUES(1,'主食类'),(2,'水果类')");
@@ -93,13 +93,13 @@ class AdminFoodPendingReviewSqlTest {
                 }
                 jdbc.update(
                         "UPDATE food_nutrition SET nutrition_source='AI_REVIEWED' WHERE"
-                            + " food_name='食品3'");
+                                + " food_name='食品3'");
                 jdbc.update(
                         "UPDATE food_nutrition SET nutrition_source='MANUAL' WHERE"
-                            + " food_name='食品4'");
+                                + " food_name='食品4'");
                 jdbc.update(
                         "UPDATE food_nutrition SET is_deleted=1,deleted_at=CURRENT_TIMESTAMP WHERE"
-                            + " food_name='食品5'");
+                                + " food_name='食品5'");
                 jdbc.update("UPDATE food_nutrition SET shelf_status=1 WHERE food_name='食品6'");
                 var query = new PageQuery();
                 query.setPageSize(1);

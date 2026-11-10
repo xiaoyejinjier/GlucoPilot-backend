@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.community.ranking.mapper.CommunityHotRankingMapper">
+
+    <!--
+        热榜专用公式（方案 C），与推荐 V1 popularity 分离：
+        raw = 3*like + 5*collect + 4*有效顶级评论 + 1*去重浏览
+        score = LN(1+raw) / POWER(发布小时差 + 12, 1.5)
+        候选：已发布、到达发布时间、作者有效；不含兴趣相似度与关注加分。
+    -->
+    <sql id="publishedArticle">
+        n.is_deleted = 0
+        AND n.publish_status = 1
+        AND n.publish_at &lt;= CURRENT_TIMESTAMP
+        AND (
+            n.community_managed = 0
+            OR EXISTS (
+                SELECT 1
+                FROM community_article pa
+                LEFT JOIN user_account au
+                    ON au.id = pa.author_user_id AND au.is_deleted = 0 AND au.account_status = 1
+                WHERE pa.news_id = n.id
+                  AND pa.state = 'PUBLISHED'
+                  AND (
+                      au.id IS NOT NULL
+                      OR (
+                          pa.author_user_id IS NULL
+                          AND EXISTS (
+                              SELECT 1
+                              FROM community_blogger eb
+                              WHERE eb.id = n.blogger_id AND eb.enabled = 1 AND eb.user_id IS NULL
+                          )
+                      )
+                  )
+            )
+        )
+    </sql>
+
+    <sql id="hotScore">
+        LN(
+            1.0 + GREATEST(
+                3.0 * GREATEST(COALESCE(n.like_count, 0), 0)
+                + 5.0 * GREATEST(COALESCE(n.collect_count, 0), 0)
+                + 4.0 * (
+                    SELECT COUNT(*)
+                    FROM community_comment cc
+                    WHERE cc.news_id = n.id
+                      AND cc.is_deleted = 0
+                      AND cc.is_hidden = 0
+                      AND cc.reply_to_comment_id IS NULL
+                )
+                + 1.0 * (
+                    SELECT COUNT(*) FROM community_article_view rv WHERE rv.news_id = n.id
+                ),
+                0
+            )
+        ) / POWER(
+            GREATEST(TIMESTAMPDIFF(HOUR, n.publish_at, CURRENT_TIMESTAMP), 0) + 12.0,
+            1.5
+        )
+    </sql>
+
+    <select id="selectTopScores"
+            resultType="com.threadfit.glucopilot.community.ranking.dto.HotArticleScore">
+        SELECT
+            n.id AS newsId,
+            <include refid="hotScore"/> AS score
+        FROM cms_news n
+        WHERE
+        <include refid="publishedArticle"/>
+        ORDER BY score DESC, n.id DESC
+        LIMIT #{limit}
+    </select>
+</mapper>

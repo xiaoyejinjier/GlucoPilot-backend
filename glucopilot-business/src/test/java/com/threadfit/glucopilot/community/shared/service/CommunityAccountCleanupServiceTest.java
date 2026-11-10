@@ -24,6 +24,7 @@ class CommunityAccountCleanupServiceTest {
     private CommunityAccountCleanupService service;
     private final Map<String, String> privateTables =
             Map.of(
+                    "user_reminder_read", "user_id",
                     "community_follow", "follower_id",
                     "community_article_reader", "user_id",
                     "community_article_view", "user_id",

@@ -20,6 +20,7 @@ import com.threadfit.glucopilot.community.profile.dto.ProfileDtos;
 import com.threadfit.glucopilot.community.recommendation.service.CommunityRecommendationService;
 import com.threadfit.glucopilot.community.report.dto.ReportDtos.ReportRequest;
 import com.threadfit.glucopilot.community.report.dto.ReportDtos.Resolution;
+import com.threadfit.glucopilot.community.search.TitlePinyin;
 import com.threadfit.glucopilot.community.shared.service.CommunityService;
 import com.threadfit.glucopilot.content.entity.CmsNews;
 import com.threadfit.glucopilot.content.mapper.CmsNewsMapper;
@@ -299,7 +300,10 @@ public class CommunityPublicationService {
             mapper.insertUserBlogger(author);
         Long blogger = bloggers.isEmpty() ? mapper.selectUserBlogger(author) : bloggers.getFirst();
         CmsNews row = new CmsNews();
-        row.setTitle(request.title().trim());
+        String title = request.title().trim();
+        row.setTitle(title);
+        row.setTitlePinyin(TitlePinyin.full(title));
+        row.setTitlePinyinInitials(TitlePinyin.initials(title));
         row.setContentBody(request.body().trim());
         row.setSummaryText(summary(request.body()));
         row.setChannelCode(4);
@@ -346,8 +350,11 @@ public class CommunityPublicationService {
                 return current;
             throw conflict();
         }
+        String title = request.title().trim();
         mapper.updateArticleContent(
-                request.title().trim(),
+                title,
+                TitlePinyin.full(title),
+                TitlePinyin.initials(title),
                 summary(request.body()),
                 request.body().trim(),
                 videos.isEmpty() ? 1 : 2,
@@ -380,7 +387,7 @@ public class CommunityPublicationService {
         query.setViewer(viewer);
         query.setTag(blankToNull(tag));
         query.setFollowing(following);
-        query.setKeyword(blankToNull(keyword));
+        query.setKeyword(searchKeyword(keyword));
         // 含义是：
         // - 用户选择推荐排序；
         // - 当前不是只看关注作者的列表；
@@ -447,7 +454,7 @@ public class CommunityPublicationService {
         var query = new CommunityArticleQuery();
         query.setState(blankToNull(status));
         query.setSource(blankToNull(source));
-        query.setKeyword(blankToNull(keyword));
+        query.setKeyword(searchKeyword(keyword));
         query.setAdminSearch(true);
         return list(null, true, query, q);
     }
@@ -461,8 +468,50 @@ public class CommunityPublicationService {
         return PageResult.of(q.getPageNum(), q.getPageSize(), total, rows);
     }
 
+    /**
+     * 热榜灌装：一次 IN + published/readable 过滤，按 orderedIds 保序取满 limit。
+     * 卡片口径与 feed 列表一致（无正文）。
+     */
+    public List<Article> listForHotRanking(long viewer, List<Long> orderedIds, int limit) {
+        user(viewer, false);
+        if (orderedIds == null || orderedIds.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        var ids = orderedIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        var query = new CommunityArticleQuery();
+        query.setPublished(true);
+        query.setReadable(true);
+        query.setViewer(viewer);
+        query.setNewsIds(ids);
+        var byId = new HashMap<Long, Map<String, Object>>();
+        for (Map<String, Object> row : mapper.selectArticlesByIds(query)) {
+            byId.put(longValue(row, "id"), row);
+        }
+        var out = new ArrayList<Article>(Math.min(limit, ids.size()));
+        for (Long id : orderedIds) {
+            if (out.size() >= limit) {
+                break;
+            }
+            var row = byId.get(id);
+            if (row == null) {
+                continue;
+            }
+            out.add(map(row, viewer, false, false));
+        }
+        return out;
+    }
+
     private static String blankToNull(String text) {
         return text == null || text.isBlank() ? null : text.trim();
+    }
+
+    /** 搜索词小写化，便于匹配 title_pinyin / initials。 */
+    private static String searchKeyword(String text) {
+        String value = blankToNull(text);
+        return value == null ? null : value.toLowerCase(java.util.Locale.ROOT);
     }
 
     public Article get(Long viewer, long id, boolean admin) {

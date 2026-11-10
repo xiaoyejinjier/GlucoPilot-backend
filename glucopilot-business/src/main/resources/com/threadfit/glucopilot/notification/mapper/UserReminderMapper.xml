@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.notification.mapper.UserReminderMapper">
+    <select id="countUser" resultType="long">
+        SELECT COUNT(*) FROM user_account WHERE id = #{userId} AND is_deleted = 0 AND account_status = 1
+    </select>
+
+    <!-- 只认可相同实测快照的已读，数值或测量时间改变时重新出现。 -->
+    <sql id="alertFrom">
+        FROM glucose_record g
+        LEFT JOIN user_reminder_read r ON r.user_id = g.user_id AND r.kind = 'GLUCOSE'
+            AND r.source_id = g.id AND r.glucose_value = g.glucose_value AND r.recorded_at = g.recorded_at
+        WHERE g.user_id = #{userId} AND g.is_deleted = 0
+          AND g.node_code IN ('before_breakfast','after_breakfast','before_lunch',
+                              'after_lunch','before_dinner','after_dinner')
+          AND g.glucose_value &gt; 0 AND g.glucose_value &lt; 40
+          AND (g.glucose_value &lt; 3.9 OR g.glucose_value &gt;= 10)
+    </sql>
+    <sql id="alertFields">
+        g.id source_id, g.id record_id, g.record_date, g.node_code, g.glucose_value, g.recorded_at, r.read_at
+    </sql>
+    <select id="alerts" resultType="com.threadfit.glucopilot.notification.entity.UserReminderRow">
+        SELECT <include refid="alertFields"/>
+        <include refid="alertFrom"/>
+          AND g.record_date = #{date} AND r.user_id IS NULL
+        ORDER BY g.node_code, g.id
+    </select>
+    <select id="alert" resultType="com.threadfit.glucopilot.notification.entity.UserReminderRow">
+        SELECT <include refid="alertFields"/>
+        <include refid="alertFrom"/>
+          AND g.id = #{id}
+    </select>
+
+    <!-- 回复快照不依附新测量；回复文字和时间均一致时才视为已读。 -->
+    <sql id="replyFrom">
+        FROM gp_glucose_alert_case h
+        JOIN glucose_record g ON g.id = h.record_id AND g.is_deleted = 0
+        LEFT JOIN user_reminder_read r ON r.user_id = g.user_id AND r.kind = 'REPLY'
+            AND r.source_id = h.id AND r.replied_at = h.replied_at AND r.reply_hash = SHA2(h.user_reply, 256)
+        WHERE g.user_id = #{userId} AND h.user_reply IS NOT NULL
+          AND TRIM(h.user_reply) &lt;&gt; '' AND h.replied_at IS NOT NULL
+    </sql>
+    <sql id="replyFields">
+        h.id source_id, h.record_id, g.record_date, g.node_code, h.glucose_value,
+        h.recorded_at, h.user_reply, h.replied_at, r.read_at
+    </sql>
+    <select id="countReplies" resultType="long">
+        SELECT COUNT(*) <include refid="replyFrom"/> AND r.user_id IS NULL
+    </select>
+    <select id="replies" resultType="com.threadfit.glucopilot.notification.entity.UserReminderRow">
+        SELECT <include refid="replyFields"/> <include refid="replyFrom"/>
+          AND r.user_id IS NULL
+        ORDER BY h.replied_at DESC, h.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="reply" resultType="com.threadfit.glucopilot.notification.entity.UserReminderRow">
+        SELECT <include refid="replyFields"/> <include refid="replyFrom"/> AND h.id = #{id}
+    </select>
+    <insert id="saveRead">
+        INSERT INTO user_reminder_read
+            (user_id,kind,source_id,glucose_value,recorded_at,replied_at,reply_hash)
+        VALUES (#{userId},#{kind},#{row.sourceId},#{row.glucoseValue},#{row.recordedAt},#{row.repliedAt},#{replyHash})
+        ON DUPLICATE KEY UPDATE glucose_value = VALUES(glucose_value), recorded_at = VALUES(recorded_at),
+            replied_at = VALUES(replied_at), reply_hash = VALUES(reply_hash), read_at = CURRENT_TIMESTAMP(3)
+    </insert>
+
+    <!-- 类别“全部已读”：先查上界，再仅更新本人该上界以内的消息。 -->
+    <select id="messageCursor" resultType="java.lang.Long">
+        SELECT MAX(id) FROM community_message WHERE recipient_id = #{userId} AND read_at IS NULL
+    </select>
+    <update id="readMessages">
+        UPDATE community_message SET read_at = CURRENT_TIMESTAMP(3)
+        WHERE recipient_id = #{userId} AND id &lt;= #{through} AND read_at IS NULL
+    </update>
+    <select id="noticeCursor" resultType="java.lang.Long">
+        SELECT MAX(id) FROM community_notification
+        WHERE recipient_id = #{userId} AND kind = #{kind} AND read_at IS NULL
+    </select>
+    <update id="readNotices">
+        UPDATE community_notification SET read_at = CURRENT_TIMESTAMP(3)
+        WHERE recipient_id = #{userId} AND kind = #{kind} AND id &lt;= #{through} AND read_at IS NULL
+    </update>
+    <!-- 旧举报也可能刚获得新反馈，因此固定具体反馈和处理时间，不只看举报ID上界。 -->
+    <select id="reportSnapshots" resultType="com.threadfit.glucopilot.notification.entity.UserReminderRow">
+        SELECT id source_id, resolved_at replied_at FROM community_report WHERE reporter_id = #{userId}
+          AND state &lt;&gt; 'OPEN' AND resolved_at IS NOT NULL AND feedback_read_at IS NULL
+    </select>
+    <update id="readReports">
+        UPDATE community_report SET feedback_read_at = CURRENT_TIMESTAMP(3)
+        WHERE reporter_id = #{userId} AND state &lt;&gt; 'OPEN' AND resolved_at IS NOT NULL
+          AND feedback_read_at IS NULL AND (
+            <foreach collection="snapshots" item="snapshot" separator=" OR ">
+                (id = #{snapshot.sourceId} AND resolved_at = #{snapshot.repliedAt})
+            </foreach>
+          )
+    </update>
+</mapper>

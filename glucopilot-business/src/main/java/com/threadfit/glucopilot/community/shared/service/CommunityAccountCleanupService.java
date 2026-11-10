@@ -15,6 +15,7 @@ public class CommunityAccountCleanupService {
 
     @Transactional
     public void purgeAccountData(long userId) {
+        mapper.deleteReminderReads(userId);
         mapper.deleteFollows(userId);
         mapper.deleteReaders(userId);
         mapper.deleteViews(userId);

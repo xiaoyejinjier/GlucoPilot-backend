@@ -5,11 +5,14 @@ import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.profile.health.dto.HealthDtos.HealthSaveRequest;
 import com.threadfit.glucopilot.profile.health.dto.HealthDtos.HealthView;
 import com.threadfit.glucopilot.profile.health.service.HealthProfileService;
-import com.threadfit.glucopilot.user.account.UserAccountService;
+import com.threadfit.glucopilot.user.account.service.UserAccountService;
 import com.threadfit.glucopilot.user.dto.UserDtos;
-import com.threadfit.glucopilot.user.settings.UserSettingService;
+import com.threadfit.glucopilot.user.settings.service.UserSettingService;
+
 import jakarta.validation.Valid;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -36,41 +39,45 @@ public class UserController {
     @PatchMapping("/profile")
     public ApiResponse<UserDtos.UpdatedResult> patchProfile(
             @Valid @RequestBody UserDtos.ProfilePatchRequest request) {
-        return ApiResponse.ok(userAccountService.patchProfile(RequestContext.requireUserId(), request));
+        return ApiResponse.ok(
+                userAccountService.patchProfile(RequestContext.requireUserId(), request));
     }
 
     /**
-     * 健康档案全量保存（PUT，幂等覆盖）。见接口 Javadoc：null/空白字段 = 清空回未填写，
-     * diabetesTypeText 服务端按 diabetesType 派生、忽略客户端传值，diagnosedYm 不得晚于当前月。
-     * 业务实现委托 profile.health 模块的 HealthProfileService，本控制器只做路由聚合。
+     * 健康档案全量保存（PUT，幂等覆盖）。见接口 Javadoc：null/空白字段 = 清空回未填写， diabetesTypeText 服务端按 diabetesType
+     * 派生、忽略客户端传值，diagnosedYm 不得晚于当前月。 业务实现委托 profile.health 模块的 HealthProfileService，本控制器只做路由聚合。
      */
     @PutMapping("/health-profile")
-    public ApiResponse<HealthView> saveHealth(
-            @Valid @RequestBody HealthSaveRequest request) {
-        return ApiResponse.ok(healthProfileService.saveHealth(RequestContext.requireUserId(), request));
+    public ApiResponse<HealthView> saveHealth(@Valid @RequestBody HealthSaveRequest request) {
+        return ApiResponse.ok(
+                healthProfileService.saveHealth(RequestContext.requireUserId(), request));
     }
 
     @PatchMapping("/settings")
     public ApiResponse<UserDtos.UpdatedResult> patchSettings(
             @Valid @RequestBody UserDtos.SettingsPatchRequest request) {
-        return ApiResponse.ok(userSettingService.patchSettings(RequestContext.requireUserId(), request));
+        return ApiResponse.ok(
+                userSettingService.patchSettings(RequestContext.requireUserId(), request));
     }
 
     @PostMapping("/settings/disclaimer-agreement")
     public ApiResponse<UserDtos.DisclaimerAgreementResult> agreeDisclaimer(
             @Valid @RequestBody UserDtos.DisclaimerAgreementRequest request) {
-        return ApiResponse.ok(userSettingService.agreeDisclaimer(RequestContext.requireUserId(), request));
+        return ApiResponse.ok(
+                userSettingService.agreeDisclaimer(RequestContext.requireUserId(), request));
     }
 
     @PatchMapping("/phone")
     public ApiResponse<UserDtos.PhoneBindResult> bindPhone(
             @Valid @RequestBody UserDtos.PhoneBindRequest request) {
-        return ApiResponse.ok(userAccountService.bindPhone(RequestContext.requireUserId(), request));
+        return ApiResponse.ok(
+                userAccountService.bindPhone(RequestContext.requireUserId(), request));
     }
 
     @PatchMapping("/email")
     public ApiResponse<UserDtos.EmailBindResult> bindEmail(
             @Valid @RequestBody UserDtos.EmailBindRequest request) {
-        return ApiResponse.ok(userAccountService.bindEmail(RequestContext.requireUserId(), request));
+        return ApiResponse.ok(
+                userAccountService.bindEmail(RequestContext.requireUserId(), request));
     }
 }

@@ -3,10 +3,13 @@ package com.threadfit.glucopilot.glucose.controller;
 import com.threadfit.glucopilot.common.api.ApiResponse;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.constant.PermCodes;
-import com.threadfit.glucopilot.glucose.admin.AdminHealthRecordDtos;
-import com.threadfit.glucopilot.glucose.admin.AdminHealthRecordService;
+import com.threadfit.glucopilot.glucose.admin.dto.AdminHealthRecordDtos;
+import com.threadfit.glucopilot.glucose.admin.service.AdminHealthRecordService;
+
 import jakarta.validation.Valid;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,8 +30,10 @@ public class AdminHealthRecordController {
     @GetMapping("/nine-slot")
     @PreAuthorize("@ss.hasPermi('" + PermCodes.HEALTH_ARCHIVE_VIEW + "')")
     public ApiResponse<AdminHealthRecordDtos.Result> nineSlot(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+                    LocalDate startDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+                    LocalDate endDate,
             @RequestParam(required = false) String keyword,
             @Valid PageQuery query) {
         return ApiResponse.ok(adminHealthRecordService.query(startDate, endDate, keyword, query));

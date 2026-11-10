@@ -40,8 +40,11 @@ import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
  * 内容与请求里那份完全相同时直接放行，避免每个 token 都白重建一次消息列表。
  *
  * <h2>顺序</h2>
- * 排在会话记忆注入之前（order 更小）：这样无论记忆 Advisor 之后怎么拼装历史，
- * 系统提示词始终是消息列表的第一条。
+ * 排在会话记忆注入之前（order 更小），所以本 Advisor 先把系统提示词放进 {@code current}，
+ * 再由记忆 Advisor 交给装配器拼历史。<b>「系统提示词始终是消息列表第一条」由两个类共同保证</b>：
+ * 本 Advisor 负责把它放到请求最前，{@link com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler}
+ * 负责在拼接历史时把它从"本轮新增消息"里拆出来、仍然放在最前。
+ * 只改其中一边就会出现「第二轮起提示词落到历史后面」——见 {@code AdvisorChainOrderTest}。
  */
 @Slf4j
 public class DynamicPromptAdvisor implements CallAdvisor, StreamAdvisor {

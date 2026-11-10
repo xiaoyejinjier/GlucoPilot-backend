@@ -103,4 +103,14 @@ public class CommunityNotificationService {
             throw new BizException(ErrorCode.NOT_FOUND, "提醒不存在");
         mapper.markReadThrough(viewer, p.kind(), through);
     }
+
+    /** 打开具体提醒只清除该条，其他未查看的提醒继续保留。 */
+    @Transactional
+    public void readOne(long viewer, long id) {
+        user(viewer);
+        if (mapper.countOwnedNoticeId(viewer, id) != 1) {
+            throw new BizException(ErrorCode.NOT_FOUND, "提醒不存在");
+        }
+        mapper.markOneRead(viewer, id);
+    }
 }

@@ -4,6 +4,8 @@ import com.threadfit.glucopilot.community.recommendation.dto.CommunityRecommenda
 
 import lombok.Data;
 
+import java.util.List;
+
 /** Validated article filters, interpreted only by CommunityPublicationMapper. */
 @Data
 public class CommunityArticleQuery {
@@ -21,4 +23,6 @@ public class CommunityArticleQuery {
     private boolean adminSearch;
     private CommunityRecommendation recommendation;
     private boolean explainRecommendation;
+    /** 热榜等按 id 批量灌装；与 readable/published 组合使用。 */
+    private List<Long> newsIds;
 }

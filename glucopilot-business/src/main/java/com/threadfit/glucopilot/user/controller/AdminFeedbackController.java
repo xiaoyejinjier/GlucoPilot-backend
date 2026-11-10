@@ -6,9 +6,12 @@ import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.constant.PermCodes;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.user.dto.AdminFeedbackDtos;
-import com.threadfit.glucopilot.user.feedback.AdminFeedbackService;
+import com.threadfit.glucopilot.user.feedback.service.AdminFeedbackService;
+
 import jakarta.validation.Valid;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,8 +42,8 @@ public class AdminFeedbackController {
     @PutMapping("/{id}/reply")
     @PreAuthorize("@ss.hasPermi('" + PermCodes.FEEDBACK_REPLY + "')")
     public ApiResponse<AdminFeedbackDtos.ReplyResult> reply(
-            @PathVariable Long id,
-            @Valid @RequestBody AdminFeedbackDtos.ReplyRequest request) {
-        return ApiResponse.ok(adminFeedbackService.reply(RequestContext.requireOpsId(), id, request));
+            @PathVariable Long id, @Valid @RequestBody AdminFeedbackDtos.ReplyRequest request) {
+        return ApiResponse.ok(
+                adminFeedbackService.reply(RequestContext.requireOpsId(), id, request));
     }
 }

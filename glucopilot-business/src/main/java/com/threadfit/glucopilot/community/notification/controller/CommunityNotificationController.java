@@ -33,4 +33,10 @@ public class CommunityNotificationController {
         service.read(RequestContext.requireUserId(), p);
         return ApiResponse.ok();
     }
+
+    @PutMapping("/notifications/{id}/read")
+    public ApiResponse<Void> readOne(@PathVariable long id) {
+        service.readOne(RequestContext.requireUserId(), id);
+        return ApiResponse.ok();
+    }
 }

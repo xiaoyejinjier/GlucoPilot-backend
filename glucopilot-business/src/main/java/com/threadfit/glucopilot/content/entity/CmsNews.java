@@ -13,6 +13,8 @@ import java.time.LocalDateTime;
 public class CmsNews extends BaseEntity {
 
     private String title;
+    private String titlePinyin;
+    private String titlePinyinInitials;
     private String summaryText;
     private Integer channelCode;
     private Integer contentType;

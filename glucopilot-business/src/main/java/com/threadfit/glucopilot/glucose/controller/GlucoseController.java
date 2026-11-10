@@ -5,10 +5,13 @@ import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.glucose.dto.GlucoseDtos;
-import com.threadfit.glucopilot.glucose.period.GlucosePeriodService;
-import com.threadfit.glucopilot.glucose.record.GlucoseRecordService;
+import com.threadfit.glucopilot.glucose.period.service.GlucosePeriodService;
+import com.threadfit.glucopilot.glucose.record.service.GlucoseRecordService;
+
 import jakarta.validation.Valid;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,19 +36,23 @@ public class GlucoseController {
     private final GlucosePeriodService glucosePeriodService;
 
     @PutMapping("/glucose-records/by-node")
-    public ApiResponse<GlucoseDtos.UpsertResult> upsertByNode(@Valid @RequestBody GlucoseDtos.UpsertRequest request) {
+    public ApiResponse<GlucoseDtos.UpsertResult> upsertByNode(
+            @Valid @RequestBody GlucoseDtos.UpsertRequest request) {
         Long userId = RequestContext.requireUserId();
         return ApiResponse.ok(glucoseRecordService.upsertByNode(userId, request));
     }
 
     @GetMapping("/glucose-records")
     public ApiResponse<PageResult<GlucoseDtos.RecordItem>> records(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+                    LocalDate startDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+                    LocalDate endDate,
             @RequestParam(required = false) String nodeCode,
             @Valid PageQuery query) {
         Long userId = RequestContext.requireUserId();
-        return ApiResponse.ok(glucoseRecordService.page(userId, startDate, endDate, nodeCode, query));
+        return ApiResponse.ok(
+                glucoseRecordService.page(userId, startDate, endDate, nodeCode, query));
     }
 
     @GetMapping("/glucose-records/{id:\\d+}")
@@ -56,7 +63,8 @@ public class GlucoseController {
     @PatchMapping("/glucose-records/{id:\\d+}")
     public ApiResponse<GlucoseDtos.RecordItem> patchRecord(
             @PathVariable("id") Long id, @RequestBody GlucoseDtos.PatchRequest request) {
-        return ApiResponse.ok(glucoseRecordService.patch(RequestContext.requireUserId(), id, request));
+        return ApiResponse.ok(
+                glucoseRecordService.patch(RequestContext.requireUserId(), id, request));
     }
 
     @DeleteMapping("/glucose-records/{id:\\d+}")
@@ -67,8 +75,10 @@ public class GlucoseController {
 
     @GetMapping("/day-boards/{recordDate}")
     public ApiResponse<GlucoseDtos.DayBoard> dayBoard(
-            @PathVariable("recordDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate recordDate) {
-        return ApiResponse.ok(glucoseRecordService.dayBoard(RequestContext.requireUserId(), recordDate));
+            @PathVariable("recordDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+                    LocalDate recordDate) {
+        return ApiResponse.ok(
+                glucoseRecordService.dayBoard(RequestContext.requireUserId(), recordDate));
     }
 
     /** 九时段字典：匿名可访问，供小程序启动时拉取节点名与餐点标记。 */

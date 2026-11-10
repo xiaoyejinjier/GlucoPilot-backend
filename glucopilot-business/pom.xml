@@ -240,6 +240,13 @@
             <version>${okhttp.version}</version>
         </dependency>
 
+        <!-- 标题拼音检索（社区搜索） -->
+        <dependency>
+            <groupId>com.github.promeg</groupId>
+            <artifactId>tinypinyin</artifactId>
+            <version>2.0.3</version>
+        </dependency>
+
 
         <!-- ==================== API 文档 ==================== -->
 

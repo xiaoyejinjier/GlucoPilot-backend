@@ -89,8 +89,22 @@ public final class PredictionDtos {
         private BigDecimal suggestCarbs;
         /** 分食物结构化建议；整体降级/暂缓进食/无明细场景为空数组。 */
         private List<SuggestItem> suggestItems;
-        /** 算法版本号（当前 v1 参数）。 */
+        /** 算法版本号。 */
         private String algorithmVersion;
+        /** 推荐状态：IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE（P2 增补，前端暂不消费）。 */
+        private String recommendationStatus;
+        /** 目标区间下限（mmol/L，餐后 2h，来自分层目标）。 */
+        private BigDecimal targetLower;
+        /** 目标区间上限（mmol/L，餐后 2h，来自分层目标）。 */
+        private BigDecimal targetUpper;
+        /** 目标来源：PROFILE|GENERAL|GLOBAL。 */
+        private String targetSource;
+        /** 实际生效人群档：GENERAL|YOUNG_NO_COMPLICATION|OLDER_HYPOGLYCEMIA|GDM。 */
+        private String effectiveProfile;
+        /** 高血糖警示提示位（cur≥cautionHigh 且非 DANGER）。 */
+        private Boolean caution;
+        /** 状态提示词 key 数组（后端下发枚举 key，前端映射 i18n 渲染）。 */
+        private List<String> statusHints;
     }
 
     /** 单个食物的建议：suggestWeight 数值=建议吃 Xg；0=不建议；null=保持原份量（正常）。 */

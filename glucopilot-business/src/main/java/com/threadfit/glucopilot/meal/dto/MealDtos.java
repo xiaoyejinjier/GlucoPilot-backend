@@ -58,6 +58,12 @@ public final class MealDtos {
         /** 预测建议文案；可空 */
         @Size(max = 512)
         private String suggestText;
+        /** 算法版本号（v2.1 等）；可空 */
+        @Size(max = 8)
+        private String algorithmVersion;
+        /** 推荐状态：IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE；可空 */
+        @Size(max = 16)
+        private String recommendationStatus;
         /** 食物明细；可空。注意：明细项没有 categoryCode（仅 prediction 入参使用） */
         @Valid
         @Size(max = 50)

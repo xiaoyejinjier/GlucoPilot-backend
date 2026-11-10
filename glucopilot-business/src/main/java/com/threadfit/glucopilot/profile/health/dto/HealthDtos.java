@@ -21,8 +21,9 @@ public final class HealthDtos {
     /**
      * 全量保存请求（PUT /health-profile）。
      * null 语义：字段不传或传 null/空白，表示"清空该项恢复未填写"（服务端会显式置空）。
+     * 例外：glucoseGoalProfile 为 null 时表示"不修改"（保留库中原值），旧版本客户端不带该字段不得静默重置。
      * 校验：diabetesType ∈ [0,4]；diagnosedYm 须为 YYYY-MM 且不得晚于当前月(应用层 40001)；
-     * targetFasting / targetPostprandial ∈ [1.0, 33.3] mmol/L；文本类字段带长度上限。
+     * targetFasting / targetPostprandial ∈ [1.0, 33.3] mmol/L；glucoseGoalProfile ∈ [0,3]；文本类字段带长度上限。
      */
     @Data
     public static class HealthSaveRequest {
@@ -66,6 +67,11 @@ public final class HealthDtos {
         @DecimalMin(value = ProfileHealthConstant.TARGET_MIN, message = "餐后目标血糖不能低于 1.0 mmol/L")
         @DecimalMax(value = ProfileHealthConstant.TARGET_MAX, message = "餐后目标血糖不能高于 33.3 mmol/L")
         private BigDecimal targetPostprandial;
+
+        /** 血糖控制目标人群（0一般/1较严格/2较宽松/3妊娠期）；null = 不修改（例外于全量保存的 null=清空）。 */
+        @Min(value = ProfileHealthConstant.GOAL_PROFILE_MIN, message = "血糖控制目标人群取值须在 0~3 之间")
+        @Max(value = ProfileHealthConstant.GOAL_PROFILE_MAX, message = "血糖控制目标人群取值须在 0~3 之间")
+        private Integer glucoseGoalProfile;
     }
 
     /** 健康档案聚合视图，供 /users/me 幂等返回保存/读取结果。 */
@@ -83,5 +89,6 @@ public final class HealthDtos {
         private BigDecimal weight;
         private BigDecimal targetFasting;
         private BigDecimal targetPostprandial;
+        private Integer glucoseGoalProfile;
     }
 }

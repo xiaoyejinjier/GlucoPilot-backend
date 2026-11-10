@@ -116,6 +116,8 @@ public class MealRecordServiceImpl implements MealRecordService {
             row.setPredictNow(request.getPredictNow());
             row.setPredictSuggest(request.getPredictSuggest());
             row.setSuggestText(trimToMax(request.getSuggestText()));
+            row.setAlgorithmVersion(trimToMax(request.getAlgorithmVersion()));
+            row.setRecommendationStatus(trimToMax(request.getRecommendationStatus()));
             row.setRecordedAt(at);
             mealRecordMapper.insert(row);
             mealId = row.getId();
@@ -129,6 +131,8 @@ public class MealRecordServiceImpl implements MealRecordService {
             existing.setPredictNow(request.getPredictNow());
             existing.setPredictSuggest(request.getPredictSuggest());
             existing.setSuggestText(trimToMax(request.getSuggestText()));
+            existing.setAlgorithmVersion(trimToMax(request.getAlgorithmVersion()));
+            existing.setRecommendationStatus(trimToMax(request.getRecommendationStatus()));
             existing.setRecordedAt(at);
             mealRecordMapper.updateById(existing);
             mealId = existing.getId();

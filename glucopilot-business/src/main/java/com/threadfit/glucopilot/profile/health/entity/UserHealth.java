@@ -39,4 +39,7 @@ public class UserHealth extends BaseEntity {
     private BigDecimal weightKg;
     private BigDecimal targetFasting;
     private BigDecimal targetPostprandial;
+
+    /** 血糖控制目标人群（0一般/1较严格/2较宽松/3妊娠期；默认 0=一般）。独立于 diabetesType。 */
+    private Integer glucoseGoalProfile;
 }

@@ -25,6 +25,8 @@ public class HealthProfileServiceImpl implements HealthProfileService {
      * 保存语义为"全量提交"：入参 null 表示"清空该项恢复未填写"，而非忽略；
      * 因此采用 entity（承载有值字段，触发审计填充）+ wrapper.set(field, null)
      * （承载置空字段）的双写方案，合一次 update 防旧值残留。
+     * 例外：glucoseGoalProfile（血糖控制目标人群）null = "不修改"，保留库中原值——
+     * 旧版本客户端全量提交不带该字段时不得静默重置（方案 R7）。
      * diabetesTypeText 服务端派生、avatar/脱敏等由 user 侧聚合负责，本模块不依赖 user 实现。
      */
 
@@ -46,8 +48,9 @@ public class HealthProfileServiceImpl implements HealthProfileService {
      * - diagnosedYm 需匹配 YYYY-MM（由 DTO @Pattern 前置校验），且不得晚于当前月，否则抛 40001(BizException)；
      * - diabetesType 入参范围 [0,4]（@Min/@Max），展示文案 diabetesTypeText 由服务端按
      *   diabetesType(0未填/1一型/2二型/3妊娠/4其他) 派生，忽略客户端直接传入的文本，保证二者自洽；
-     * - targetFasting / targetPostprandial 限 1.0~33.3 mmol/L（DTO @DecimalMin/@DecimalMax）。
-     * null 语义：字段为 null/空白表示"清空该项恢复未填写"。
+     * - targetFasting / targetPostprandial 限 1.0~33.3 mmol/L（DTO @DecimalMin/@DecimalMax）；
+     * - glucoseGoalProfile 限 0~3（DTO @Min/@Max）。
+     * null 语义：字段为 null/空白表示"清空该项恢复未填写"，glucoseGoalProfile 除外（null = 不修改）。
      * @param userId 当前登录用户 id（必填）
      * @param request 全量提交的档案字段
      * @return 保存后的健康档案视图
@@ -121,6 +124,11 @@ public class HealthProfileServiceImpl implements HealthProfileService {
         } else {
             wrapper.set(UserHealth::getTargetPostprandial, null);
         }
+        // glucoseGoalProfile 为例外语义（null = 不修改）：仅在有值时写入，不清空、不 wrapper.set(null)。
+        // MyBatis-Plus update 对 entity 的 null 字段默认跳过 SET，故 null 时该列自然保留原值（方案 R7）。
+        if (request.getGlucoseGoalProfile() != null) {
+            entity.setGlucoseGoalProfile(request.getGlucoseGoalProfile());
+        }
 
         userHealthMapper.update(entity, wrapper);
         entity.setUserId(existing.getUserId());
@@ -147,6 +155,7 @@ public class HealthProfileServiceImpl implements HealthProfileService {
         UserHealth created = new UserHealth();
         created.setUserId(userId);
         created.setDiabetesType(0);
+        created.setGlucoseGoalProfile(0);
         userHealthMapper.insert(created);
         return created;
     }
@@ -179,6 +188,7 @@ public class HealthProfileServiceImpl implements HealthProfileService {
                 .weight(h.getWeightKg())
                 .targetFasting(h.getTargetFasting())
                 .targetPostprandial(h.getTargetPostprandial())
+                .glucoseGoalProfile(h.getGlucoseGoalProfile())
                 .build();
     }
 }

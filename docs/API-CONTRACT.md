@@ -1,5 +1,42 @@
 # API 契约
 
+## 2026-11-09 健康档案血糖控制目标人群字段（glucoseGoalProfile）
+
+`user_health` 新增 `glucose_goal_profile`（TINYINT UNSIGNED，0=一般/1=较严格/2=较宽松/3=妊娠期，默认 0），独立于 `diabetes_type`，作为预测模块的目标分层兜底来源；本批仅落字段与档案读写链路，不改变预测算法行为。V56 迁移新增该列并默认 0，存量数据回落为「一般」。
+
+- 读：`GET /users/me` 的 `health.glucoseGoalProfile` 全量返回该字段（0~3 数字）。
+- 写：健康档案保存接口 `PUT /users/me/health-profile` 请求体新增可选 `glucoseGoalProfile`，取值 0~3；**缺省（字段不存在或为 null）= 不修改**（R7 例外，区别于全量保存「null=清空」），不清空、不回写 0。旧版本客户端不携带该字段时保留历史选择，不被静默重置。
+- 校验：取值须为 0~3 的整数，越界返回参数校验错误 400。
+- 前端建档页新增「血糖控制目标」picker，选项文案：一般（默认）/较严格（年轻、无并发症）/较宽松（65 岁以上或容易低血糖）/妊娠期（含妊娠糖尿病）；选择「妊娠期」时附提示「如不确定请咨询产科医生」。旧版本客户端不展示该字段。
+
+## 2026-11-09 餐后预测响应增补分层目标与状态字段（P2）
+
+`POST /api/v1/predictions/meal-glucose` 响应**增补**（只增不改，前端暂不消费）：
+
+- `recommendationStatus:string`：IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE（INFEASIBLE 由后续离散搜索阶段产生，本批不返回）。
+- `targetLower:number` / `targetUpper:number`：生效目标区间（餐后 2h），由分层目标解析得到。
+- `targetSource:string`：PROFILE|GENERAL|GLOBAL。
+- `effectiveProfile:string`：GENERAL|YOUNG_NO_COMPLICATION|OLDER_HYPOGLYCEMIA|GDM（diabetesType=3 强制取严为 GDM）。
+- `caution:boolean`：cur≥10 且非 DANGER 时为 true。
+- `statusHints:string[]`：状态提示词 key 数组（前端映射 i18n 渲染，key 与文案见方案 §4.3）。
+
+分层目标来源：`glucoseGoalProfile`（0一般/1较严格/2较宽松/3妊娠期）+ diabetesType 取严（R6）→ 四档 targetUpper 10.0/7.8/10.5/6.7。目标分层仅用于状态判定与推荐约束，**不进收缩模型**（收缩锚点仍固定 7.8）。
+
+本批为双路并行：既有 `predictNow/predictSuggest/suggestCarbs/suggestText` 语义、目标反解路径与 `dangerHigh=10` 均保持不变；新增字段只增不改，前端与统计在下阶段接入。
+
+## 2026-11-10 餐后预测建议语义切换（P3）
+
+`POST /api/v1/predictions/meal-glucose` 建议语义自 v2.1 起变更（`algorithmVersion` 升级为 `v2.1`）：
+
+- 收缩锚点恒为 7.8（`defaultTarget`），与用户 `targetPostprandial/targetFasting` 及分层目标解耦；删除目标反解路径（消除 `predictSuggest ≡ target` 恒等式）。
+- 建议份量由离散搜索 + `planCarbs` 复算得到（候选档 100%/90%/…/50%，ABOVE 向下、BELOW 向上 110%~150%）。
+- `dangerHigh` 由 10 调整为 **13.9**（`cur≥13.9 → DANGER`）；`cur∈[10,13.9)` 且非 DANGER 叠加 `caution=true`。
+- `predictSuggest` 语义：`IN_RANGE/LOW` = `predictNow`；`ABOVE/BELOW` = 复算后预测值；`DANGER/INFEASIBLE` = `null`。
+- `suggestCarbs`：`IN_RANGE/LOW` = 当前碳水；`ABOVE/BELOW` = 复算 `planCarbs`；`DANGER` = 0；`INFEASIBLE` = null。
+- `statusHints` 新增 `infeasible_normal` / `gdm_infeasible`（搜索无解时按人群区分）。
+
+新增算法参数（`PredictionProperties`）：`minPortionRatio=0.5`、`safetyMargin=1.0`、`safetyMarginGdm=0.3`、`minMealCarbs=30`；GDM/老年不允许 0 碳水（`planCarbs` 下限 30g）。
+
 ## 2026-11-04 异常血糖处理建议保留
 
 保留现有异常处理接口及快照/版本校验：同一recordId的血糖或测量时间被更正时，旧请求返回40900及“血糖记录已更新，请刷新后处理最新数据”；记录不再异常或已删除时保持40400，不允许旧建议自动提交。其他时段新增的独立记录不使当前记录失效。
@@ -557,17 +594,17 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | `GET /api/v1/meal-records?recordDate=yyyy-MM-dd` | C 端登录 | 按日查询当前用户的饮食记录（含明细与照片 URL） |
 | `DELETE /api/v1/meal-records/{id}` | C 端登录 | 逻辑删除饮食记录（含明细），仅限当前用户 |
 
-保存请求体字段：`recordDate`（必填）、`nodeCode`（必填，餐点）、`mediaId`（餐食照片 ID，可空，须为当前用户 `MEAL` 类型）、`foodsText`（可空，≤512，为空时按明细食物名拼接兜底）、`carbsG`（可空，≥0，为空时按明细求和兜底）、`hungerLevel`（可空，`1` 饱腹 / `2` 一般 / `3` 微饿）、`supplementText`（可空，≤512）、`predictNow` / `predictSuggest`（可空，`(0,40)`）、`suggestText`（可空，≤512）、`items`（可空，≤50，每项含 `foodId` 可空、`foodName` 必填 ≤64、`weightG` / `carbsG` / `caloriesKcal` 可空 ≥0，`foodId` 非空时须为上架食物）。
+保存请求体字段：`recordDate`（必填）、`nodeCode`（必填，餐点）、`mediaId`（餐食照片 ID，可空，须为当前用户 `MEAL` 类型）、`foodsText`（可空，≤512，为空时按明细食物名拼接兜底）、`carbsG`（可空，≥0，为空时按明细求和兜底）、`hungerLevel`（可空，`1` 饱腹 / `2` 一般 / `3` 微饿）、`supplementText`（可空，≤512）、`predictNow` / `predictSuggest`（可空，`(0,40)`）、`suggestText`（可空，≤512）、`algorithmVersion`（可空，≤8，算法版本号如 `v2.1`）、`recommendationStatus`（可空，≤16，`IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE`）、`items`（可空，≤50，每项含 `foodId` 可空、`foodName` 必填 ≤64、`weightG` / `carbsG` / `caloriesKcal` 可空 ≥0，`foodId` 非空时须为上架食物）。
 
-预测三列 `predictNow` / `predictSuggest` / `suggestText` 由 prediction 客户端串联在用户确认后携带，服务端只校验范围与长度、不重算；两个模块未上线期间传空即可。删除后同日同餐点可重新保存。
+预测三列 `predictNow` / `predictSuggest` / `suggestText` 由 prediction 客户端串联在用户确认后携带，服务端只校验范围与长度、不重算；两个模块未上线期间传空即可。`algorithmVersion` / `recommendationStatus` 由 prediction 客户端随预测结果一并携带并落库（`meal_record` 增列 `algorithm_version` / `recommendation_status`，均可空），供后续统计按算法版本 / 推荐状态过滤，`DANGER` / `INFEASIBLE` 状态同样落库。删除后同日同餐点可重新保存。
 
 ## 餐后血糖预测
 
-用户端通过 `POST /api/v1/predictions/meal-glucose` 获取餐后 1 小时血糖预测。服务端为纯计算：不落库、不查 `glucose_record` / `meal_record`，自身无持久化，可重复调用（重算 = 同接口携带补充信息重复调用）；唯一服务端读取是健康档案的分类参数（经 `profile.health` 服务接口自取，未建档时兜底建档 + 默认参数分档，正常返回）。食物数据由客户端从 ai 分析结果转发（ai 未上线时前端可手输联调），当前血糖由客户端传入，服务端不查血糖记录、不设默认值。
+用户端通过 `POST /api/v1/predictions/meal-glucose` 获取餐后 2 小时血糖预测。服务端为纯计算：不落库、不查 `glucose_record` / `meal_record`，自身无持久化，可重复调用（重算 = 同接口携带补充信息重复调用）；唯一服务端读取是健康档案的分类参数（经 `profile.health` 服务接口自取，未建档时兜底建档 + 默认参数分档，正常返回）。食物数据由客户端从 ai 分析结果转发（ai 未上线时前端可手输联调），当前血糖由客户端传入，服务端不查血糖记录、不设默认值。
 
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
-| `POST /api/v1/predictions/meal-glucose` | C 端登录 | 餐后 1h 血糖两段式预测（现状 / 建议文案 / 按建议量再预测），`nodeCode` 须为餐点节点（`breakfast` / `lunch` / `dinner`） |
+| `POST /api/v1/predictions/meal-glucose` | C 端登录 | 餐后 2h 血糖两段式预测（现状 / 建议文案 / 按建议量再预测），`nodeCode` 须为餐点节点（`breakfast` / `lunch` / `dinner`） |
 
 请求体字段：`nodeCode`（必填，餐点）、`currentGlucose`（必填，`(0,40)` mmol/L）、`carbsG`（必填，≥0）、`items`（可空，≤50，每项 `foodName` 必填 ≤64、`categoryCode` 必填 `1-9` 且**透传不落库**——前端从 food 库选食时详情自然带 `category_code` 填入、`weightG` / `carbsG` 可空 ≥0）、`portionRatio`（可空，`(0,2]`，默认 1.0）、`medicationTaken`（可空布尔，默认未服药；v2 起不改变预测结果，仅采集留档用于后续校准）、`exerciseDone`（可空布尔，默认未运动）、补充原文（可空，≤200）。
 

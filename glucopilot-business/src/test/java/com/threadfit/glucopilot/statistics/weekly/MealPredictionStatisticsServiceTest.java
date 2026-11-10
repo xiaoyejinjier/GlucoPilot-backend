@@ -32,7 +32,7 @@ class MealPredictionStatisticsServiceTest {
         jdbc.execute(
                 """
                 CREATE TABLE meal_record (user_id BIGINT, record_date DATE, node_code VARCHAR(32),
-                  predict_now DECIMAL(4,1), predict_suggest DECIMAL(4,1), is_deleted TINYINT)
+                  predict_now DECIMAL(4,1), predict_suggest DECIMAL(4,1), algorithm_version VARCHAR(8), is_deleted TINYINT)
                 """);
         service =
                 new MealPredictionStatisticsService(
@@ -41,15 +41,15 @@ class MealPredictionStatisticsServiceTest {
 
     @Test
     void averagesOnlyRecommendedMealsWithinCurrentUserAndInclusiveDateRange() {
-        insert(1, day, "breakfast", "20.0", "6.0", 0);
-        insert(1, day, "lunch", "21.0", "7.0", 0);
-        insert(1, day, "dinner", "22.0", "9.0", 0);
-        insert(2, day, "breakfast", "1.0", "1.0", 0);
-        insert(1, day, "breakfast", "30.0", "30.0", 1);
-        insert(1, day, "after_breakfast", "30.0", "30.0", 0);
-        insert(1, day.minusDays(1), "breakfast", "30.0", "30.0", 0);
-        insert(1, day.plusDays(7), "breakfast", "30.0", "30.0", 0);
-        insert(1, day.plusDays(6), "dinner", "20.0", "8.0", 0);
+        insert(1, day, "breakfast", "20.0", "6.0", "v2.1", 0);
+        insert(1, day, "lunch", "21.0", "7.0", "v2.1", 0);
+        insert(1, day, "dinner", "22.0", "9.0", "v2.1", 0);
+        insert(2, day, "breakfast", "1.0", "1.0", "v2.1", 0);
+        insert(1, day, "breakfast", "30.0", "30.0", "v2.1", 1);
+        insert(1, day, "after_breakfast", "30.0", "30.0", "v2.1", 0);
+        insert(1, day.minusDays(1), "breakfast", "30.0", "30.0", "v2.1", 0);
+        insert(1, day.plusDays(7), "breakfast", "30.0", "30.0", "v2.1", 0);
+        insert(1, day.plusDays(6), "dinner", "20.0", "8.0", "v2.1", 0);
         var values = service.dailySeries(1L, day, day.plusDays(6));
         assertEquals(2, values.size());
         assertEquals(new BigDecimal("7.3"), values.get(day).average());
@@ -61,9 +61,9 @@ class MealPredictionStatisticsServiceTest {
 
     @Test
     void partialMealsAreNotZeroFilledAndMissingSuggestNeverFallsBackToNow() {
-        insert(1, day, "breakfast", "20.0", "6.5", 0);
-        insert(1, day, "lunch", "21.0", null, 0);
-        insert(1, day, "dinner", "22.0", "8.0", 0);
+        insert(1, day, "breakfast", "20.0", "6.5", "v2.1", 0);
+        insert(1, day, "lunch", "21.0", null, "v2.1", 0);
+        insert(1, day, "dinner", "22.0", "8.0", "v2.1", 0);
         var value = service.dailySeries(1L, day, day).get(day);
         assertEquals(new BigDecimal("7.3"), value.average());
         assertEquals(2, value.count());
@@ -71,23 +71,34 @@ class MealPredictionStatisticsServiceTest {
 
     @Test
     void zeroNegativeOutOfRangeNullAndDeletedValuesDoNotMakeAPrediction() {
-        insert(1, day, "breakfast", "7.0", null, 0);
-        insert(1, day, "lunch", "7.0", "0.0", 0);
-        insert(1, day, "dinner", "7.0", "40.0", 0);
-        insert(1, day.plusDays(1), "breakfast", "7.0", "-1.0", 0);
-        insert(1, day.plusDays(1), "lunch", "7.0", "8.0", 1);
+        insert(1, day, "breakfast", "7.0", null, "v2.1", 0);
+        insert(1, day, "lunch", "7.0", "0.0", "v2.1", 0);
+        insert(1, day, "dinner", "7.0", "40.0", "v2.1", 0);
+        insert(1, day.plusDays(1), "breakfast", "7.0", "-1.0", "v2.1", 0);
+        insert(1, day.plusDays(1), "lunch", "7.0", "8.0", "v2.1", 1);
         assertTrue(service.dailySeries(1L, day, day.plusDays(1)).isEmpty());
     }
 
+    @Test
+    void historicalV2OrNullVersionRecordsAreNotCounted() {
+        insert(1, day, "breakfast", "20.0", "6.0", "v2.1", 0);
+        insert(1, day, "lunch", "21.0", "7.0", "v2", 0);
+        insert(1, day, "dinner", "22.0", "9.0", null, 0);
+        var value = service.dailySeries(1L, day, day).get(day);
+        assertEquals(new BigDecimal("6.0"), value.average());
+        assertEquals(1, value.count());
+    }
+
     private void insert(
-            long userId, LocalDate date, String node, String now, String suggested, int deleted) {
+            long userId, LocalDate date, String node, String now, String suggested, String version, int deleted) {
         jdbc.update(
-                "INSERT INTO meal_record VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO meal_record VALUES (?, ?, ?, ?, ?, ?, ?)",
                 userId,
                 date,
                 node,
                 now,
                 suggested,
+                version,
                 deleted);
     }
 }

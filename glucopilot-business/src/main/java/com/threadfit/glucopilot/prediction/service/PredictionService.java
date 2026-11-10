@@ -14,32 +14,27 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.StringJoiner;
+import java.util.function.Function;
 
 /**
  * 餐后血糖预测（纯计算，不落库、不查血糖/饮食记录）。
  * 唯一服务端读 = {@link HealthProfileService#healthViewOf}；算法参数见 {@link PredictionProperties}。
+ *
+ * <p>P3 起：建议份量由 {@link MealPortionSearcher} 离散搜索 + planCarbs 复算得到，
+ * 收缩锚点恒为 7.8（与分层目标解耦），不再反解目标碳水（消除 predictSuggest ≡ target 的恒等式）。
  */
 @Service
 @RequiredArgsConstructor
 public class PredictionService {
 
-    private static final String ALGORITHM_VERSION = "v2";
+    private static final String ALGORITHM_VERSION = "v2.1";
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal ONE = BigDecimal.ONE;
-    private static final BigDecimal TWO = new BigDecimal("2");
     private static final BigDecimal GLUCOSE_MIN = new BigDecimal("0.1");
     private static final BigDecimal GLUCOSE_MAX = new BigDecimal("39.9");
     private static final int DIVIDE_SCALE = 6;
-
-    // food_category.id 1-9 映射（V2__init_seed.sql:76-79）
-    private static final int STAPLE = 1;   // 主食
-    private static final int FRUIT = 4;    // 水果
-    private static final int MILK = 5;     // 奶
-    private static final int BEAN = 6;     // 豆制品
-    private static final int NUT = 7;      // 坚果
-    private static final int DRINK = 8;    // 饮料
-    private static final int SNACK = 9;    // 零食
+    /** 低血糖优先阈值（mmol/L）；cur 低于此值走 LOW，优先处理低血糖。 */
+    private static final BigDecimal LOW_THRESHOLD = new BigDecimal("3.9");
 
     private final PredictionProperties props;
     private final HealthProfileService healthProfileService;
@@ -47,8 +42,8 @@ public class PredictionService {
     /** 建议产出：文案与结构化数据同源派生，保证强一致。 */
     private record Advices(String text, List<PredictionDtos.SuggestItem> items) {}
 
-    /** 均衡档分配结果：clauses 文案与 weights 克重按 balance 顺序一一对应。 */
-    private record BalancedAllocation(String[] clauses, BigDecimal[] weights) {}
+    /** 推荐状态枚举。 */
+    private enum RecommendationStatus { IN_RANGE, ABOVE, BELOW, LOW, DANGER, INFEASIBLE }
 
     /** 入口：先校验 nodeCode 必须为餐点节点；唯一服务端依赖 = 读健康档案。未建档时 HealthView 为空对象，分类参数取默认，不会报错。 */
     public PredictionDtos.PredictResult predict(Long userId, PredictionDtos.PredictRequest request) {
@@ -59,7 +54,9 @@ public class PredictionService {
         return compute(request, health);
     }
 
-    /** 两段式核心：①按当前量预测 predictNow；②反推目标所需碳水并给出建议文案 + 按建议量再预测 predictSuggest。 */
+    /**
+     * 核心：①按当前量预测 predictNow；②状态机判定；③ABOVE/BELOW 走离散搜索得推荐份量并复算 predictSuggest。
+     */
     private PredictionDtos.PredictResult compute(PredictionDtos.PredictRequest req, HealthView health) {
         BigDecimal cur = req.getCurrentGlucose();
         BigDecimal carbs = req.getCarbsG();
@@ -67,44 +64,186 @@ public class PredictionService {
         boolean med = Boolean.TRUE.equals(req.getMedicationTaken());
         boolean ex = Boolean.TRUE.equals(req.getExerciseDone());
 
-        // 升幅 = 碳水(总量×份量)×响应系数 R + 服药/运动修正；R 按糖尿病类型取
         BigDecimal r = rFor(health.getDiabetesType());
         BigDecimal dMed = med ? props.getMedEffect() : ZERO;
         BigDecimal dEx = ex ? props.getExerciseEffect() : ZERO;
-        BigDecimal dCarb = carbs.multiply(portion).multiply(r);
 
-        // 回归均值收缩：血糖不会原地不动，而是向目标回落的群体规律
-        // （真实队列中餐前血糖每高 1 mmol/L，2h 升幅低约 0.44 mmol/L）
-        BigDecimal target = targetOf(health);
-        BigDecimal dShrink = props.getShrinkK().multiply(target.subtract(cur));
+        // R1：收缩锚点恒为 defaultTarget（7.8），与分层目标解耦；不再读用户 targetPostprandial/Fasting。
+        BigDecimal dShrink = props.getShrinkK().multiply(props.getDefaultTarget().subtract(cur));
+        BigDecimal predictNow = roundGlucose(cur.add(dShrink).add(carbs.multiply(portion).multiply(r)).add(dMed).add(dEx));
 
-        // 现状预测 = 当前血糖 + 收缩项 + 升幅 + 修正，再做 clamp+舍入边界处理
-        BigDecimal predictNow = roundGlucose(cur.add(dShrink).add(dCarb).add(dMed).add(dEx));
+        GlucoseGoalResolver.ResolvedGoal goal = GlucoseGoalResolver.resolve(health);
+        BigDecimal safetyMargin = goal.effectiveProfile() == GlucoseGoalResolver.Profile.GDM
+                ? props.getSafetyMarginGdm() : props.getSafetyMargin();
+        boolean allowZeroCarb = goal.effectiveProfile() != GlucoseGoalResolver.Profile.GDM
+                && goal.effectiveProfile() != GlucoseGoalResolver.Profile.OLDER_HYPOGLYCEMIA;
 
-        // 反推建议碳水：危险血糖直接 0；否则令 predictSuggest = target 反解碳水，并 clamp 到 [0, 上限]
+        Function<BigDecimal, BigDecimal> predictor = planCarbs -> roundGlucose(
+                cur.add(dShrink).add(planCarbs.multiply(r)).add(dMed).add(dEx));
+
+        RecommendationStatus base = classify(cur, predictNow, goal);
+
         BigDecimal suggestCarbs;
-        if (cur.compareTo(props.getDangerHigh()) >= 0) {
-            suggestCarbs = ZERO;
-        } else {
-            // target = cur + k·(target−cur) + carbs·R + dMed + dEx  ⇒  carbs = [(1−k)(target−cur) − dMed − dEx] / R
-            BigDecimal raw = target.subtract(cur).multiply(ONE.subtract(props.getShrinkK()))
-                    .subtract(dMed).subtract(dEx)
-                    .divide(r, DIVIDE_SCALE, RoundingMode.HALF_UP);
-            suggestCarbs = clamp(raw, ZERO, props.getCarbsSuggestMax());
+        BigDecimal predictSuggest;
+        Advices advices;
+        RecommendationStatus finalStatus;
+        List<String> hints = new ArrayList<>();
+
+        switch (base) {
+            case DANGER -> {
+                suggestCarbs = ZERO;
+                predictSuggest = null;
+                advices = new Advices("当前血糖明显偏高，建议暂缓进食并尽快就医", List.of());
+                finalStatus = RecommendationStatus.DANGER;
+                hints.add("danger_high");
+            }
+            case LOW -> {
+                // 低血糖优先，不减不加量
+                suggestCarbs = carbs.multiply(portion).setScale(1, RoundingMode.HALF_UP);
+                predictSuggest = predictNow;
+                advices = new Advices("当前血糖偏低，请先处理低血糖（如进食含糖食物），再录入本餐", List.of());
+                finalStatus = RecommendationStatus.LOW;
+                hints.add("low_first");
+            }
+            case IN_RANGE -> {
+                suggestCarbs = carbs.multiply(portion).setScale(1, RoundingMode.HALF_UP);
+                predictSuggest = predictNow;
+                advices = new Advices("当前份量预计血糖在目标范围内，无需调整", preserveItems(req.getItems()));
+                finalStatus = RecommendationStatus.IN_RANGE;
+            }
+            case ABOVE -> {
+                MealPortionSearcher.Result sr = search(req.getItems(), carbs, goal, safetyMargin, allowZeroCarb, predictor, false);
+                if (sr == null) {
+                    suggestCarbs = null;
+                    predictSuggest = null;
+                    advices = new Advices(infeasibleText(goal), List.of());
+                    finalStatus = RecommendationStatus.INFEASIBLE;
+                    hints.add(infeasibleHint(goal));
+                } else {
+                    suggestCarbs = sr.planCarbs().setScale(1, RoundingMode.HALF_UP);
+                    predictSuggest = predictor.apply(sr.planCarbs());
+                    advices = ratioAdvices(sr.reductions());
+                    finalStatus = RecommendationStatus.ABOVE;
+                    hints.add("above_adjusted");
+                }
+            }
+            case BELOW -> {
+                MealPortionSearcher.Result sr = search(req.getItems(), carbs, goal, safetyMargin, allowZeroCarb, predictor, true);
+                if (sr == null) {
+                    suggestCarbs = null;
+                    predictSuggest = null;
+                    advices = new Advices(infeasibleText(goal), List.of());
+                    finalStatus = RecommendationStatus.INFEASIBLE;
+                    hints.add(infeasibleHint(goal));
+                } else {
+                    suggestCarbs = sr.planCarbs().setScale(1, RoundingMode.HALF_UP);
+                    predictSuggest = predictor.apply(sr.planCarbs());
+                    advices = ratioAdvices(sr.reductions());
+                    finalStatus = RecommendationStatus.BELOW;
+                    hints.add("below_add");
+                }
+            }
+            default -> throw new IllegalStateException("unexpected status " + base);
         }
 
-        // 建议量预测 = 当前血糖 + 收缩项 + 建议碳水升幅 + 修正，同样 clamp+舍入（未 clamp 时恰好等于目标）
-        BigDecimal predictSuggest = roundGlucose(
-                cur.add(dShrink).add(suggestCarbs.multiply(r)).add(dMed).add(dEx));
+        boolean caution = finalStatus != RecommendationStatus.DANGER
+                && cur.compareTo(props.getCautionHigh()) >= 0;
+        if (caution) {
+            hints.add("caution_high");
+        }
 
-        Advices advices = buildAdvices(cur, suggestCarbs, carbs, req.getItems());
         return PredictionDtos.PredictResult.builder()
                 .predictNow(predictNow)
                 .suggestText(advices.text())
                 .predictSuggest(predictSuggest)
-                .suggestCarbs(suggestCarbs.setScale(1, RoundingMode.HALF_UP))
+                .suggestCarbs(suggestCarbs)
                 .suggestItems(advices.items())
                 .algorithmVersion(ALGORITHM_VERSION)
+                .recommendationStatus(finalStatus.name())
+                .targetLower(goal.targetLower())
+                .targetUpper(goal.targetUpper())
+                .targetSource(goal.source().name())
+                .effectiveProfile(goal.effectiveProfile().name())
+                .caution(caution)
+                .statusHints(hints)
+                .build();
+    }
+
+    /** 状态机基础判定（§4.2）：DANGER → LOW → IN_RANGE → ABOVE → BELOW；INFEASIBLE 由搜索无解产生。 */
+    private RecommendationStatus classify(BigDecimal cur, BigDecimal predictNow,
+                                          GlucoseGoalResolver.ResolvedGoal goal) {
+        if (cur.compareTo(props.getDangerHigh()) >= 0) {
+            return RecommendationStatus.DANGER;
+        }
+        if (cur.compareTo(LOW_THRESHOLD) < 0) {
+            return RecommendationStatus.LOW;
+        }
+        if (predictNow.compareTo(goal.targetLower()) >= 0 && predictNow.compareTo(goal.targetUpper()) <= 0) {
+            return RecommendationStatus.IN_RANGE;
+        }
+        if (predictNow.compareTo(goal.targetUpper()) > 0) {
+            return RecommendationStatus.ABOVE;
+        }
+        return RecommendationStatus.BELOW;
+    }
+
+    private MealPortionSearcher.Result search(List<PredictionDtos.Item> items, BigDecimal carbs,
+                                              GlucoseGoalResolver.ResolvedGoal goal, BigDecimal safetyMargin,
+                                              boolean allowZeroCarb, Function<BigDecimal, BigDecimal> predictor,
+                                              boolean upward) {
+        return MealPortionSearcher.search(items, new MealPortionSearcher.Params(
+                carbs, goal.targetLower(), goal.targetUpper(), safetyMargin,
+                props.getMinPortionRatio(), props.getStapleFloor(), props.getMinMealCarbs(),
+                allowZeroCarb, predictor), upward);
+    }
+
+    private String infeasibleHint(GlucoseGoalResolver.ResolvedGoal goal) {
+        return goal.effectiveProfile() == GlucoseGoalResolver.Profile.GDM ? "gdm_infeasible" : "infeasible_normal";
+    }
+
+    private String infeasibleText(GlucoseGoalResolver.ResolvedGoal goal) {
+        return goal.effectiveProfile() == GlucoseGoalResolver.Profile.GDM
+                ? "当前预测已超出妊娠期严格目标，请按产科/营养科方案进食并加强监测"
+                : "已接近最低建议量，仍可能超标，建议调整食物结构或咨询营养师";
+    }
+
+    private List<PredictionDtos.SuggestItem> preserveItems(List<PredictionDtos.Item> items) {
+        List<PredictionDtos.SuggestItem> out = new ArrayList<>();
+        if (items != null) {
+            for (PredictionDtos.Item it : items) {
+                out.add(suggestOf(it.getFoodName(), null));
+            }
+        }
+        return out;
+    }
+
+    /** 命中档下的逐食物建议文案与结构化建议（与 planCarbs 同源）。 */
+    private Advices ratioAdvices(List<MealPortionSearcher.Reduction> reductions) {
+        if (reductions.isEmpty()) {
+            return new Advices("建议按推荐份量用餐", List.of());
+        }
+        StringBuilder sb = new StringBuilder();
+        List<PredictionDtos.SuggestItem> list = new ArrayList<>();
+        for (int i = 0; i < reductions.size(); i++) {
+            MealPortionSearcher.Reduction red = reductions.get(i);
+            if (i > 0) {
+                sb.append(" · ");
+            }
+            if (red.suggestWeight() == null) {
+                sb.append(red.foodName()).append(" 正常");
+            } else {
+                sb.append(red.foodName()).append(" ")
+                        .append(red.suggestWeight().stripTrailingZeros().toPlainString()).append("g");
+            }
+            list.add(suggestOf(red.foodName(), red.suggestWeight()));
+        }
+        return new Advices(sb.toString(), list);
+    }
+
+    private static PredictionDtos.SuggestItem suggestOf(String foodName, BigDecimal suggestWeight) {
+        return PredictionDtos.SuggestItem.builder()
+                .foodName(foodName)
+                .suggestWeight(suggestWeight)
                 .build();
     }
 
@@ -117,256 +256,6 @@ public class PredictionService {
             case 4 -> props.getRType4();
             default -> props.getRType0();
         };
-    }
-
-    /** 目标血糖取值优先级：餐后目标 → 空腹目标 → 配置默认值（均未配置时兜底）。 */
-    private BigDecimal targetOf(HealthView health) {
-        if (health.getTargetPostprandial() != null) {
-            return health.getTargetPostprandial();
-        }
-        if (health.getTargetFasting() != null) {
-            return health.getTargetFasting();
-        }
-        return props.getDefaultTarget();
-    }
-
-    /** 场景矩阵：危险/无余地/超上限/无明细 → 文案 + 空建议；有明细 → 分食物建议。 */
-    private Advices buildAdvices(BigDecimal cur, BigDecimal suggestCarbs, BigDecimal totalCarbs,
-                                 List<PredictionDtos.Item> items) {
-        if (cur.compareTo(props.getDangerHigh()) >= 0) {
-            return new Advices("当前血糖偏高，建议暂缓进食并继续监测，必要时就医", List.of());
-        }
-        if (suggestCarbs.compareTo(ZERO) <= 0) {
-            return new Advices("当前血糖已接近或高于目标，建议本餐以蔬菜与蛋白为主、减少或不用主食", List.of());
-        }
-        if (suggestCarbs.compareTo(props.getCarbsSuggestMax()) >= 0) {
-            int rice = gramsInt(suggestCarbs.divide(props.getRiceCarbRatio(), DIVIDE_SCALE, RoundingMode.HALF_UP));
-            return new Advices("目标所需碳水较高，建议按单餐上限 " + gramsInt(props.getCarbsSuggestMax())
-                    + " g 用餐（约米饭 " + rice + " g），避免一次过量", List.of());
-        }
-        if (items == null || items.isEmpty()) {
-            int carbsInt = gramsInt(suggestCarbs);
-            int rice = gramsInt(suggestCarbs.divide(props.getRiceCarbRatio(), DIVIDE_SCALE, RoundingMode.HALF_UP));
-            return new Advices("建议本餐摄入碳水约 " + carbsInt + " g（约米饭 " + rice + " g）", List.of());
-        }
-        return buildFoodAdvices(items, suggestCarbs, totalCarbs);
-    }
-
-    /**
-     * 分食物建议：保量档（肉蛋 2 / 蔬菜 3）不动；主缩档（饮料 8 / 零食 9）优先削减（三段式语气）；
-     * 剩余削减按均衡档（主食 1 / 水果 4 / 奶 5 / 豆制品 6 / 坚果 7）原 carbsG 占比等比分摊，主食保底克重。
-     */
-    private Advices buildFoodAdvices(List<PredictionDtos.Item> items, BigDecimal suggestCarbs, BigDecimal totalCarbs) {
-        BigDecimal delta = totalCarbs.subtract(suggestCarbs);
-        if (delta.compareTo(ZERO) <= 0) {
-            StringJoiner j = new StringJoiner(" · ");
-            List<PredictionDtos.SuggestItem> list = new ArrayList<>();
-            for (PredictionDtos.Item it : items) {
-                j.add(text(it.getFoodName(), "正常"));
-                list.add(suggestOf(it.getFoodName(), null));
-            }
-            return new Advices(j.toString(), list);
-        }
-
-        List<PredictionDtos.Item> main = new ArrayList<>();
-        List<PredictionDtos.Item> balance = new ArrayList<>();
-        for (PredictionDtos.Item it : items) {
-            int c = it.getCategoryCode();
-            if (isMainReduce(c)) {
-                main.add(it);
-            } else if (isBalanced(c)) {
-                balance.add(it);
-            }
-        }
-
-        BigDecimal mainCarbs = sumCarbs(main);
-        BigDecimal mainCut = delta.min(mainCarbs);
-        BigDecimal remain = delta.subtract(mainCut);
-
-        // 主缩档（饮料/零食）的三段式语气：待削量小→减半；中等→替换无糖；超过其全部碳水→不建议食用
-        String tone;
-        BigDecimal halfMain = mainCarbs.divide(TWO, DIVIDE_SCALE, RoundingMode.HALF_UP);
-        if (delta.compareTo(halfMain) <= 0) {
-            tone = "减半";
-        } else if (delta.compareTo(mainCarbs) <= 0) {
-            tone = "建议替换为无糖/少糖";
-        } else {
-            tone = "不建议";
-        }
-
-        // 主缩档削完即止时（remain=0）均衡档全部保持原量
-        BalancedAllocation alloc = remain.compareTo(ZERO) > 0 ? allocateBalanced(balance, remain) : null;
-        if (remain.compareTo(ZERO) > 0 && alloc == null) {
-            return new Advices("本次碳水整体偏高，建议整体减量或分餐食用", List.of());
-        }
-
-        StringJoiner joiner = new StringJoiner(" · ");
-        List<PredictionDtos.SuggestItem> list = new ArrayList<>();
-        int bi = 0;
-        for (PredictionDtos.Item it : items) {
-            int c = it.getCategoryCode();
-            if (isMainReduce(c)) {
-                joiner.add(text(it.getFoodName(), tone));
-                list.add(suggestOf(it.getFoodName(), mainReduceWeight(it, tone)));
-            } else if (isBalanced(c)) {
-                if (alloc == null) {
-                    joiner.add(text(it.getFoodName(), "正常"));
-                    list.add(suggestOf(it.getFoodName(), null));
-                } else {
-                    joiner.add(alloc.clauses()[bi]);
-                    list.add(suggestOf(it.getFoodName(), alloc.weights()[bi]));
-                    bi++;
-                }
-            } else {
-                joiner.add(text(it.getFoodName(), "正常"));
-                list.add(suggestOf(it.getFoodName(), null));
-            }
-        }
-        return new Advices(joiner.toString(), list);
-    }
-
-    /** 主缩档语气 → 克重：减半取半量（无量兜底 0）；替换/不建议统一 0（前端显示「不建议」）。 */
-    private BigDecimal mainReduceWeight(PredictionDtos.Item it, String tone) {
-        if (!"减半".equals(tone)) {
-            return ZERO;
-        }
-        BigDecimal w = it.getWeightG();
-        return w != null && w.compareTo(ZERO) > 0 ? w.divide(TWO, 0, RoundingMode.HALF_UP) : ZERO;
-    }
-
-    private static PredictionDtos.SuggestItem suggestOf(String foodName, BigDecimal suggestWeight) {
-        return PredictionDtos.SuggestItem.builder()
-                .foodName(foodName)
-                .suggestWeight(suggestWeight)
-                .build();
-    }
-
-    /**
-     * 均衡档按原 carbsG 占比等比削减；主食类建议克重保底 stapleFloor。
-     * 返回每项建议文案与建议克重（按 balance 顺序）；削不完返回 null（整体降级）。
-     */
-    private BalancedAllocation allocateBalanced(List<PredictionDtos.Item> balance, BigDecimal remain) {
-        int n = balance.size();
-        BigDecimal[] carbs = new BigDecimal[n];
-        BigDecimal[] weight = new BigDecimal[n];
-        BigDecimal[] maxCut = new BigDecimal[n];
-        for (int i = 0; i < n; i++) {
-            carbs[i] = orZero(balance.get(i).getCarbsG());
-            weight[i] = orZero(balance.get(i).getWeightG());
-        }
-        // 分别计算每项可削减上限 maxCut：主食按保底克重折算（超下限部分才有余量），其余均衡档可整体削减到 0
-        for (int i = 0; i < n; i++) {
-            int c = balance.get(i).getCategoryCode();
-            if (c == STAPLE) {
-                if (weight[i].compareTo(ZERO) > 0 && weight[i].compareTo(props.getStapleFloor()) > 0) {
-                    maxCut[i] = carbs[i].multiply(weight[i].subtract(props.getStapleFloor()))
-                            .divide(weight[i], DIVIDE_SCALE, RoundingMode.HALF_UP);
-                } else {
-                    maxCut[i] = ZERO; // 主食已到/低于下限或无量，不可再减
-                }
-            } else {
-                maxCut[i] = carbs[i];
-            }
-        }
-
-        // 各档可削减总量不足以覆盖待削量 → 返回 null 触发整体降级文案
-        BigDecimal totalCuttable = sumArray(maxCut);
-        if (totalCuttable.compareTo(ZERO) <= 0 || totalCuttable.compareTo(remain) < 0) {
-            return null;
-        }
-
-        // 多轮按原 carbsG 占比分摊待削量：某档占比份额先触及 maxCut 则置为饱和并扣减剩余，未饱和档再按剩余继续分摊
-        BigDecimal[] cut = new BigDecimal[n];
-        boolean[] saturated = new boolean[n];
-        BigDecimal rem = remain;
-        for (int pass = 0; pass < n; pass++) {
-            BigDecimal sumC = ZERO;
-            for (int i = 0; i < n; i++) {
-                if (!saturated[i]) {
-                    sumC = sumC.add(carbs[i]);
-                }
-            }
-            if (sumC.compareTo(ZERO) <= 0) {
-                break;
-            }
-            boolean anySaturated = false;
-            for (int i = 0; i < n; i++) {
-                if (saturated[i]) {
-                    continue;
-                }
-                BigDecimal share = rem.multiply(carbs[i]).divide(sumC, DIVIDE_SCALE, RoundingMode.HALF_UP);
-                if (share.compareTo(maxCut[i]) >= 0) {
-                    cut[i] = maxCut[i];
-                    saturated[i] = true;
-                    rem = rem.subtract(maxCut[i]);
-                    anySaturated = true;
-                }
-            }
-            if (!anySaturated) {
-                for (int i = 0; i < n; i++) {
-                    if (!saturated[i]) {
-                        cut[i] = rem.multiply(carbs[i]).divide(sumC, DIVIDE_SCALE, RoundingMode.HALF_UP);
-                    }
-                }
-                rem = ZERO;
-                break;
-            }
-        }
-
-        String[] clauses = new String[n];
-        BigDecimal[] weights = new BigDecimal[n];
-        for (int i = 0; i < n; i++) {
-            String name = balance.get(i).getFoodName();
-            if (carbs[i].compareTo(ZERO) <= 0 || cut[i].compareTo(ZERO) <= 0) {
-                clauses[i] = text(name, "正常");
-                weights[i] = null;
-            } else if (weight[i].compareTo(ZERO) > 0) {
-                BigDecimal gram = carbs[i].subtract(cut[i]).multiply(weight[i])
-                        .divide(carbs[i], 0, RoundingMode.HALF_UP);
-                clauses[i] = text(name, gram.stripTrailingZeros().toPlainString() + "g");
-                weights[i] = gram;
-            } else {
-                clauses[i] = text(name, "减少至约 " + gramsInt(carbs[i].subtract(cut[i])) + "g 碳水");
-                weights[i] = null;
-            }
-        }
-        return new BalancedAllocation(clauses, weights);
-    }
-
-    private boolean isMainReduce(int c) {
-        return c == DRINK || c == SNACK;
-    }
-
-    private boolean isBalanced(int c) {
-        return c == STAPLE || c == FRUIT || c == MILK || c == BEAN || c == NUT;
-    }
-
-    private BigDecimal sumCarbs(List<PredictionDtos.Item> items) {
-        BigDecimal sum = ZERO;
-        for (PredictionDtos.Item it : items) {
-            sum = sum.add(orZero(it.getCarbsG()));
-        }
-        return sum;
-    }
-
-    private static BigDecimal sumArray(BigDecimal[] arr) {
-        BigDecimal sum = ZERO;
-        for (BigDecimal v : arr) {
-            sum = sum.add(v);
-        }
-        return sum;
-    }
-
-    private static BigDecimal orZero(BigDecimal v) {
-        return v == null ? ZERO : v;
-    }
-
-    private static String text(String foodName, String clause) {
-        return foodName + " " + clause;
-    }
-
-    private static int gramsInt(BigDecimal v) {
-        return v.setScale(0, RoundingMode.HALF_UP).intValue();
     }
 
     /**

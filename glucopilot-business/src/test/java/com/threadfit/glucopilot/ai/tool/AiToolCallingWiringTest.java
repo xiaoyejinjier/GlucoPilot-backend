@@ -11,11 +11,17 @@ import static org.mockito.Mockito.when;
 
 import com.threadfit.glucopilot.ai.config.AiToolConfig;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.tool.builtin.ArticleSearchTools;
+import com.threadfit.glucopilot.ai.tool.builtin.ChatHistoryTools;
 import com.threadfit.glucopilot.ai.tool.builtin.FoodNutritionTools;
 import com.threadfit.glucopilot.ai.tool.builtin.GlucoseQueryTools;
+import com.threadfit.glucopilot.ai.tool.builtin.GlucoseStatsTools;
 import com.threadfit.glucopilot.ai.tool.builtin.HealthProfileTools;
 import com.threadfit.glucopilot.ai.tool.builtin.MealRecordTools;
+import com.threadfit.glucopilot.ai.tool.builtin.ReminderTools;
+import com.threadfit.glucopilot.ai.tool.builtin.SessionStateTools;
 import com.threadfit.glucopilot.ai.tool.builtin.StatisticsTools;
+import com.threadfit.glucopilot.ai.tool.port.ArticleSearchQuery;
 import com.threadfit.glucopilot.ai.tool.runtime.AiToolContext;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import com.threadfit.glucopilot.food.service.FoodService;
@@ -142,6 +148,9 @@ class AiToolCallingWiringTest {
                                 new StatisticsTools(
                                         mock(DailyStatisticsService.class),
                                         mock(MonthlyStatisticsService.class),
+                                        mock(GlucoseRecordService.class),
+                                        mock(GlucosePeriodService.class),
+                                        mock(HealthProfileService.class),
                                         jsonUtils))
                 .withBean(
                         MealRecordTools.class,
@@ -153,6 +162,40 @@ class AiToolCallingWiringTest {
                 .withBean(
                         FoodNutritionTools.class,
                         () -> new FoodNutritionTools(mock(FoodService.class), jsonUtils))
+                .withBean(
+                        GlucoseStatsTools.class,
+                        () ->
+                                new GlucoseStatsTools(
+                                        mock(GlucoseRecordService.class),
+                                        mock(GlucosePeriodService.class),
+                                        mock(HealthProfileService.class),
+                                        jsonUtils))
+                .withBean(
+                        ChatHistoryTools.class,
+                        () ->
+                                new ChatHistoryTools(
+                                        mock(com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper.class),
+                                        mock(com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper.class),
+                                        jsonUtils))
+                .withBean(
+                        SessionStateTools.class,
+                        () ->
+                                new SessionStateTools(
+                                        mock(com.threadfit.glucopilot.ai.business.chat.service.ChatSessionService.class),
+                                        mock(com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper.class),
+                                        jsonUtils))
+                .withBean(
+                        ReminderTools.class,
+                        () ->
+                                new ReminderTools(
+                                        mock(com.threadfit.glucopilot.notification.service.UserReminderService.class),
+                                        jsonUtils))
+                .withBean(
+                        ArticleSearchTools.class,
+                        () ->
+                                new ArticleSearchTools(
+                                        mock(com.threadfit.glucopilot.ai.tool.port.ArticleSearchQuery.class),
+                                        jsonUtils))
                 .withUserConfiguration(AiToolConfig.class);
     }
 

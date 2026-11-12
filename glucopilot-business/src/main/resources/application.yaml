@@ -191,6 +191,14 @@ ai:
       - get_month_stats
       - query_meal_records
       - lookup_food_nutrition
+      # 第二批（2026-11）：会话自省 + 血糖聚合 + 提醒 + 社区检索，全部只读、返回有上限。
+      # get_session_state / search_chat_history 让模型不必重复查同一件事；
+      # search_community_articles 依赖社区侧实现（ArticleSearchQuery），过滤规则与列表页一致。
+      - query_glucose_stats
+      - search_chat_history
+      - get_session_state
+      - list_reminders
+      - search_community_articles
 
   # ---------------------------------------------------------------------------
   # 提示词后台化（接口 4.11~4.13）：后台改提示词时执行的**阻断式**校验参数。

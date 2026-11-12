@@ -1,11 +1,11 @@
 # AI 模块实现说明（结合代码）
 
-> 面向「要读懂/要接手/要改」的人：逐层讲清 `com.threadfit.glucopilot.ai` 下 111 个类的职责、彼此依赖、关键方法，全部对照真实代码。
+> 面向「要读懂/要接手/要改」的人：逐层讲清 `com.threadfit.glucopilot.ai` 下 236 个类的职责、彼此依赖、关键方法，全部对照真实代码。
 > 与 `AI对话-简单接入方案.md`（设计动机与取舍）、`AI-社区内容审核设计.md`（审核专项）互补：那两份讲「为什么这么做」，这份讲「现在到底是怎么写的」。
 
-- 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（111 个 java 文件），审核工人在 `…/community/`
+- 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：7 个场景、6 个工具、7 份提示词、44 个 AI 测试类；全量 747 用例 0 失败；Flyway v43
+- 现状：8 个场景、11 个工具、9 份提示词、59 个 AI 测试类；全量 983 用例 0 失败；Flyway v60
 
 ---
 
@@ -76,7 +76,7 @@ ChatController ──► ChatCompletionServiceImpl.complete
 | `prompt` | advisor / controller / dto / entity / mapper / service(+impl) | 提示词模板（库优先 + classpath 兜底） |
 | `model` | controller / dto / entity / mapper / runtime / service(+impl) | 模型目录、运行期配置快照、动态 ChatModel 工厂、密钥加密 |
 | `scene` | controller / dto / entity / mapper / service(+impl) | 场景 → 模型/参数绑定 |
-| `tool` | 5 个 `*Tools` + registry/tracing/recorder/context | 模型可调用的工具（Function Calling） |
+| `tool` | `builtin`(10 个 `*Tools`) / `runtime`(registry·tracing·recorder·context·去重) / `port` / `support` | 模型可调用的工具（Function Calling） |
 | `vision` | `VisionAnalyzer` | 多模态识别的统一入口 |
 
 依赖方向是单边的：`business/*` → `core`/`memory`/`prompt`/`tool`/`vision` → `model/runtime` → DB/HTTP。`core` 不反向依赖 `business`。
@@ -574,16 +574,43 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 
 `CALL_COUNTER` 放在 `toolContext` 里而不是类字段，是刻意的：并发两轮各数各的，天然隔离。
 
-### 8.3 现有 6 个工具（5 个类）
+### 8.3 现有 11 个工具（10 个类）
+
+第一批（明细类，回答「具体是哪条」）：
 
 | 类 | 工具名 | 用途 |
 | --- | --- | --- |
-| `GlucoseQueryTools` | `query_glucose_range` | 按日期区间/最近 N 天查血糖 |
+| `GlucoseQueryTools` | `query_glucose_range` | 按日期区间/最近 N 天查血糖（≤31 天、≤60 条） |
 | `StatisticsTools` | `get_daily_checkin` | 当日打卡与达标情况 |
-| `StatisticsTools` | `get_month_stats` | 月度统计 |
-| `MealRecordTools` | `query_meal_records` | 查饮食记录 |
+| `StatisticsTools` | `get_month_stats` | 月度统计（打卡率 + 血糖达标率） |
+| `MealRecordTools` | `query_meal_records` | 查饮食记录（≤7 天） |
 | `FoodNutritionTools` | `lookup_food_nutrition` | 查食物营养库 |
 | `HealthProfileTools` | `get_health_profile` | 读健康档案（慢病、目标等） |
+
+第二批（结论类，回答「这段时间怎么样」「以前说过什么」）：
+
+| 类 | 工具名 | 用途 |
+| --- | --- | --- |
+| `GlucoseStatsTools` | `query_glucose_stats` | 只给聚合：达标率/偏高偏低计数/均值/极值/变异系数/按时段与周的走势（≤92 天，**不返回明细**） |
+| `ChatHistoryTools` | `search_chat_history` | 在本人历史会话里按关键词找片段（≤365 天、≤10 条、按会话去重） |
+| `SessionStateTools` | `get_session_state` | 当前会话的状态：摘要、已调用过的工具及结论摘要 |
+| `ReminderTools` | `list_reminders` | 今日提醒（服药/测糖等）与待回复的回访 |
+| `ArticleSearchTools` | `search_community_articles` | 检索社区文章（与 feed 同一套可见性过滤，只给摘要与作者） |
+
+**明细与聚合分开**是刻意的：`query_glucose_range` 用来回答「3 号早上多少」，`query_glucose_stats` 用来回答「这个月控制得怎么样」。前者逐条返回（有上限），后者只给聚合且**不返回 items**——两者都能回答问题时优先用聚合，省上下文。
+
+### 8.4 重复调用治理：`ToolRepeatGuard` + `RepeatAwareToolCallback`
+
+模型很容易把同一个查询问两遍（换了个说法、或者忘了自己刚查过）。两层做法：
+
+1. **工具层去重**（兜底）：`AiToolRegistry` 把每个工具包成
+   `TracingToolCallback(RepeatAwareToolCallback(callback, guard), traceRecorder)`。
+   `RepeatAwareToolCallback` 用 `sessionId + 工具名 + 规范化入参` 做键，命中就**直接返回上次的 JSON**（debug 日志写明命中），未命中才执行并记住。没有 `sessionId`（后台任务）时直接透传，不做去重。
+   `ToolRepeatGuard` 的护栏：TTL 30 分钟、每会话最多 16 条、最多 512 个会话、单条结果 ≤8000 字符（过大不缓存），双层 LRU。
+   注意包装顺序：`TracingToolCallback` 在**外层**，所以命中缓存的那次调用照样会写 `chat_tool_call` 记账——审计看到的是「模型确实调了」，而不是「被拦掉了」。
+2. **提示层**（首选）：`get_session_state` 会把「已调用过的工具 + 结论摘要」交给模型，并在 `hint` 里明确要求「已调用过的直接复用，别重复调」；各工具返回体也带 `hint` 说明还能拿到什么。让模型一开始就别调第二次，比事后拦更好。
+
+**这不是限流**：调用次数上限仍由框架的 `spring.ai.tools.limits.max-total-tool-calls`（当前 8）负责，超了按 `on-limit-exceeded: throw` 抛错。去重只解决「同样的输入重复问」。
 
 `AiToolContext` 的取值纪律：
 
@@ -1237,11 +1264,11 @@ ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessi
 
 | 层次 | 数量/内容 |
 | --- | --- |
-| AI 相关测试类 | 47 个（`ai/**` 下） |
-| 全量单测 | 959 用例，0 失败 0 错误 5 跳过 |
-| 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`AdvisorChainOrderTest`（已带 system 的请求喂给记忆顾问后的消息顺序）、`ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包） |
+| AI 相关测试类 | 59 个（`ai/**` 下） |
+| 全量单测 | 983 用例，0 失败 0 错误 5 跳过 |
+| 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`AdvisorChainOrderTest`（已带 system 的请求喂给记忆顾问后的消息顺序）、`ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包）、`ToolRepeatGuardTest`、`RepeatAwareToolCallbackTest`、`SecondBatchToolContractTest`（第二批 5 个工具的契约） |
 | 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
-| 迁移 | Flyway v54（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`） |
+| 迁移 | Flyway v60（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`、V55 审计菜单；V56~V60 为队友的社区/预测迁移） |
 
 测试约定（新写测试要遵守）：
 

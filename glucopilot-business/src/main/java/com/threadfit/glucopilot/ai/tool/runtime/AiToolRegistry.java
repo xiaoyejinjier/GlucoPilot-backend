@@ -28,6 +28,8 @@ import java.util.stream.Collectors;
  *   <li><b>调用次数上限交给框架</b>：{@code spring.ai.tools.limits.max-total-tool-calls} /
  *       {@code max-calls-per-tool} / {@code excluded-tools} / {@code on-limit-exceeded}（默认 throw），
  *       不要自己写计数器。</li>
+ *   <li><b>重复调用由装饰器拦</b>：{@link RepeatAwareToolCallback} 对「同会话 + 同工具 + 同入参」
+ *       直接返回上次结果（{@link ToolRepeatGuard}，30 分钟）。这是去重不是限流，两者不要混。</li>
  *   <li><b>越权防护在工具实现里</b>：用户身份必须由服务端通过 {@code toolContext} 注入
  *       （见 {@link AiToolContext}），<b>不能</b>作为模型可见的参数，否则模型可被诱导去查他人数据。</li>
  * </ul>
@@ -48,6 +50,9 @@ public class AiToolRegistry {
     /** 工具调用元数据登记（B3）：给每个放行的工具套一层装饰器。 */
     private final ToolCallTraceRecorder traceRecorder;
 
+    /** 同会话同入参去重：模型看不到"上一轮查过"，重复调用要靠这层拦。 */
+    private final ToolRepeatGuard repeatGuard;
+
     /** 过滤后允许送给模型的工具清单。 */
     public List<ToolCallback> callbacks() {
         List<ToolCallback> registered = registered();
@@ -64,10 +69,13 @@ public class AiToolRegistry {
         Set<String> allowedNames = names(allowed);
         warnAboutMissingBeans(allowList, names(registered));
         log.info("AI 工具白名单生效：{}", allowedNames.isEmpty() ? "（无，模型不会收到任何工具）" : allowedNames);
-        // 统一套一层记账装饰器（B3）：模型能看到的每个工具都会被记下"调没调、成没成、多久"。
-        // 包在这里而不是各调用点：只此一处，新增工具自动获得同样的可观测性。
+        // 统一套两层装饰器：
+        // 里层 RepeatAware 拦「同会话同工具同入参」的重复调用（模型看不到上一轮查过什么，重复很难避免）；
+        // 外层 Tracing 记账，保证"模型到底调了几次"仍然如实记录——被去重命中的那次也会留痕，
+        // 否则我们就看不见「模型确实想再查一次」这件事。
         return allowed.stream()
-                .map(callback -> (ToolCallback) new TracingToolCallback(callback, traceRecorder))
+                .map(callback -> (ToolCallback) new TracingToolCallback(
+                        new RepeatAwareToolCallback(callback, repeatGuard), traceRecorder))
                 .toList();
     }
 

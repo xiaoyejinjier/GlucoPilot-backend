@@ -64,6 +64,18 @@ class AiToolOutputContractTest {
         return new JsonUtils(new ObjectMapper());
     }
 
+    /** 月度统计工具现在还要算血糖达标率，所以需要血糖与档案三件套（本组用例只关心打卡/边界）。 */
+    private static StatisticsTools statisticsTools(
+            DailyStatisticsService daily, MonthlyStatisticsService monthly) {
+        return new StatisticsTools(
+                daily,
+                monthly,
+                mock(GlucoseRecordService.class),
+                mock(GlucosePeriodService.class),
+                mock(HealthProfileService.class),
+                json());
+    }
+
     // ---------- get_health_profile：合规裁剪 ----------
 
     @Test
@@ -117,7 +129,7 @@ class AiToolOutputContractTest {
         when(service.checkIn(eq(USER_ID), any(LocalDate.class))).thenReturn(checkIn);
 
         String json =
-                new StatisticsTools(service, mock(MonthlyStatisticsService.class), json())
+                statisticsTools(service, mock(MonthlyStatisticsService.class))
                         .getDailyCheckin(CONTEXT);
 
         assertThat(json)
@@ -137,7 +149,7 @@ class AiToolOutputContractTest {
         when(service.monthStats(USER_ID, today.getYear(), today.getMonthValue())).thenReturn(stats);
 
         String json =
-                new StatisticsTools(mock(DailyStatisticsService.class), service, json())
+                statisticsTools(mock(DailyStatisticsService.class), service)
                         .getMonthStats(null, null, CONTEXT);
 
         assertThat(json)
@@ -149,10 +161,9 @@ class AiToolOutputContractTest {
     @Test
     void 月度统计的月份越界应给出可读错误() {
         String json =
-                new StatisticsTools(
+                statisticsTools(
                                 mock(DailyStatisticsService.class),
-                                mock(MonthlyStatisticsService.class),
-                                json())
+                                mock(MonthlyStatisticsService.class))
                         .getMonthStats(2026, 13, CONTEXT);
 
         assertThat(json).contains("error").contains("1-12");

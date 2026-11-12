@@ -56,6 +56,33 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
             + "AND reply_to_msg_id = #{replyToMsgId} AND is_deleted = 0 ORDER BY id DESC LIMIT 1")
     ChatMessage selectAssistantReply(@Param("sessionId") Long sessionId, @Param("replyToMsgId") Long replyToMsgId);
 
+    /**
+     * 跨会话关键词检索（工具 {@code search_chat_history} 用）。
+     *
+     * <p><b>为什么连 {@code chat_session} 一起 JOIN</b>：工具要告诉模型「这段对话是什么时候、哪个会话」，
+     * 而删除会话是逻辑删除——只查 {@code chat_message} 会把已删会话里的消息也捞出来。
+     *
+     * <p><b>为什么用 {@code LOCATE} 而不是 {@code LIKE}</b>：关键词来自模型，可能含 {@code %} 与 {@code _}，
+     * 直接用 LIKE 会被当成通配符（用户搜「100%」会命中一堆无关内容）。LOCATE 是纯字符串查找。
+     *
+     * <p>检索范围包含图片描述（{@code media_caption}）与语音转写（{@code asr_text}）：
+     * 用户说的「我上次发的那个图」就存在这两列里。
+     */
+    @Select("<script>"
+            + "SELECT m.* FROM chat_message m JOIN chat_session s ON s.id = m.session_id "
+            + "WHERE m.user_id = #{userId} AND m.is_deleted = 0 AND s.is_deleted = 0 "
+            + "AND m.msg_role IN (1, 2) "
+            + "<if test='from != null'>AND m.gmt_create &gt;= #{from} </if>"
+            + "AND (LOCATE(#{keyword}, m.content_text) &gt; 0 "
+            + "OR LOCATE(#{keyword}, m.asr_text) &gt; 0 "
+            + "OR LOCATE(#{keyword}, m.media_caption) &gt; 0) "
+            + "ORDER BY m.id DESC LIMIT #{limit}"
+            + "</script>")
+    List<ChatMessage> searchInUserSessions(@Param("userId") Long userId,
+                                          @Param("from") LocalDateTime from,
+                                          @Param("keyword") String keyword,
+                                          @Param("limit") int limit);
+
     /** 取窗口内最近 N 条（倒序返回，调用方反转成正序）。 */
     @Select("SELECT * FROM chat_message WHERE session_id = #{sessionId} AND is_deleted = 0 "
             + "AND seq_no <= #{maxSeqNo} ORDER BY seq_no DESC, id DESC LIMIT #{limit}")

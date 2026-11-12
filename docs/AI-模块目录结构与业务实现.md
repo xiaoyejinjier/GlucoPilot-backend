@@ -85,7 +85,9 @@ ai/
 │   ├── reader/ChatContextReader     （从 advisor 移出：它是读取器，不是 advisor）
 │   ├── repository/ config/ controller/ dto/ entity/ mapper/ service/ service/impl/
 ├── tool/
-│   ├── builtin/                     5 个工具类
+│   ├── builtin/                     10 个工具类（第二批 +5：聚合/历史/会话态/提醒/社区检索）
+│   ├── port/                        对外端口（社区文章检索，由 community 实现）
+│   ├── runtime/                     registry / tracing / 去重装饰器
 │   ├── runtime/                     AiToolRegistry、TracingToolCallback、AiToolContext
 │   └── trace/                       ToolCallTraceRecorder、ToolResultDigester
 ├── support/                         TokenEstimator、ChatRoundGuard（跨域，只有这两个）
@@ -245,7 +247,7 @@ requireActive → 幂等检查 → tryAcquireToken(roundKey) → [视觉阶段1]
 
 ### 13. 横切：工具链 / 护栏 / 观测
 
-- **工具链**：`AiToolRegistry.callbacks()` 按 `ai.tools.allow-list` 过滤（白名单为空则一个不注册），每个工具套 `TracingToolCallback` 记录耗时与结果摘要（`ToolResultDigester` 只存摘要，不存原文）；`AiToolContext` 用 `toolContext` 传递 `userId/sessionId/userMsgId/计数器`，`requireUserId` 缺失直接抛（防模型诱导越权）。
+- **工具链**：`AiToolRegistry.callbacks()` 按 `ai.tools.allow-list` 过滤（白名单为空则一个不注册），每个工具套 `TracingToolCallback(RepeatAwareToolCallback(...))`：外层记账（耗时与 `ToolResultDigester` 摘要，只存摘要不存原文），内层按「会话 + 工具 + 入参」去重、同参数直接返回上次结果（30 分钟 TTL，命中照样记账）；`AiToolContext` 用 `toolContext` 传递 `userId/sessionId/userMsgId/计数器`，`requireUserId` 缺失直接抛（防模型诱导越权）。
 - **护栏**：`MedicalGuardAdvisor`（`HIGHEST_PRECEDENCE+100`）只扫**最后一条用户消息**，命中敏感词直接返回固定话术，不调模型。
 - **观测**：`ChatModelFactory` 挂 `ObservationRegistry`/`MeterRegistry`；`chat_message` 落 `prompt_tokens/completion_tokens/latency_ms`，B 批起有 `GET /admin/v1/ai/usage` 消费。
 

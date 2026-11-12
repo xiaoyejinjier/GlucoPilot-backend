@@ -92,9 +92,10 @@ class AiToolRegistryTest {
     private static AiToolRegistry registry(List<String> allowList, ToolCallbackProvider... providers) {
         AIProperties properties = new AIProperties();
         properties.getTools().setAllowList(allowList);
-        // 记账装饰器（B3）只做观测，不改变白名单与工具身份；这里传 null 表示"不关心记账"
+        // 记账装饰器（B3）只做观测，不改变白名单与工具身份；这里传 null 表示"不关心记账"。
+        // 去重守卫同理：它是真实对象（无状态依赖），但本组用例不关心重复调用。
         return new AiToolRegistry(properties, objectProvider(providers), objectProvider(),
-                mock(ToolCallTraceRecorder.class));
+                mock(ToolCallTraceRecorder.class), new ToolRepeatGuard());
     }
 
     private static ToolCallbackProvider provider(String... names) {

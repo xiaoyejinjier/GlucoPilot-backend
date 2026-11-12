@@ -14,10 +14,10 @@ import com.threadfit.glucopilot.common.util.EmailUtils;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.user.cancellation.service.AccountCancellationService;
 import com.threadfit.glucopilot.user.cancellation.service.CaptchaService;
+import com.threadfit.glucopilot.user.cancellation.service.WalletCheckService;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CancellationView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CaptchaView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.QueryView;
-import com.threadfit.glucopilot.user.dto.CancellationDtos.RecoveryView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SubmitRequest;
@@ -41,12 +41,17 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 账号注销。
  *
- * <p>验证通道按绑定关系自动选择：手机号 &gt; 邮箱 &gt; 微信（纯微信账号用 wx.login code 现场验证， 不再强制先绑定手机号/邮箱）。验证码场景 scene 由
- * AuthService 放行 {@code cancel}/{@code recover}； 失败锁定沿用进程内内存（ConcurrentHashMap）方案，不引入
+ * <p>验证通道按绑定关系自动选择：手机号 &gt; 邮箱 &gt; 微信（纯微信账号用 wx.login code 现场验证， 不再强制先绑定手机号/邮箱）。验证码场景固定为
+ * {@code cancel}（与登录 login、绑定 bind 隔离消费）； 失败锁定沿用进程内内存（ConcurrentHashMap）方案，不引入
  * Redis，多实例部署时再评估。
  *
- * <p>七天可恢复模式的取消采用"登录即取消注销"：能建立会话本身就完成了本人身份核验 （wx.login code 换 openid / 短信/邮箱验证码登录），恢复不再二次验证；恢复后 24
- * 小时内 不可再次申请注销，并按申请前状态还原（DISABLED 仍是 DISABLED）。
+ * <h2>七天可恢复模式</h2>
+ *
+ * 提交后账号进入 {@code CANCELLED_RECOVERABLE(4)}，手机号/邮箱保持绑定；用户在 7 天窗口内
+ * <b>正常登录即自动终止注销</b>（见 {@code AccountCancellationRecovery}），不再提供手动恢复接口。
+ * 窗口结束（{@code isolateUntil}）后登录被拒绝，worker 在安全边际之后清理数据并落墓碑。
+ *
+ * <p>恢复后 24 小时内不可再次申请注销，起算点为 {@code recovered_at}。
  */
 @Service
 @RequiredArgsConstructor
@@ -60,6 +65,7 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
     private final UserAccountCancellationMapper cancellationMapper;
     private final AuthService authService;
     private final CaptchaService captchaService;
+    private final WalletCheckService walletCheckService;
 
     /** 验证失败计数（userId -> 累计失败次数）。 */
     private final ConcurrentHashMap<Long, Integer> verifyFailCount = new ConcurrentHashMap<>();
@@ -140,6 +146,10 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
     @Transactional
     public SubmitView submit(Long userId, SubmitRequest request) {
         int mode = request.getMode();
+        // 立即注销已下线：显式拒绝而不是静默改写，迫使前端同步下线该入口
+        if (mode != CancellationMode.ISOLATE_7D.getCode()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "仅支持七天可恢复注销");
+        }
         UserAccount account = requireAccount(userId);
         int status = account.getAccountStatus() == null ? -1 : account.getAccountStatus();
 
@@ -168,24 +178,26 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         assertVerifyTarget(account, verifyType);
         consumeVerifyCode(userId, verifyType, account, request);
 
+        // 钱包/资产校验占位：默认通过，规则确定后由实现决定失败语义
+        WalletCheckService.WalletCheckResult wallet = walletCheckService.check(userId);
+        if (!wallet.passed()) {
+            throw new BizException(ErrorCode.CONFLICT, "存在未结清资产，暂无法注销");
+        }
+
         LocalDateTime now = LocalDateTime.now();
-        boolean recoverable = mode == CancellationMode.ISOLATE_7D.getCode();
         UserAccountCancellation record = new UserAccountCancellation();
         record.setUserId(userId);
-        record.setMode(mode);
+        record.setMode(CancellationMode.ISOLATE_7D.getCode());
         record.setStatus(CancellationStatus.PENDING.getCode());
         record.setReasonCode(request.getReasonCode());
         record.setVerifyChannel(verifyType);
         record.setPreStatus(status);
         record.setRequestedAt(now);
-        record.setIsolateUntil(recoverable ? now.plusDays(RECOVERABLE_DAYS) : null);
+        record.setIsolateUntil(now.plusDays(RECOVERABLE_DAYS));
         record.setFailCount(0);
         cancellationMapper.insert(record);
 
-        int newStatus =
-                recoverable
-                        ? AccountStatus.CANCELLED_RECOVERABLE.getCode()
-                        : AccountStatus.CANCELLING.getCode();
+        int newStatus = AccountStatus.CANCELLED_RECOVERABLE.getCode();
         account.setAccountStatus(newStatus);
         userAccountMapper.updateById(account);
 
@@ -194,42 +206,9 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
 
         return SubmitView.builder()
                 .accountStatus(newStatus)
-                .mode(mode)
+                .mode(CancellationMode.ISOLATE_7D.getCode())
                 .isolateUntil(toMillis(record.getIsolateUntil()))
                 .build();
-    }
-
-    @Override
-    @Transactional
-    public RecoveryView recover(Long userId) {
-        UserAccount account = requireAccount(userId);
-        if (account.getAccountStatus() == null
-                || account.getAccountStatus() != AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
-            throw new BizException(ErrorCode.CONFLICT, "当前账号状态不可恢复");
-        }
-        UserAccountCancellation record = findActive(userId);
-        LocalDateTime now = LocalDateTime.now();
-        if (record == null
-                || record.getIsolateUntil() == null
-                || record.getIsolateUntil().isBefore(now)) {
-            throw new BizException(ErrorCode.CONFLICT, "可恢复窗口已过，无法恢复");
-        }
-
-        // 登录即取消注销：能建立会话即完成本人身份核验（wx.login code / 短信/邮箱验证码登录），
-        // 恢复不再二次验证。仍必须先 CAS 抢占凭据，再改账号状态：worker 可能刚把它抢成
-        // RUNNING(1)，"恢复成功"与"数据正在被删"只能二选一。
-        if (cancellationMapper.markRecovered(record.getId()) != 1) {
-            throw new BizException(ErrorCode.CONFLICT, "注销正在处理中，无法恢复");
-        }
-        // 按申请前状态还原：DISABLED 恢复后仍是 DISABLED，不允许借"注销再恢复"洗白。
-        int preStatus =
-                record.getPreStatus() == null
-                        ? AccountStatus.NORMAL.getCode()
-                        : record.getPreStatus();
-        account.setAccountStatus(preStatus);
-        userAccountMapper.updateById(account);
-
-        return RecoveryView.builder().accountStatus(preStatus).build();
     }
 
     private UserAccount requireAccount(Long userId) {

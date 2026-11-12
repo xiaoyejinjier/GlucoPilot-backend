@@ -23,11 +23,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-/**
- * MinIO object storage with same-origin one-time PUT credentials.
- * Existing private objects remain readable through authorized business routes.
- * Missing objects are distinguished from connectivity and permission failures.
- */
+/** MinIO 实现：通过本后端同源代理接收 PUT，避免浏览器跨域问题。 */
 @Slf4j
 @Service
 @ConditionalOnProperty(prefix = "glucopilot.storage", name = "provider", havingValue = "minio")
@@ -35,6 +31,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
 
     private final StorageProperties props;
     private final MinioClient minioClient;
+    // 一次性上传凭证：token → 目标 key / 大小 / 过期时间
     private final ConcurrentMap<String, PendingUpload> pendingUploads = new ConcurrentHashMap<>();
 
     public MinioObjectStorageService(StorageProperties props) {
@@ -48,6 +45,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
     @Override
     public UploadCredential createUploadCredential(MediaBizType bizType, String ext, long sizeBytes, Long userId) {
         Instant now = Instant.now();
+        // 定期清理过期凭证，避免 Map 随运行时间增长
         pendingUploads.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
         String storageKey = buildStorageKey(bizType, ext, userId);
         String token = UUID.randomUUID().toString().replace("-", "");
@@ -66,6 +64,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
 
     /** 消费一次性凭证并写入 MinIO；凭证校验先于读请求体，大文件不会读完整段才报过期。 */
     public void acceptUpload(String token, InputStream body, long contentLength) {
+        // 先 remove 再校验：无论上传成功与否，这个 token 都已作废
         PendingUpload pending = pendingUploads.remove(token);
         if (pending == null || pending.expiresAt().isBefore(Instant.now())) {
             throw new IllegalArgumentException("上传凭证不存在或已过期");
@@ -77,6 +76,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(props.getBucket())
                     .object(pending.storageKey())
+                    // 已知长度时用 stream(流, 大小, -1)，让 SDK 自行决定分片大小
                     .stream(body, pending.sizeBytes(), -1)
                     .contentType("application/octet-stream")
                     .build());
@@ -101,6 +101,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
                     .build());
             return true;
         } catch (ErrorResponseException e) {
+            // 只有明确的 NoSuchKey 才算“不存在”，权限/网络错误必须继续抛出
             if (isMissing(e)) return false;
             throw unavailable("stat",e);
         } catch (Exception e) {
@@ -126,6 +127,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
     @Override
     public InputStream openObject(String storageKey, long offset, long length) {
         try {
+            // MinIO 的 offset/length 已是左闭右开，直接传给 SDK
             return minioClient.getObject(GetObjectArgs.builder()
                     .bucket(props.getBucket())
                     .object(storageKey)
@@ -152,6 +154,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
 
     @Override
     public byte[] getObject(String storageKey) {
+        // try-with-resources：读完/异常都要关闭底层 HTTP 连接
         try (InputStream in = minioClient.getObject(GetObjectArgs.builder()
                 .bucket(props.getBucket())
                 .object(storageKey)
@@ -179,6 +182,7 @@ public class MinioObjectStorageService implements ObjectStorageService {
     }
 
     private static boolean isMissing(ErrorResponseException error) {
+        // 不同 MinIO/S3 兼容实现的缺失码不一致，这里同时认两种
         return error.errorResponse()!=null&&java.util.Set.of("NoSuchKey","NoSuchObject").contains(error.errorResponse().code());
     }
     private static BizException unavailable(String operation,Exception error) {

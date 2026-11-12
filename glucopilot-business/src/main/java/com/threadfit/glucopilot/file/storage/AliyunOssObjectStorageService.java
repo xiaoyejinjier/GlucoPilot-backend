@@ -19,9 +19,7 @@ import java.io.InputStream;
 import java.net.URL;
 import java.util.Date;
 
-/**
- * 生产阿里云 OSS（provider=aliyun-oss，matchIfMissing 默认生效）。桶私有，禁止匿名下载。
- */
+/** 阿里云 OSS 实现：生产默认生效（matchIfMissing=true），桶保持私有。 */
 @Slf4j
 @Service
 @ConditionalOnProperty(prefix = "glucopilot.storage", name = "provider",
@@ -29,7 +27,7 @@ import java.util.Date;
 public class AliyunOssObjectStorageService implements ObjectStorageService {
 
     private final StorageProperties props;
-    private final OSS ossClient;
+    private final OSS ossClient; // OSS SDK 客户端，由配置类创建后注入
 
     public AliyunOssObjectStorageService(StorageProperties props, OSS ossClient) {
         this.props = props;
@@ -39,6 +37,7 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
     @Override
     public UploadCredential createUploadCredential(MediaBizType bizType, String ext, long sizeBytes, Long userId) {
         String storageKey = buildStorageKey(bizType, ext, userId);
+        // 预签名 PUT：客户端拿临时 URL 直传 OSS，文件字节不经过应用服务器
         Date expiration = new Date(System.currentTimeMillis() + EXPIRE_SECONDS * 1000L);
         URL url = ossClient.generatePresignedUrl(props.getBucket(), storageKey, expiration, HttpMethod.PUT);
         return UploadCredential.builder()
@@ -50,11 +49,13 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
 
     @Override
     public String resolvePublicUrl(String storageKey) {
+        // 只拼地址，不代表匿名可读；私有对象仍要经业务接口鉴权后读取
         return "https://" + props.getBucket() + "." + props.getEndpoint() + "/" + storageKey;
     }
 
     @Override
     public boolean objectExists(String storageKey) {
+        // HEAD 只查元数据，不下载对象内容
         return ossClient.doesObjectExist(props.getBucket(), storageKey);
     }
 
@@ -77,6 +78,7 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
         try {
             return ossClient.getObjectMetadata(props.getBucket(), storageKey).getContentLength();
         } catch (OSSException e) {
+            // 对象不存在要映射成 404；其他错误（权限、网络、限流）按 500 处理
             if ("NoSuchKey".equals(e.getErrorCode())) {
                 throw new BizException(ErrorCode.NOT_FOUND, "文件不存在");
             }
@@ -92,6 +94,7 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
     public InputStream openObject(String storageKey, long offset, long length) {
         try {
             GetObjectRequest request = new GetObjectRequest(props.getBucket(), storageKey);
+            // OSS 的 Range 是闭区间，所以结束位置是 offset + length - 1
             request.setRange(offset, offset + length - 1);
             return ossClient.getObject(request).getObjectContent();
         } catch (OSSException e) {
@@ -106,7 +109,7 @@ public class AliyunOssObjectStorageService implements ObjectStorageService {
         }
     }
 
-    /** OSS deleteObject 幂等：对象不存在不报错。 */
+    /** OSS deleteObject 幂等：对象不存在不报错，正好满足注销清理“已删即成功”的契约。 */
     @Override
     public void deleteObject(String storageKey) {
         try {

@@ -354,11 +354,16 @@ food:
 
 # 账号注销异步清理 worker（方案 §6.4）
 # enabled=false 时不做任何清理：只影响后台执行，C 端提交注销仍然生效并立即失效会话
+# 注意：worker 没有分布式锁，仅支持单实例部署；多实例会重复执行 purge
 account:
   cancellation:
     enabled: ${ACCOUNT_CANCELLATION_ENABLED:true}
     initial-delay: ${ACCOUNT_CANCELLATION_INITIAL_DELAY:20000}
     poll-delay: ${ACCOUNT_CANCELLATION_POLL_DELAY:30000}
+    # 恢复期结束后再等多久才清理：保证没有在途的恢复请求
+    safety-margin: ${ACCOUNT_CANCELLATION_SAFETY_MARGIN:5m}
+    # 声明部署形态：true=单实例（当前唯一支持形态）；改成多实例前必须先加分布式锁
+    single-instance: ${ACCOUNT_CANCELLATION_SINGLE_INSTANCE:true}
 
 # Official RuoYi framework settings; secrets supplied by deployment environment.
 ruoyi:

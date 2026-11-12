@@ -5,7 +5,6 @@ import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.user.cancellation.service.AccountCancellationService;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CaptchaView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.QueryView;
-import com.threadfit.glucopilot.user.dto.CancellationDtos.RecoveryView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SubmitRequest;
@@ -23,7 +22,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** C 端账号注销：查询状态、发送验证码、提交申请、恢复。 */
+/** C 端账号注销：查询状态、发送验证码、提交申请。冷静期内登录即自动终止注销，无手动恢复接口。 */
 @RestController
 @RequestMapping("/api/v1/users/me/cancellation")
 @RequiredArgsConstructor
@@ -86,20 +85,6 @@ public class AccountCancellationController {
                 RequestContext.getRequestId(),
                 userId,
                 request,
-                result,
-                System.currentTimeMillis() - start);
-        return ApiResponse.ok(result);
-    }
-
-    @PostMapping("/recovery")
-    public ApiResponse<RecoveryView> recover() {
-        long start = System.currentTimeMillis();
-        Long userId = RequestContext.requireUserId();
-        RecoveryView result = service.recover(userId);
-        log.info(
-                "requestId={} cancellation.recover userId={} out={} elapsed={}ms",
-                RequestContext.getRequestId(),
-                userId,
                 result,
                 System.currentTimeMillis() - start);
         return ApiResponse.ok(result);

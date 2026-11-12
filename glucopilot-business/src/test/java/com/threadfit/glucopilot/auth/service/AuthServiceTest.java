@@ -1,9 +1,11 @@
 package com.threadfit.glucopilot.auth.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,10 +17,13 @@ import com.threadfit.glucopilot.auth.entity.AuthSmsCode;
 import com.threadfit.glucopilot.auth.entity.UserSession;
 import com.threadfit.glucopilot.auth.mapper.AuthSmsCodeMapper;
 import com.threadfit.glucopilot.auth.mapper.UserSessionMapper;
+import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
+import com.threadfit.glucopilot.user.cancellation.service.AccountCancellationRecovery;
 import com.threadfit.glucopilot.user.entity.UserAccount;
+import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
 import com.threadfit.glucopilot.user.entity.UserProfile;
 import com.threadfit.glucopilot.user.entity.UserSetting;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
@@ -48,6 +53,8 @@ class AuthServiceTest {
     @Mock private UserSettingMapper userSettingMapper;
     @Mock private UserSessionMapper userSessionMapper;
     @Mock private AuthSmsCodeMapper authSmsCodeMapper;
+    @Mock private VerificationCodeConsumer verificationCodeConsumer;
+    @Mock private AccountCancellationRecovery cancellationRecovery;
 
     @InjectMocks private AuthService service;
 
@@ -113,7 +120,6 @@ class AuthServiceTest {
 
     @Test
     void loginByPhoneWithValidCodeCreatesAccount() {
-        when(authSmsCodeMapper.selectOne(any())).thenReturn(smsCode("123456", 300));
         when(userAccountMapper.selectOne(any())).thenReturn(null);
         when(userSettingMapper.selectOne(any())).thenReturn(agreedSetting());
 
@@ -121,10 +127,8 @@ class AuthServiceTest {
                 service.loginByPhone(phoneLogin("13800000000", "123456"));
 
         assertTrue(response.getIsNewUser());
-        // 验证码被消费
-        ArgumentCaptor<AuthSmsCode> codeCaptor = ArgumentCaptor.forClass(AuthSmsCode.class);
-        verify(authSmsCodeMapper).updateById(codeCaptor.capture());
-        assertEquals(1, codeCaptor.getValue().getIsUsed());
+        // 验证码消费走独立事务组件（失败也不回滚本次消费）
+        verify(verificationCodeConsumer).consumeForLoginBySms("13800000000", "123456");
         // 手机号登录建档：openid 占位 + 回填手机号
         verify(userAccountMapper).insert(any(UserAccount.class));
         verify(userProfileMapper).insert(any(UserProfile.class));
@@ -134,7 +138,9 @@ class AuthServiceTest {
 
     @Test
     void loginByPhoneRejectsWrongCode() {
-        when(authSmsCodeMapper.selectOne(any())).thenReturn(smsCode("123456", 0));
+        doThrow(new BizException(ErrorCode.BIZ_REJECTED, "验证码错误或已失效"))
+                .when(verificationCodeConsumer)
+                .consumeForLoginBySms("13800000000", "000000");
 
         assertThrows(
                 BizException.class,
@@ -146,7 +152,10 @@ class AuthServiceTest {
 
     @Test
     void loginByPhoneRejectsExpiredCode() {
-        when(authSmsCodeMapper.selectOne(any())).thenReturn(smsCode("123456", -300));
+        // 过期与错误在 consumer 内合并为同一个通用错误，不区分文案（防枚举）
+        doThrow(new BizException(ErrorCode.BIZ_REJECTED, "验证码错误或已失效"))
+                .when(verificationCodeConsumer)
+                .consumeForLoginBySms("13800000000", "123456");
 
         assertThrows(
                 BizException.class,
@@ -207,6 +216,68 @@ class AuthServiceTest {
         assertThrows(BizException.class, () -> service.requireValidSession("token-1"));
     }
 
+    @Test
+    void loginWithinWindowRecoversAndReportsFlag() {
+        UserAccount account = account(1L);
+        account.setAccountStatus(com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode());
+        account.setPhone("13800000000");
+        when(userAccountMapper.selectOne(any())).thenReturn(account);
+        when(userSettingMapper.selectOne(any())).thenReturn(agreedSetting());
+        when(cancellationRecovery.findActive(1L)).thenReturn(activeRecord());
+        when(cancellationRecovery.recoverOnLogin(1L))
+                .thenReturn(new AccountCancellationRecovery.RecoverOutcome(account, true));
+
+        AuthDtos.SessionResponse response =
+                service.loginByPhone(phoneLogin("13800000000", "123456"));
+
+        assertTrue(response.getRecoveredFromCancellation());
+        verify(cancellationRecovery).recoverOnLogin(1L);
+    }
+
+    @Test
+    void concurrentSecondLoginDoesNotReportRecovered() {
+        UserAccount account = account(1L);
+        account.setAccountStatus(com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode());
+        account.setPhone("13800000000");
+        when(userAccountMapper.selectOne(any())).thenReturn(account);
+        when(userSettingMapper.selectOne(any())).thenReturn(agreedSetting());
+        when(cancellationRecovery.findActive(1L)).thenReturn(activeRecord());
+        // 锁内重读发现已被先到者恢复 → recovered=false
+        UserAccount recovered = account(1L);
+        when(cancellationRecovery.recoverOnLogin(1L))
+                .thenReturn(new AccountCancellationRecovery.RecoverOutcome(recovered, false));
+
+        AuthDtos.SessionResponse response =
+                service.loginByPhone(phoneLogin("13800000000", "123456"));
+
+        assertFalse(response.getRecoveredFromCancellation());
+    }
+
+    @Test
+    void loginAfterWindowIsRejected() {
+        UserAccount account = account(1L);
+        account.setAccountStatus(com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode());
+        account.setPhone("13800000000");
+        when(userAccountMapper.selectOne(any())).thenReturn(account);
+        when(cancellationRecovery.findActive(1L)).thenReturn(null);
+
+        BizException error =
+                assertThrows(
+                        BizException.class,
+                        () -> service.loginByPhone(phoneLogin("13800000000", "123456")));
+
+        assertEquals(ErrorCode.FORBIDDEN, error.getErrorCode());
+        verify(userSessionMapper, never()).insert(any(UserSession.class));
+    }
+
+    private static UserAccountCancellation activeRecord() {
+        UserAccountCancellation record = new UserAccountCancellation();
+        record.setId(7L);
+        record.setUserId(1L);
+        record.setIsolateUntil(LocalDateTime.now().plusDays(3));
+        return record;
+    }
+
     private static AuthDtos.WechatLoginRequest wechatLogin(String code) {
         AuthDtos.WechatLoginRequest request = new AuthDtos.WechatLoginRequest();
         request.setCode(code);
@@ -234,14 +305,5 @@ class AuthServiceTest {
         // 未免责 → needDisclaimer=true，覆盖响应组装分支
         setting.setDisclaimerAgreed(0);
         return setting;
-    }
-
-    private static AuthSmsCode smsCode(String code, int offsetSeconds) {
-        AuthSmsCode row = new AuthSmsCode();
-        row.setPhone("13800000000");
-        row.setVerifyCode(code);
-        row.setExpireAt(LocalDateTime.now().plusSeconds(offsetSeconds));
-        row.setIsUsed(0);
-        return row;
     }
 }

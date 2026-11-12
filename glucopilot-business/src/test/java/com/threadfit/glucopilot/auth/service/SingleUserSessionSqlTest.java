@@ -133,7 +133,9 @@ CREATE TABLE user_session(
                 sessions,
                 smsCodes,
                 emailCodes,
-                mock(EmailCodeMailSender.class));
+                mock(EmailCodeMailSender.class),
+                mock(VerificationCodeConsumer.class),
+                mock(com.threadfit.glucopilot.user.cancellation.service.AccountCancellationRecovery.class));
     }
 
     private AuthService service(long userId) {

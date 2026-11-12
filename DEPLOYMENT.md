@@ -21,6 +21,8 @@ Shell 不会自动加载 .env，生产 Docker Compose 使用 env_file 加载。
 HTTPS 证书、域名与防火墙由运维配置；小程序必须使用登记过的 HTTPS 域名。
 后端 uploads 使用持久卷，运维负责备份和恢复。
 
+**单实例约束**：账号注销清理 worker 无分布式锁（`@Scheduled` 单线程 + 无租约），**仅支持单实例部署**，由 `account.cancellation.single-instance=true` 声明。不要对 api 服务做水平扩容（`docker compose up --scale api=2` 或 K8s `replicas>1`）；滚动/蓝绿发布期间新旧实例短暂并存也会重复执行清理。多实例前必须先引入分布式锁（ShedLock/Redis/DB 租约）或把 worker 拆成独立单副本任务。
+
 ## 发布验收
 
 登记后端及管理端提交 SHA、镜像标签、契约版本。

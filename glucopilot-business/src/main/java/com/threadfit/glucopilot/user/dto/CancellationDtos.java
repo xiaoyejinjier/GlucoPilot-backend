@@ -121,10 +121,4 @@ public final class CancellationDtos {
         @JsonSerialize(using = ToStringSerializer.class)
         private Long isolateUntil;
     }
-
-    @Data
-    @Builder
-    public static class RecoveryView {
-        private Integer accountStatus;
-    }
 }

@@ -1,21 +1,25 @@
 package com.threadfit.glucopilot.user.cancellation.job;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationMode;
+import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationStatus;
 import com.threadfit.glucopilot.user.cancellation.service.AccountDataPurger;
+import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
 import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
+import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
 
 import lombok.RequiredArgsConstructor;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -25,19 +29,22 @@ import java.util.List;
  * <h2>职责只有三件事</h2>
  *
  * <ol>
- *   <li>扫出"该执行"的凭据：{@code status=PENDING} 且（立即模式，或恢复期已到期）；
- *   <li>用 CAS 把 PENDING 抢成 RUNNING——这是多实例并发下唯一的互斥手段；
+ *   <li>扫出该执行的凭据：{@code status IN (PENDING, 历史 RUNNING)}，且恢复期已过并留出安全边际；
+ *   <li>守卫账号状态，非注销中一律跳过；
  *   <li>调 {@link AccountDataPurger}，然后按结果记 EXECUTED 或失败重试。
  * </ol>
  *
- * <h2>失败为什么不回滚成 NORMAL</h2>
+ * <h2>为什么没有"抢占"</h2>
  *
- * 一旦开始物理删除，把 status 改回 NORMAL 会造出"一半数据没了、账号却还能用"的状态， 比停在注销中危险得多。因此失败只累加 {@code fail_count}：3 次以内回到
- * PENDING 重试， 达到 3 次置 FAILED(4)，保留人工介入的入口，<b>账号状态不回退</b>。
+ * 并发安全靠"时间窗不相交"：可登录恢复窗口在 {@code isolateUntil} 截止，worker 只在
+ * {@code isolateUntil + safetyMargin} 之后动手，两者在时间上不可能重叠；剩下的"恢复 vs 清理"
+ * 由 {@code markRecovered WHERE status = 0} 做唯一裁判。worker 不写 RUNNING。
  *
- * <h2>为什么每步独立事务</h2>
+ * <h2>为什么失败不回到 NORMAL</h2>
  *
- * 见 {@link AccountDataPurger} 的类注释：重试只补没做完的步骤，不全量回滚。
+ * 一旦开始物理删除，把账号状态改回 NORMAL 会造出"一半数据没了、账号却还能用"的状态，
+ * 比停在注销中危险得多。因此失败只累加 {@code fail_count}：3 次以内回到 PENDING 重试，
+ * 3 次置 FAILED，账号状态不回退。
  */
 @Component
 @EnableScheduling
@@ -61,9 +68,19 @@ public class AccountCancellationWorker {
     private static final int LAST_ERROR_MAX = 480;
 
     private final UserAccountCancellationMapper cancellationMapper;
+    private final UserAccountMapper userAccountMapper;
     private final AccountDataPurger purger;
 
-    /** 定时轮询入口。 */
+    /** 安全边际：worker 在恢复期结束后再多等一段时间，保证没有在途的恢复请求。 */
+    @Value("${account.cancellation.safety-margin:5m}")
+    private Duration safetyMargin;
+
+    /**
+     * 定时轮询入口。
+     *
+     * <p>TODO 多实例部署前必须引入分布式锁（ShedLock/Redis/DB 租约）或拆独立单副本 worker：
+     * 本实现按单实例假设，多实例会重复执行 purge。
+     */
     @Scheduled(
             initialDelayString = "${account.cancellation.initial-delay:20000}",
             fixedDelayString = "${account.cancellation.poll-delay:30000}")
@@ -71,20 +88,19 @@ public class AccountCancellationWorker {
         List<UserAccountCancellation> due =
                 cancellationMapper.selectList(
                         new LambdaQueryWrapper<UserAccountCancellation>()
-                                .eq(
+                                .in(
                                         UserAccountCancellation::getStatus,
-                                        CancellationStatus.PENDING.getCode())
+                                        CancellationStatus.PENDING.getCode(),
+                                        CancellationStatus.RUNNING.getCode())
                                 .and(
                                         w ->
-                                                w.eq(
-                                                                UserAccountCancellation::getMode,
-                                                                CancellationMode.IMMEDIATE
-                                                                        .getCode())
+                                                w.isNull(UserAccountCancellation::getIsolateUntil)
                                                         .or()
                                                         .le(
                                                                 UserAccountCancellation
                                                                         ::getIsolateUntil,
-                                                                LocalDateTime.now()))
+                                                                LocalDateTime.now()
+                                                                        .minus(safetyMargin)))
                                 .orderByAsc(UserAccountCancellation::getId)
                                 .last("LIMIT " + BATCH_SIZE));
         for (UserAccountCancellation record : due) {
@@ -95,17 +111,36 @@ public class AccountCancellationWorker {
     /**
      * 处理单条凭据（public 是为了让单测能直接驱动，不必等定时器）。
      *
-     * <p>抢不到执行权就安静返回：另一个实例已经在处理同一条，重复执行没有意义。
+     * <p>purge 前必须重读账号状态：双击提交可能留下两条 PENDING，登录恢复只回收其中一条
+     * （findActive 取最新一条），残留那条到期后若直接清理，会把已经恢复的正常账号删掉。
      */
     public void process(UserAccountCancellation record) {
         Long id = record.getId();
-        if (cancellationMapper.claim(id) != 1) {
-            log.debug("注销凭据已被其他实例抢占，跳过 id={}", id);
+        UserAccount account = userAccountMapper.selectById(record.getUserId());
+        int status =
+                (account == null || account.getAccountStatus() == null)
+                        ? -1
+                        : account.getAccountStatus();
+
+        if (account == null || status == AccountStatus.CANCELLED.getCode()) {
+            // 账号已不存在或已墓碑：没有可清理对象，直接收尾（幂等）
+            cancellationMapper.markExecuted(id, LocalDateTime.now());
+            return;
+        }
+        if (status != AccountStatus.CANCELLING.getCode()
+                && status != AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
+            // 活跃状态（正常/禁用）说明账号已被登录恢复或状态发生漂移，绝不能清理
+            cancellationMapper.markExecuted(id, LocalDateTime.now());
+            log.warn(
+                    "账号状态已非注销中，跳过清理 id={} userId={} accountStatus={}",
+                    id,
+                    record.getUserId(),
+                    status);
             return;
         }
         try {
             purger.purge(record.getUserId());
-            cancellationMapper.markExecuted(id);
+            cancellationMapper.markExecuted(id, LocalDateTime.now());
             log.info("账号注销执行完成 id={} userId={}", id, record.getUserId());
         } catch (RuntimeException e) {
             // 注意：这里不重抛。定时任务里抛出去只会被 Spring 的调度器吞掉并打断后续条目，

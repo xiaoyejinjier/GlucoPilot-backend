@@ -9,18 +9,12 @@ import java.io.InputStream;
 import java.time.LocalDate;
 
 /**
- * 对象存储抽象：凭证 / 直传对象 / 访问 URL。
- *
- * <p>各实现共同契约（不一致即缺陷）：
- * <ul>
- *   <li>{@code storageKey = {bizType}/{yyyy}/{MM}/{userId}/{uuid}.{ext}}</li>
- *   <li>桶私有，禁止匿名下载；{@code fileUrl} 由服务端 {@link #resolvePublicUrl} 生成</li>
- *   <li>落库 provider 值：本地开发存储与 MinIO=1 / 阿里云OSS=2</li>
- * </ul>
+ * 对象存储抽象：生成直传凭证、校验对象、读取对象、生成访问地址。
+ * <p>共同契约：storageKey 必须带 userId；桶私有；fileUrl 只由服务端生成。
  */
 public interface ObjectStorageService {
 
-    /** 预签名 PUT URL 有效期（秒）。 */
+    /** 预签名 PUT URL 有效期（秒）：够传完一个文件，又能缩短凭证泄露窗口。 */
     int EXPIRE_SECONDS = 300;
 
     /** 生成凭证：storageKey + 预签名直传 URL。 */
@@ -33,68 +27,33 @@ public interface ObjectStorageService {
     boolean objectExists(String storageKey);
 
     /**
-     * 读取对象的完整字节（<b>服务端读取</b>，不产生也不依赖公开 URL）。
-     * <p>
-     * 用途：需要把对象内容本身交给下游处理的场景——当前是「把聊天图片送给视觉模型」。
-     * 之所以要有这个方法，是因为另外两条路都走不通：
-     * <ul>
-     *   <li>把 {@link #resolvePublicUrl} 的结果交给模型服务：开发环境的 endpoint 是
-     *       {@code http://localhost:9000}，第三方服务器根本回连不到这台机器；</li>
-     *   <li>生产即便是公网可达的 OSS 地址：那也等于把用户健康图片的地址暴露给第三方，
-     *       且与本接口「桶私有，禁止匿名下载」的契约相冲突。</li>
-     * </ul>
-     * 因此图片以 base64 随请求体发送，走服务端读取这条路。
-     * <p>
-     * <b>本方法不做大小限制</b>：调用方应先用 {@code media_file.size_bytes} 判断再调用，
-     * 不要无脑把一个 20MB 的对象读进内存。
-     *
-     * @param storageKey {@link #buildStorageKey} 生成的对象 Key
-     * @return 对象字节
-     * @throws com.threadfit.glucopilot.common.exception.BizException 对象不存在或读取失败
+     * 服务端读取完整字节（当前用于把聊天图片送给视觉模型）。
+     * <p>模型服务无法回连本地 MinIO，且不能把私有桶地址暴露给第三方，所以以字节/base64 随请求发送。
+     * <p>本方法不限制大小：调用前先用 {@link #objectSize} 判断，避免把 20MB 对象读进内存。
      */
     byte[] getObject(String storageKey);
 
-    /**
-     * 对象字节数（HEAD 查询），不下载内容。
-     * <p>用于大对象（如 100MB 视频）先校验体积，避免把它整段读进内存。
-     *
-     * @param storageKey {@link #buildStorageKey} 生成的对象 Key
-     * @return 字节数
-     * @throws com.threadfit.glucopilot.common.exception.BizException 对象不存在（404）或存储故障（500）
-     */
+    /** HEAD 查询对象字节数，不下载内容：用于 100MB 视频先校验体积。 */
     long objectSize(String storageKey);
 
     /**
-     * 打开对象的一段用于流式读取（视频 Range 请求、大对象哈希）。
-     * <p>返回的流从 {@code offset} 开始、最多 {@code length} 字节，<b>调用方负责关闭</b>。
-     * 与 {@link #getObject} 的区别是不把内容整体读进堆内存。
-     *
-     * @param storageKey {@link #buildStorageKey} 生成的对象 Key
-     * @param offset     起始偏移（字节）
-     * @param length     读取长度（字节），不得超过对象剩余长度
-     * @return 定位于 offset 的输入流
-     * @throws com.threadfit.glucopilot.common.exception.BizException 对象不存在（404）或存储故障（500）
+     * 打开对象的 [offset, offset+length) 区段，供视频 Range 播放、大对象流式哈希使用。
+     * <p>不把内容整体读进堆内存；返回的流由调用方负责关闭。
      */
     InputStream openObject(String storageKey, long offset, long length);
 
-    /**
-     * 删除对象（账号注销清理用）。
-     *
-     * <p>契约：<b>幂等</b>——对象不存在视为成功，不抛异常；只有真正删除失败才抛出。
-     * 调用方按“失败可重试”处理，所以这里不能把“已经没了”当成错误。
-     *
-     * @param storageKey {@link #buildStorageKey} 生成的对象 Key
-     */
+    /** 删除对象（注销清理用）。幂等：对象不存在视为成功，只有真正删除失败才抛出。 */
     void deleteObject(String storageKey);
 
-    /** 当前实现对应的 provider 落库值。 */
+    /** 落库值：本地开发与 MinIO=1，阿里云 OSS=2。 */
     StorageProvider provider();
 
-    /** 当前桶名（落库 media_file.bucket_name 用）。 */
+    /** 当前桶名，落库到 media_file.bucket_name。 */
     String bucket();
 
     /** 生成对象 Key：{bizType}/{yyyy}/{MM}/{userId}/{uuid}.{ext}。 */
     default String buildStorageKey(MediaBizType bizType, String ext, Long userId) {
+        // userId 放在路径中段：登记媒体时用它做前缀归属校验，防止代登记他人文件
         LocalDate now = LocalDate.now();
         String yyyy = String.format("%04d", now.getYear());
         String mm = String.format("%02d", now.getMonthValue());

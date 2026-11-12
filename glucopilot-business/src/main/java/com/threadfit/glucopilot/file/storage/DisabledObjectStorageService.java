@@ -10,12 +10,13 @@ import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 
-/** Explicit storage-off mode for deployments without object storage credentials. */
+/** 存储关闭态：除删除外一律拒绝，避免“配置缺失却假装成功”。 */
 @Service
 @ConditionalOnProperty(prefix = "glucopilot.storage", name = "provider", havingValue = "disabled")
 public class DisabledObjectStorageService implements ObjectStorageService {
 
     private BizException unavailable() {
+        // 统一失败出口：能力未启用必须显式拒绝，不能返回空数据糊弄调用方
         return new BizException(ErrorCode.BIZ_REJECTED,
                 "文件存储未启用，当前环境不支持文件上传与读取");
     }
@@ -56,7 +57,7 @@ public class DisabledObjectStorageService implements ObjectStorageService {
      */
     @Override
     public void deleteObject(String storageKey) {
-        // no-op
+        // no-op：没有存储就没有待删对象，幂等成功
     }
 
     @Override

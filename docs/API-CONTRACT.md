@@ -105,29 +105,29 @@ C端微信、手机号和邮箱登录统一采用后登录替换旧会话：同�
 
 ## 账号注销（2026-10-27）
 
-**规则**：验证通过即生效，不设强制冷静期；可选 7 天可恢复，默认不勾选。本人发起，管理端不代发起、不代撤销；无资产/权益/订单/会员/券/积分模块，确认页不展示、不拦截、不建空卡片。
+**规则**：仅保留七天可恢复注销（立即注销已下线）。本人发起，管理端不代发起、不代撤销；无资产/权益/订单/会员/券/积分模块，确认页不展示、不拦截、不建空卡片。冷静期内**正常登录即自动终止注销**，不提供手动恢复接口。
 
-**枚举**：accountStatus 为 3=已注销、4=已注销可恢复；mode 为 1=立即、2=七天可恢复；注销 status 为 0=待执行、1=执行中、2=已执行、3=已恢复、4=失败；verifyType/verifyChannel 为 1=短信、2=邮箱、3=微信（wx.login code 现场验证）；前端显式选择 verifyType，1/2 必须已绑定对应联系方式、3 必须是本账号微信，不再按绑定关系自动选择；凭据新增 pre_status（0=禁用、1=正常），登录取消注销时按此还原，DISABLED 账号不可洗白。
+**枚举**：accountStatus 为 3=已注销、4=已注销可恢复；mode 为 1=立即（历史值，提交接口不再接受）、2=七天可恢复；注销 status 为 0=待执行、1=执行中（历史值）、2=已执行、3=已恢复、4=失败；verifyType/verifyChannel 为 1=短信、2=邮箱、3=微信（wx.login code 现场验证）；前端显式选择 verifyType，1/2 必须已绑定对应联系方式、3 必须是本账号微信；凭据新增 pre_status（0=禁用、1=正常），登录取消注销时按此还原，DISABLED 账号不可洗白。
 
 **接口**（前缀 /api/v1/users/me）
 - GET /cancellation：无申请时 cancellation=null，否则含 status、mode、reasonCode、verifyChannel、requestedAt、isolateUntil、executedAt、recoveredAt；另返回 hasPhone/hasEmail/hasWechat 与 phoneMasked/emailMasked，前端据此决定展示哪些验证方式与“验证码将发送至 …”提示。
 - GET /cancellation/captcha：无请求体，返回 {ticket,expiresIn=180}；票据一次性、绑定 userId，取票频控用户 20 次/小时、IP 60 次/小时（超出 429）。
 - POST /cancellation/code：{channel:1|2,captchaTicket}（均必填，不做旧客户端兼容），服务端先校验通道已绑定、再消费票据、再按用户/IP 日限额发码，返回 {channel,maskedTarget,expiresIn,cooldownSeconds}；手机/邮箱均未绑定返回 400，纯微信账号不应调用（前端不展示手机/邮箱验证）。
-- POST /cancellation：{mode,reasonCode?,verifyType:1|2|3,verifyCode?,wechatCode?}，verifyType 必填且必须与实际绑定一致；1/2 走 verifyCode、3 走 wechatCode（code 一次性、换取即消费防重放）；仅 NORMAL/DISABLED 可提交；已有 PENDING/RUNNING 幂等返回现状；成功后立即失效全部 user_session；mode=1 置 accountStatus=2 后异步清理，mode=2 置 4 并返回 isolateUntil=申请时间+7 天。
-- POST /cancellation/recovery：无请求体，登录即取消注销（会话已由 wx.login 或验证码登录核验，不再二次验证）；仅 accountStatus=4 且未到 isolateUntil 可恢复，成功后按 pre_status 还原（禁用账号仍为 DISABLED）；窗口过期或状态 2/3 返回 409。
+- POST /cancellation：{mode:2,reasonCode?,verifyType:1|2|3,verifyCode?,wechatCode?}，提交仅接受 mode=2（mode=1 返回 400「仅支持七天可恢复注销」）；verifyType 必填且必须与实际绑定一致；1/2 走 verifyCode、3 走 wechatCode（code 一次性、换取即消费防重放）；仅 NORMAL/DISABLED 可提交；已有 PENDING 幂等返回现状；成功后立即失效全部 user_session，accountStatus 置 4，返回 isolateUntil=申请时间+7 天。
+- **恢复（无独立接口）**：冷静期内用原手机号/邮箱/微信正常登录即自动终止注销——登录事务内完成恢复（凭据置 RECOVERED、accountStatus 按 pre_status 还原），响应新增 `recoveredFromCancellation:boolean`，为 true 时前端弹一次「账号已恢复」提示（仅告知，关掉不影响结果）。`now >= isolateUntil` 时登录直接拒绝（403「注销申请已过反悔期，账号正在清理中」），不建会话。
 - 验证码 scene=cancel（与登录 login、绑定 bind 隔离消费），60 秒冷却，连续 5 次失败锁定 24 小时（429）；发码日限额用户 10 次/IP 50 次；恢复后 24 小时内不可再次提交注销（不影响正常登录使用）。滑块只作 UX 门槛（拖到最右解锁），服务端不校验偏移、不下发答案，防刷依赖票据频控与失败锁定。
 
 **2026-10-27 变更**：身份验证卡片改为“手机/邮箱验证 | 微信身份验证”双模式，纯微信账号隐藏手机/邮箱 Tab；手机/邮箱模式发码前必须完成滑块解锁并携带 captchaTicket；提交必须带 verifyType；V47 给 auth_sms_code / auth_email_code 增加 scene 列与索引，登录、绑定、注销验证码按 scene 隔离消费。
 
 **2026-10-27 修复**：hasWechat 只认真实微信 openid，手机/邮箱注册写入的 `phone_` / `email_` 占位值不算绑定（GET /cancellation 同理）；前端在 hasPhone/hasEmail/hasWechat 非布尔（前后端版本不一致）时展示“服务版本不兼容”，不再兜底成“未绑定手机号、邮箱或微信”。
 
-**登录拦截**：登录响应含 accountStatus。4 允许登录，前端先提示“账号注销中，登录即取消注销”：继续则调 recovery，暂不使用则退出登录；0 允许登录但仅可办理注销或退出（登录后引导自助注销）；2/3 拒绝登录。0/4 会话除 /users/me、/users/me/cancellation 及子路径、退出登录、发码、/app-config 外一律 403。注销后 openid、phone、email 置空释放唯一键，同微信/手机/邮箱再登录为全新账号并重新确认免责声明。
+**登录拦截**：登录响应含 accountStatus 与 recoveredFromCancellation。4 在反悔期窗口内允许登录并**自动恢复**（返回 recoveredFromCancellation=true，前端弹「账号已恢复」提示；若 pre_status=0 则恢复后仍为禁用态）；窗口过期后 4 拒绝登录。0 允许登录但仅可办理注销或退出（登录后引导自助注销）；2/3 拒绝登录。0 会话除 /users/me、/users/me/cancellation 及子路径、退出登录、发码、/app-config 外一律 403。注销后 openid、phone、email 置空释放唯一键，同微信/手机/邮箱再登录为全新账号并重新确认免责声明。验证码 scene 仅支持 login/bind/cancel（recover 随手动恢复接口一并删除）。24 小时内重复提交返回 409（起算点 recovered_at）。
 
-**数据处置**：立即注销在会话失效后异步物理删除血糖、饮食、健康档案、AI 会话/消息/记忆/OCR、个人媒体（bizType 1–6）、设置/设备/反馈/导出文件；社区公开内容匿名保留（作者显示“已注销用户”，媒体 bizType 7/8 随内容保留）；点赞收藏保留并计数（沿用 V36 口径），关注/阅读/隐藏/草稿/通知/本人举报删除；私信保留但禁止回复。墓碑时 user_account 置空 openid/union_id/phone/email/last_login_ip、username=“已注销用户”、account_status=3，user_profile 昵称=“已注销用户”、清空头像与签名；is_deleted 必须保持 0，否则全局逻辑删除会使管理端与作者解析查不到。7 天模式窗口内数据保留但不可访问，期满执行同一清理。
+**数据处置**：七天冷静期在本会话失效后开始计时，期满（isolateUntil + 安全边际）由后台异步物理删除血糖、饮食、健康档案、AI 会话/消息/记忆/OCR、个人媒体（bizType 1–6）、设置/设备/反馈/导出文件；社区公开内容匿名保留（作者显示“已注销用户”，媒体 bizType 7/8 随内容保留）；点赞收藏保留并计数（沿用 V36 口径），关注/阅读/隐藏/草稿/通知/本人举报删除；私信保留但禁止回复。清理前会重读账号状态，非 CANCELLING/CANCELLED_RECOVERABLE 时跳过（防止双凭据误删已恢复账号）。墓碑时 user_account 置空 openid/union_id/phone/email/last_login_ip、username=“已注销用户”、account_status=3，user_profile 昵称=“已注销用户”、清空头像与签名；is_deleted 必须保持 0，否则全局逻辑删除会使管理端与作者解析查不到。
 
 **管理端**：P0 支持 accountStatus=0..4 筛选、详情返回注销摘要、状态 2/3/4 拒绝启用禁用，不提供代发起/代撤销；协助恢复（同通道核验+二级审批+留痕）排 P1；已注销用户健康档案返回空态并提示“健康数据已删除”。
 
-**迁移与前端清理**：V45 新建 user_account_cancellation、openid 放宽为 NULL、chk_ua_status 扩展至 0..4；V46 verify_channel 扩为 1=短信/2=邮箱/3=微信并新增 pre_status 列；V47 为 auth_sms_code / auth_email_code 增加 scene（login/bind/cancel/recover，默认 login）与（目标,scene,is_used）索引，存量按 login 处理。前端注销或“暂不使用”后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
+**迁移与前端清理**：V45 新建 user_account_cancellation、openid 放宽为 NULL、chk_ua_status 扩展至 0..4；V46 verify_channel 扩为 1=短信/2=邮箱/3=微信并新增 pre_status 列；V47 为 auth_sms_code / auth_email_code 增加 scene（login/bind/cancel，默认 login）与（目标,scene,is_used）索引，存量按 login 处理。前端提交注销或退出登录后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
 
 ## 导出持久化统一为MyBatis（2026-10-29，无HTTP契约变化）
 

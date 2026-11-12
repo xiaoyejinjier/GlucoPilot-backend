@@ -1,11 +1,9 @@
 package com.threadfit.glucopilot.ai.config;
 
-import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.advisor.MedicalGuardAdvisor;
 import com.threadfit.glucopilot.ai.advisor.ChatMemoryReadAdvisor;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.advisor.DynamicPromptAdvisor;
 import com.threadfit.glucopilot.ai.tool.runtime.AiToolRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,16 +31,16 @@ import java.util.List;
  *       （含 SystemMessage），而我们的安全提示词本身就写着「开药」「剂量」，会导致**全体请求被误拦**。
  *       事故经过与正确语义见 {@link MedicalGuardAdvisor} 类注释。</li>
  *   <li>{@link ChatMemoryReadAdvisor}——注入会话历史（只读，写入仍由 Service 显式落库）。</li>
- *   <li>{@link DynamicPromptAdvisor}——把<b>当前生效</b>的 CHAT 场景提示词写进每次请求
- *       （顺序在记忆注入之前，保证系统提示词是消息列表第一条）。</li>
  * </ol>
  * <p>
- * <b>系统提示词取 CHAT 场景，且不再用 {@code defaultSystem} 烤死</b>：提示词进后台
+ * <b>系统提示词不在这一层，也不再用 {@code defaultSystem} 烤死</b>：提示词进后台
  * （{@code ai_prompt_template}）之后，{@code defaultSystem} 只在构造 client 时取一次，
- * 后台改完必须重启才生效，等于白做。因此这里不再声明 {@code defaultSystem}，
- * 改由 {@link DynamicPromptAdvisor} 每次请求注入并<b>替换</b>已有的 SystemMessage：
- * 它同时充当安全兜底——任何忘记显式设置 system 的调用，拿到的仍是含医疗红线与免责声明的提示词，
- * 不会退化成「无系统提示词的裸模型」。其它场景（视觉）在请求侧用 {@code .system(...)} 覆盖。
+ * 后台改完必须重启才生效，等于白做。所以由调用方在请求级注入——对话只有一个调用点
+ * （{@code ChatCompletionServiceImpl}），它每轮读一次 {@code systemPrompt(SceneCode.CHAT)}
+ * 再 {@code .system(...)}；其余一次性场景（视觉、摘要、记忆抽取、内容审核、中英翻译）
+ * 同样是调用点 {@code .system(...)}。<b>为什么不再用 advisor 注入</b>：那需要「丢弃已有
+ * SystemMessage 再放一条」的替换语义，是个不报错的隐式契约；同样的效果放在调用点上
+ * 一眼可见，且少一个必须与装配器协同的顺序常量。
  * <p>
  * <b>刻意不做的事</b>：没有挂 {@code SimpleLoggerAdvisor}。项目里已明确规定不把对话正文写进日志
  * （见 {@code application-dev.yaml} 对 Mapper 日志的处理）。需要临时排障时，可临时注册
@@ -68,8 +66,8 @@ public class AiChatClientConfig {
             advisors.add(medicalGuard);
         }
         advisors.add(chatMemoryReadAdvisor);
-        // 顺序由 getOrder() 决定，与加入顺序无关：提示词 Advisor 排在记忆注入之前
-        advisors.add(new DynamicPromptAdvisor(promptTemplateService, SceneCode.CHAT));
+        // 顺序由 getOrder() 决定，与加入顺序无关：硬拦截 → 记忆装配；
+        // 提示词不在这条链上——它由调用方在请求级 .system(...) 注入（见类注释）。
 
         // 自动装配的 Builder 是单例，clone() 后再改，避免污染框架/其它使用方的默认配置。
         //
@@ -81,7 +79,7 @@ public class AiChatClientConfig {
         // 它挂在另一个 ChatModel 上、根本无法从本 Builder clone，而且阶段 1「看图出描述」
         // 不需要也不应该有工具。两处结论相反，判据是「这个 client 要不要工具」，不是「能不能 clone」。
         return autoConfiguredBuilder.clone()
-                // 刻意不写 defaultSystem：提示词由 DynamicPromptAdvisor 每请求注入（见类注释）
+                // 刻意不写 defaultSystem：提示词由调用方每请求注入（见类注释）
                 .defaultTemplateRenderer(promptTemplateService.renderer())
                 .defaultAdvisors(advisors)
                 // 用 defaultTools 而不是 defaultToolCallbacks：后者三个重载在 2.0.1 已全部过时。

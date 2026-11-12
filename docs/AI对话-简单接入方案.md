@@ -1729,7 +1729,7 @@ snapshot -> snapshot.resolveText(snapshot.yamlText().modelCode())   // yamlText.
 
 **① `defaultSystem` 必须拆掉，改成按请求注入。**
 `ChatClient.Builder.defaultSystem(...)` 只在构造 client 时取一次，提示词进后台之后它就成了"启动期烤死的旧提示词"，
-改完不重启不生效——等于白做后台化。现在由 `DynamicPromptAdvisor` 每请求注入，并**替换**请求里已有的 SystemMessage
+改完不重启不生效——等于白做后台化。现在由 `ChatCompletionServiceImpl` 每请求读取并请求级 `.system(...)` 注入（2026-11 起不再走 advisor）
 （而不是追加）：只追加会出现"旧提示词 + 新提示词"两段指令同时进模型，这是最难排查的一类问题。
 Advisor 顺序排在会话记忆之前、医疗硬拦截之后——后者刻意保持最外层，这样它扫到的永远只有用户消息（见它的类注释里那次误拦事故）。
 

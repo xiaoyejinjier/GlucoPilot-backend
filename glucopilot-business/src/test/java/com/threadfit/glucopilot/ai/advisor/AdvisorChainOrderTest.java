@@ -4,8 +4,6 @@ import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
 import com.threadfit.glucopilot.ai.memory.reader.ChatContextReader;
-import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -32,19 +30,19 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 两条 Advisor 串成一条链之后的<b>消息顺序</b>回归。
+ * 「系统提示词 + 历史装配」串起来之后的<b>消息顺序</b>回归。
  *
- * <h2>为什么必须有这个测试</h2>
- * 顺序由两个类分别负责一半：{@link DynamicPromptAdvisor} 把场景提示词放进 {@code current} 的最前面，
- * {@link com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler} 负责在拼历史时把它
- * 从"本轮新增消息"里拆出来、仍旧放在最前。
- * 两边的单元测试各自都绿——因为各自只检查自己那一半：
+ * <h2>顺序由两处各管一半</h2>
  * <ul>
- *   <li>{@code DynamicPromptAdvisorTest} 只断言"替换之后第一条是自己"；</li>
- *   <li>{@code ChatMemoryReadAdvisorTest} 只断言"附加上下文排在历史前面"。</li>
+ *   <li>调用点（{@code ChatCompletionServiceImpl}）在请求级 {@code .system(...)} 注入场景提示词，
+ *       由 {@code ChatClient} 组装成消息列表第 1 条；</li>
+ *   <li>{@link ChatHistoryAssembler} 负责在拼接历史时把这条 {@link SystemMessage}
+ *       从「本轮新增消息」里拆出来、仍旧放在最前。</li>
  * </ul>
- * 曾经的真实缺陷就是这样漏过去的：装配器把整个 {@code current} 接在历史后面，
- * 于是第二轮起提示词落到历史与用户提问之间。首轮没有历史，所以看起来一切正常。
+ * 两边的单元测试各自都绿——因为各自只检查自己那一半：调用点断言「发出去的请求带 system」，
+ * 装配器断言「附加上下文排在历史前面」。真正的缺陷恰恰夹在中间：装配器把整个 {@code current}
+ * 接在历史后面，于是第二轮起提示词落到历史与用户提问之间；首轮没有历史，所以看起来一切正常。
+ * 所以这里必须把「已经带 system 的请求」整条喂给记忆顾问，断言最终形态。
  */
 class AdvisorChainOrderTest {
 
@@ -57,10 +55,7 @@ class AdvisorChainOrderTest {
     private final ChatHistoryAssembler assembler = new ChatHistoryAssembler(properties, new TokenEstimator());
 
     @Test
-    void 两条顾问串起来后系统提示词仍在历史之前() {
-        AiPromptTemplateService prompts = mock(AiPromptTemplateService.class);
-        when(prompts.systemPrompt(SceneCode.CHAT)).thenReturn(PROMPT);
-
+    void 请求级系统提示词经历史装配后仍在最前() {
         ChatMemory chatMemory = mock(ChatMemory.class);
         when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(
                 List.of(new UserMessage("我早餐吃了两个包子"), new AssistantMessage("记下了，碳水和油脂都偏高")));
@@ -72,12 +67,12 @@ class AdvisorChainOrderTest {
 
         List<ChatClientRequest> captured = new ArrayList<>();
         AtomicReference<List<ChatContextShard>> shardSlot = new AtomicReference<>(List.of());
-        CallAdvisorChain chain = chainOf(List.of(
-                new DynamicPromptAdvisor(prompts, SceneCode.CHAT),
-                new ChatMemoryReadAdvisor(chatMemory, assembler, contextReader)), captured);
+        CallAdvisorChain chain = chainOf(
+                List.of(new ChatMemoryReadAdvisor(chatMemory, assembler, contextReader)), captured);
 
+        // 调用点注入后的形态：SystemMessage 已经是第 1 条，后面才是本轮用户消息
         chain.nextCall(new ChatClientRequest(
-                new Prompt(List.of(new UserMessage("那晚饭吃什么"))),
+                new Prompt(List.of(new SystemMessage(PROMPT), new UserMessage("那晚饭吃什么"))),
                 Map.of(ChatMemory.CONVERSATION_ID, String.valueOf(SESSION_ID),
                         ChatMemoryAdvisorParams.USER_ID, 7L,
                         ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS, 1600,

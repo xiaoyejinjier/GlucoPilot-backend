@@ -8,6 +8,9 @@
 > 渲染：GitHub / VS Code（Markdown Preview Mermaid Support）/ Typora 直接渲染；
 > 也可把单张图的 `mermaid` 代码块粘到 <https://mermaid.live> 看。
 > 一个页面塞不下 115 个类，所以按「装配 → 主链路 → 子系统」拆成 9 张图，最后附依赖矩阵。
+>
+> **图片快照**：`uml/*.png` 是 2026-11-09 渲染的位图；2026-11-12 删掉 `DynamicPromptAdvisor`（提示词改由调用点请求级注入）后，
+> §2 / §4 / §7 / §8 四张图里仍画着它。**以文中的 mermaid 源码为准**（图注下方的代码块已同步删除）。
 
 ## 目录
 
@@ -120,7 +123,6 @@ classDiagram
     class AiRuntimeConfigService
     class AiPromptTemplateService
     class ChatMemoryReadAdvisor
-    class DynamicPromptAdvisor
     class ChatHistoryAssembler
     class ChatContextReader
     class MyBatisChatMemoryRepository
@@ -134,7 +136,6 @@ classDiagram
     AiChatClientConfig ..> ChatMemoryReadAdvisor
     AiChatClientConfig ..> AiToolRegistry
     AiChatClientConfig ..> MedicalGuardAdvisor : new（可选）
-    AiChatClientConfig ..> DynamicPromptAdvisor : new
     AiChatMemoryConfig ..> MyBatisChatMemoryRepository
     AiChatMemoryConfig ..> ChatHistoryAssembler
     AiChatMemoryConfig ..> ChatContextReader
@@ -235,9 +236,8 @@ classDiagram
 ```mermaid
 flowchart TD
     req([ChatClientRequest]) --> g["MedicalGuardAdvisor<br/>order = HIGHEST_PRECEDENCE + 100"]
-    g -->|未命中敏感词| p["DynamicPromptAdvisor<br/>order = MEMORY_PRECEDENCE - 10"]
+    g -->|未命中敏感词| m["ChatMemoryReadAdvisor<br/>order = MEMORY_PRECEDENCE"]
     g -->|命中| short([直接返回固定文案<br/>不调模型])
-    p --> m["ChatMemoryReadAdvisor<br/>order = MEMORY_PRECEDENCE"]
     m --> t["ToolCallingAdvisor（框架）<br/>执行工具并回环"]
     t --> e["ChatModelCallAdvisor（框架，链尾）<br/>chatModel.call/stream"]
     e --> model([DynamicChatModel → 真实模型])
@@ -248,7 +248,6 @@ flowchart TD
 | Advisor | order | 职责 | 关键约束 |
 | --- | --- | --- | --- |
 | `MedicalGuardAdvisor` | `HIGHEST_PRECEDENCE + 100` | 只扫**最后一条 UserMessage** 的敏感词，命中直接返回固定文案 | 曾用 `getContents()` 扫全文，把系统提示词里的「开药/剂量」也扫进去导致全体误拦 |
-| `DynamicPromptAdvisor` | `MEMORY_PRECEDENCE - 10` | **替换**所有 SystemMessage 为 `systemPrompt(scene)` | 必须排在记忆之前，否则组装时看到的还是旧系统提示 |
 | `ChatMemoryReadAdvisor` | `MEMORY_PRECEDENCE` | 读历史/摘要/长期记忆/工具摘要 → `ChatHistoryAssembler` 组装 | 与框架记忆 advisor 同序，保证在链尾调用前 |
 | `ToolCallingAdvisor` | 框架默认 | 执行 `ToolCallback`、把结果回喂 | 只挂在 `textChatClient` 上 |
 | `ChatModelCallAdvisor` | 链尾 | 把请求交给 `ChatModel` | 由 `ChatClient` 内部 push |
@@ -437,7 +436,6 @@ classDiagram
     class AiRuntimeConfigService
     class AiPromptTemplateService
     class AIProperties
-    class DynamicPromptAdvisor
 
     SceneModelResolver --> SceneCode
     SceneModelResolver --> AiSceneBindingService
@@ -448,8 +446,6 @@ classDiagram
     AiSceneBindingService ..> SceneBinding
     AiSceneBindingServiceImpl ..> AiSceneConfigMapper
     AIProperties --> SceneCode : ai.scenes.key
-    DynamicPromptAdvisor --> SceneCode
-    DynamicPromptAdvisor --> AiPromptTemplateService
 ```
 
 ![§7 场景路由类图](uml/07-scene-routing.png)
@@ -474,7 +470,6 @@ sequenceDiagram
     participant S as ChatCompletionServiceImpl
     participant RG as ChatRoundGuard
     participant A1 as MedicalGuardAdvisor
-    participant A2 as DynamicPromptAdvisor
     participant A3 as ChatMemoryReadAdvisor
     participant AS as ChatHistoryAssembler
     participant A4 as ToolCallingAdvisor
@@ -497,11 +492,10 @@ sequenceDiagram
         S-->>C: BIZ_REJECTED 这一轮正在生成中
     end
     S->>S: resolveTurnInput（图片轮先跑视觉阶段 1）
+    S->>S: .system(systemPrompt(CHAT))（提示词在进链之前已就位，ChatClient 放第一条）
     S->>A1: stream(request + 参数)
     A1->>A1: 只扫最后一条用户消息的敏感词
-    A1->>A2: 未命中则放行
-    A2->>A2: 替换 SystemMessage 为 scene=CHAT 的提示词
-    A2->>A3: 
+    A1->>A3: 未命中则放行
     A3->>AS: assemble(history, summary, toolDigests, memories)
     AS-->>A3: messages + stats + shards（回写 promptEstimate/contextShards）
     A3->>A4: 组装后的 Prompt
@@ -582,7 +576,6 @@ sequenceDiagram
 | `ChatModelFactory` | `OpenAiChatOptions` | 超时/重试/thinking 都走 OpenAI options（`AiHttpTimeouts` 已删） |
 | `AiRuntimeConfigServiceImpl` | `AiModelConfigMapper` `AiModelCipher` `AiChannelProperties` `AIProperties` | 快照加载、解密、通道凭据 |
 | `AiPromptTemplateServiceImpl` | `AiPromptTemplateMapper` `AIProperties` | DB/classpath 双源提示词 |
-| `DynamicPromptAdvisor` | `AiPromptTemplateService` | 每请求替换系统提示词 |
 | `ChatMemoryReadAdvisor` | `ChatMemory` `ChatHistoryAssembler` `ChatContextReader` | 组装上下文 |
 | `ChatHistoryAssembler` | `AIProperties` `TokenEstimator` `UserChatMemoryService.MemoryItem` | 预算裁剪 + 分片 |
 | `MyBatisChatMemoryRepository` | `ChatMessageMapper` `ChatSessionService` | 历史读写（含图片摘要回放） |

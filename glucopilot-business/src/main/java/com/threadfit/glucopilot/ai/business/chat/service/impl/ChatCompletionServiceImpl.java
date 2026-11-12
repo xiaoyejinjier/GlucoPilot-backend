@@ -242,9 +242,14 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
         // 单飞键就是 chat-round:<userMsgId>，工具元数据与日志用同一个键，排障时能直接对上
         toolContext.put(AiToolContext.CALL_COUNTER, new AtomicInteger());
 
+        // 场景提示词在请求级注入（不再由 advisor 注入）：一次请求只读一次，
+        // 注入用的文本与下面估算固定开销用的是同一份，
+        // 避免在提示词 TTL 刷新的边界上「发出去的」与「按它估算的」取到两个版本。
+        String systemPrompt = promptTemplateService.systemPrompt(SceneCode.CHAT);
+
         // ② 期：记忆装配要按 token 预算裁剪，因此需要"固定开销"与"估算回写槽"。
         // 两者都通过 advisor 参数传进去（Advisor 回调不在请求线程上，只能这样传）。
-        int fixedOverhead = estimateFixedOverhead();
+        int fixedOverhead = estimateFixedOverhead(systemPrompt);
         AtomicInteger promptEstimate = new AtomicInteger();
         // ③ 期：分片元数据的回传槽（写法同 promptEstimate）——装配阶段算好，落库后才用
         AtomicReference<List<ChatContextShard>> contextShards = new AtomicReference<>(List.of());
@@ -252,6 +257,10 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
 
         ChatClient.ChatClientRequestSpec promptSpec = chatClientRegistry.textClient()
                 .prompt()
+                // 系统提示词用请求级注入：ChatClient 组装 Prompt 时把它放在消息列表第一条。
+                // 拼接历史时仍由 ChatHistoryAssembler 把它从「本轮新增消息」里拆出来、留在最前——
+                // 两处各管一半，只改一边就会让提示词落到历史之后（见 AdvisorChainOrderTest）。
+                .system(systemPrompt)
                 .advisors(advisors -> advisors
                         .param(ChatMemory.CONVERSATION_ID, sessionId.toString())
                         .param(ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS, fixedOverhead)
@@ -469,11 +478,13 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
      * ——实测一轮几乎空的对话（系统提示词 1651 字 + 6 个工具定义）就已经 5012 prompt tokens。
      * 不扣掉就会系统性超预算，预算形同虚设。
      * <p>
+     * 提示词文本由调用方传入（就是真正注入的那一份），本方法不再自己读一次：
+     * 两处各读一次会在提示词刷新的瞬间取到不同版本，估算与实物对不上。
+     * <p>
      * 只估算一次并缓存：这些内容在一次请求内不会变，而估算要遍历 JSON schema（不便宜）。
      * 缓存按"提示词文本 + 工具定义文本"的指纹失效——后台改完提示词会立即重算。
      */
-    private int estimateFixedOverhead() {
-        String system = promptTemplateService.systemPrompt(SceneCode.CHAT);
+    private int estimateFixedOverhead(String system) {
         StringBuilder tools = new StringBuilder();
         for (org.springframework.ai.tool.ToolCallback callback : toolRegistry.callbacks()) {
             tools.append(callback.getToolDefinition().name())

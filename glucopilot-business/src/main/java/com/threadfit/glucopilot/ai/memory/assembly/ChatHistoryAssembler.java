@@ -24,7 +24,7 @@ import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
  *
  * <h2>装配顺序（与最终消息顺序一致）</h2>
  * <ol>
- *   <li>本轮消息里的 {@link SystemMessage}（{@code DynamicPromptAdvisor} 注入的场景提示词）：
+ *   <li>本轮消息里的 {@link SystemMessage}（调用点请求级 {@code .system(...)} 注入的场景提示词）：
  *       提到<b>最前</b>，人设与医疗约束因此永远在第一条。调用方已经把它放进了 {@code current}，
  *       本类负责把它从"本轮新增消息"里拆出来，否则它会落在历史之后；</li>
  *   <li>附加上下文（长期记忆 + 更早对话摘要 + 最近工具结果摘要）：作为<b>一条</b> {@link SystemMessage}
@@ -162,10 +162,10 @@ public class ChatHistoryAssembler {
         }
         java.util.Collections.reverse(kept);
 
-        // 本轮消息里的 SystemMessage（场景提示词）必须留在最前：调用方（DynamicPromptAdvisor）
-        // 已经把它放进了 current，但 current 是"本轮新增消息"，直接接在历史后面会让
-        // 人设与医疗约束落到历史之后、紧贴用户提问——多轮对话里这条约束的位置就变了。
-        // 所以先把它拆出来，再按 [提示词, 记忆/摘要, 历史, 本轮] 重排。
+        // 本轮消息里的 SystemMessage（场景提示词）必须留在最前：调用点用请求级 .system(...)
+        // 注入，ChatClient 组装 Prompt 时会把它放在第一条，但 current 是"本轮新增消息"，
+        // 直接接在历史后面会让人设与医疗约束落到历史之后、紧贴用户提问——多轮对话里
+        // 这条约束的位置就变了。所以先把它拆出来，再按 [提示词, 记忆/摘要, 历史, 本轮] 重排。
         List<Message> leadingSystems = new ArrayList<>();
         List<Message> currentBody = new ArrayList<>(safeCurrent.size());
         for (Message message : safeCurrent) {

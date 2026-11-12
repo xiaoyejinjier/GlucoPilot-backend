@@ -33,9 +33,9 @@ ChatController ──► ChatCompletionServiceImpl.complete
                                                                     ▼
                                                     ChatClient（AiChatClientConfig 装配）
                                                        ├─ MedicalGuardAdvisor       order=HIGHEST+100
-                                                       ├─ ChatMemoryReadAdvisor     order=CHAT_MEMORY
-                                                       │     └─ ChatHistoryAssembler + ChatContextReader
-                                                       └─ DynamicPromptAdvisor      order=CHAT_MEMORY-10
+                                                       └─ ChatMemoryReadAdvisor     order=CHAT_MEMORY
+                                                             └─ ChatHistoryAssembler + ChatContextReader
+                                     提示词不在这条链上：调用点请求级 .system(...) 注入
                                                               │
                                                               ▼
                                                     DynamicChatModel（按配置解析真实模型）
@@ -54,7 +54,7 @@ ChatController ──► ChatCompletionServiceImpl.complete
 四条要点，后面反复出现：
 
 1. **advisor 的先后由 `getOrder()` 决定**，与 `defaultAdvisors(...)` 的传参顺序无关。
-2. **提示词不在启动期烤进 client**，而是每次请求由 `DynamicPromptAdvisor` 从 `AiPromptTemplateService` 现取（后台改了不用重启）。
+2. **提示词不在启动期烤进 client，也不经过 advisor**：`ChatCompletionServiceImpl` 每轮从 `AiPromptTemplateService` 现取一次、请求级 `.system(...)` 注入（后台改了不用重启；注入与固定开销估算复用同一份文本）。
 3. **模型不是写死的**，`DynamicChatModel` 每次调用都查运行期快照。
 4. **落库与后置动作都在 `Mono.fromCallable(...).subscribeOn(boundedElastic())` 里**，不占用 Reactor 事件线程。
 
@@ -120,11 +120,10 @@ public class AiChatClientConfig {
 | --- | --- | --- | --- |
 | `MedicalGuardAdvisor` | `Ordered.HIGHEST_PRECEDENCE + 100` | 扫最后一条用户消息，命中敏感词直接返回固定拒答，**不进模型** | 最外层：先拦住，省一次调用 |
 | `ChatMemoryReadAdvisor` | `Advisor.DEFAULT_CHAT_MEMORY_PRECEDENCE_ORDER` | 读会话历史/摘要/工具摘要/长期记忆，装成最终 Prompt | 与框架记忆 Advisor 同级，保证在「调模型」的终端 Advisor 之前 |
-| `DynamicPromptAdvisor` | 上一行 `- 10` | 把系统提示词替换成当前生效的那份 | 比记忆更靠内，保证它是消息列表第一条 |
 
 ```java
 // 刻意没做的事
-// 不写 defaultSystem：系统提示词由 DynamicPromptAdvisor 每次请求现取，启动期烤进去就改不动了
+// 不写 defaultSystem：系统提示词由调用点每请求注入，启动期烤进去就改不动了
 // 不挂 SimpleLoggerAdvisor：它会把对话正文打进日志（含用户血糖等健康数据）
 // 不用框架 SafeGuardAdvisor：它扫「含系统提示词的全文」，而系统提示词本身就写着「开药/剂量」，会全体误拦
 ```
@@ -407,12 +406,12 @@ public record Stats(int keptHistory, int droppedHistory, int estimatedTokens, in
 3. `used = fixedOverhead + estimate(contextMessage) + Σ estimate(current)`；
 4. **从最新往回装**：`kept.size() < windowMessages` 且（`kept.size() < keepRecentMessages` 无条件保底 **或** `used + cost <= budget`），否则 break；
 5. 反转成时间正序；
-6. 先把本轮里的 `SystemMessage`（`DynamicPromptAdvisor` 注入的场景提示词）拆出来留待放最前——调用方已经把它放进了 `current`，而 `current` 是"本轮新增消息"，直接接在历史后面会让人设与医疗约束落到历史之后；
+6. 先把本轮里的 `SystemMessage`（调用点请求级 `.system(...)` 注入的场景提示词）拆出来留待放最前——调用方已经把它放进了 `current`，而 `current` 是"本轮新增消息"，直接接在历史后面会让人设与医疗约束落到历史之后；
 7. `dropTrailingDuplicate(kept, currentBody)`：历史末尾若与本轮用户消息重复则去掉一条（token 也要跟着扣，否则分片之和比真实 prompt 多一条）；
 8. 按 `[场景提示词, 附加上下文, 历史, 本轮非系统消息]` 重排；
 9. `buildShards(...)` 产出分片清单，顺序固定「系统提示 → 长期记忆 → 摘要 → 工具摘要 → 历史消息」，与上面的消息顺序一致。
 
-**顺序由两个类共同保证**：`DynamicPromptAdvisor` 负责把提示词放到请求最前，本类负责拼历史时不把它挤到后面。只改一边就会出现「首轮正常、第二轮起提示词落到历史后面」——曾经的真实缺陷就是这样漏过 940 个用例的（两边各自的单测都只检查自己那一半），回归用例是 `AdvisorChainOrderTest`（把两条 advisor 串成一条链后断言最终 prompt）。
+**顺序由两处共同保证**：`ChatClient` 把调用点注入的 `.system(...)` 放在消息列表第一条，本类负责拼历史时把它从「本轮新增」里拆出来、留在最前。只改一边就会出现「首轮正常、第二轮起提示词落到历史后面」——曾经的真实缺陷就是这样漏过 940 个用例的（两边的单测各自都只检查自己那一半），回归用例是 `AdvisorChainOrderTest`（把「已带 system 的请求」整条喂给记忆顾问后断言最终 prompt）。
 
 「保底条数优先」= `keepRecentMessages` 之内的消息即使超预算也保留：最近几轮是语义连贯的最小成本，宁可超一点也不能断在这儿。日志里那句「超预算：保底条数优先」就出自这里。
 
@@ -460,7 +459,7 @@ public static Integer roundOf(Integer assistantSeqNo) { return (assistantSeqNo +
 
 ---
 
-## 7. 提示词：`AiPromptTemplateServiceImpl` + `DynamicPromptAdvisor`
+## 7. 提示词：`AiPromptTemplateServiceImpl` + 调用点请求级注入
 
 ### 7.1 双源 + 兜底链
 
@@ -504,23 +503,20 @@ AiPromptTemplateService.validateRenderable(text, config.getVariables(), "classpa
 ```
 而不是 `{"verdict": "REJECT"}`。解析侧 `ContentModerationParser` 因此写成逐行 `key：value`，容忍中英文冒号、`=`、Markdown。
 
-### 7.3 `DynamicPromptAdvisor`：替换，不是追加
+### 7.3 注入点：调用点请求级，而不是 advisor
 
 ```java
-public static final int ORDER = Advisor.DEFAULT_CHAT_MEMORY_PRECEDENCE_ORDER - 10;
-
-private ChatRequest withPrompt(ChatRequest request) {
-    if (alreadySame(request.prompt())) { return request; }    // 快路径：只有一条 SystemMessage 且内容相同
-    List<Message> out = new ArrayList<>();
-    out.add(new SystemMessage(prompts.systemPrompt(scene)));   // 新的系统提示词永远第一条
-    request.prompt().getInstructions().stream()
-            .filter(m -> !(m instanceof SystemMessage))        // 旧的系统消息全部丢掉
-            .forEach(out::add);
-    return request.mutate().prompt(new Prompt(out, request.prompt().getOptions())).build();
-}
+// ChatCompletionServiceImpl#startStream
+String systemPrompt = promptTemplateService.systemPrompt(SceneCode.CHAT);
+int fixedOverhead = estimateFixedOverhead(systemPrompt);   // 复用同一份文本，避免刷新瞬间两次取值不一致
+...
+textClient().prompt()
+        .system(systemPrompt)     // ← 提示词在这里进请求，ChatClient 会把它放在消息列表第一条
+        .advisors(...)            // 只有硬拦截与记忆装配；提示词不在这条链上
+        .user(...)
 ```
 
-**替换而非追加**是必须的：追加会留下两份互相矛盾的指令（一份来自 yaml 兜底、一份来自后台）。`getName()` 返回 `DynamicPromptAdvisor(chat)`，出问题看日志能一眼定位场景。
+**为什么不再用 advisor**：advisor 版本的全部价值只有「替换掉已存在的 SystemMessage」，那是不报错的隐式契约；而提示词本身没有跨轮次状态，唯一调用点每轮读一次更直白。代价是「漏写 `.system(...)` 不会报错、只会静默丢人设」，所以 `ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词` 断言首条是 `SystemMessage` 且 `systemPrompt(CHAT)` 只被读一次。
 
 后台改提示词 → `AiPromptTemplateService.refreshNow()` → 下一次请求自动生效，**不重启**。
 
@@ -1104,7 +1100,7 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 | 关注点 | 表 | Service | Controller | 谁在读 |
 | --- | --- | --- | --- | --- |
 | 模型目录 | `ai_model_config` | `AiModelCatalogServiceImpl` + `AiRuntimeConfigServiceImpl` | `AdminAiModelController` | `DynamicChatModel` / `AiRuntimeConfigService.snapshot()` |
-| 提示词 | `ai_prompt_template` | `AiPromptTemplateServiceImpl` | `AdminAiPromptController` | `DynamicPromptAdvisor` / 各业务 Service |
+| 提示词 | `ai_prompt_template` | `AiPromptTemplateServiceImpl` | `AdminAiPromptController` | `ChatCompletionServiceImpl`（请求级注入） / 各业务 Service |
 | 场景绑定 | `ai_scene_config` | `AiSceneBindingServiceImpl` | `AdminAiSceneController` | `SceneModelResolver` |
 
 生效路径很短，这是刻意的：
@@ -1184,7 +1180,7 @@ ChatCompletionServiceImpl ──► AiChatClientRegistry, ChatMessageMapper, Cha
 ChatMemoryReadAdvisor ──► ChatMemory, ChatHistoryAssembler, ChatContextReader
 ChatHistoryAssembler ──► TokenEstimator, ChatContextShard
 ChatContextReader ──► ChatSessionMapper, ChatToolCallMapper, UserChatMemoryService
-DynamicPromptAdvisor ──► AiPromptTemplateService, SceneCode
+ChatCompletionServiceImpl ──► AiPromptTemplateService（请求级 .system 注入）
 MedicalGuardAdvisor ──► AIProperties.GuardProperties
 TracingToolCallback ──► ToolCallback, ToolCallTraceRecorder
 ToolCallTraceRecorder ──► ChatToolCallMapper, ResultDigester, AiToolContext
@@ -1242,8 +1238,8 @@ ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessi
 | 层次 | 数量/内容 |
 | --- | --- |
 | AI 相关测试类 | 47 个（`ai/**` 下） |
-| 全量单测 | 934 用例，0 失败 0 错误 5 跳过（112 套件） |
-| 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`DynamicPromptAdvisorTest`、`AdvisorChainOrderTest`（两条 advisor 串成一条链后的消息顺序）、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包） |
+| 全量单测 | 959 用例，0 失败 0 错误 5 跳过 |
+| 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`AdvisorChainOrderTest`（已带 system 的请求喂给记忆顾问后的消息顺序）、`ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包） |
 | 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
 | 迁移 | Flyway v54（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`） |
 

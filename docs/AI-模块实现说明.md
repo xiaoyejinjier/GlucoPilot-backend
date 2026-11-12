@@ -5,7 +5,7 @@
 
 - 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、11 个工具、9 份提示词、59 个 AI 测试类；全量 983 用例 0 失败；Flyway v60
+- 现状：8 个场景、11 个工具、9 份提示词、59 个 AI 测试类；全量 985 用例 0 失败；Flyway v60
 
 ---
 
@@ -584,7 +584,7 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 | `StatisticsTools` | `get_daily_checkin` | 当日打卡与达标情况 |
 | `StatisticsTools` | `get_month_stats` | 月度统计（打卡率 + 血糖达标率） |
 | `MealRecordTools` | `query_meal_records` | 查饮食记录（≤7 天） |
-| `FoodNutritionTools` | `lookup_food_nutrition` | 查食物营养库 |
+| `FoodNutritionTools` | `lookup_food_nutrition` | 查食物营养库，**一次 1~5 个名字**、每个名字 ≤3 条候选；查不到的名字逐条说明原因 |
 | `HealthProfileTools` | `get_health_profile` | 读健康档案（慢病、目标等） |
 
 第二批（结论类，回答「这段时间怎么样」「以前说过什么」）：
@@ -1265,7 +1265,7 @@ ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessi
 | 层次 | 数量/内容 |
 | --- | --- |
 | AI 相关测试类 | 59 个（`ai/**` 下） |
-| 全量单测 | 983 用例，0 失败 0 错误 5 跳过 |
+| 全量单测 | 985 用例，0 失败 0 错误 5 跳过 |
 | 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`AdvisorChainOrderTest`（已带 system 的请求喂给记忆顾问后的消息顺序）、`ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包）、`ToolRepeatGuardTest`、`RepeatAwareToolCallbackTest`、`SecondBatchToolContractTest`（第二批 5 个工具的契约） |
 | 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
 | 迁移 | Flyway v60（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`、V55 审计菜单；V56~V60 为队友的社区/预测迁移） |

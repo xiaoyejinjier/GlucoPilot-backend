@@ -27,6 +27,7 @@ HTTPS 证书、域名与防火墙由运维配置；小程序必须使用登记�
 
 登记后端及管理端提交 SHA、镜像标签、契约版本。
 检查两类 API 的登录、鉴权、响应封装以及小程序主要业务流程。
+**注销 worker 实例数核对（必做）**：确认 `ACCOUNT_CANCELLATION_ENABLED=true` 的 api 实例数为 1，且服务器 `.env` 显式设置 `ACCOUNT_CANCELLATION_SINGLE_INSTANCE=true`。启动日志出现「未显式声明…」WARN 视为验收不通过；出现「single-instance=false，但注销 worker 没有分布式锁」ERROR 时禁止发布，必须先关闭 worker 或补分布式锁。
 验收后由运维部署 release 对应镜像；回滚时恢复上一镜像标签并重新 up -d。
 数据库迁移不自动回滚，发布前由运维确认备份和迁移兼容性。
 

@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.user.cancellation.service;
 
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CaptchaView;
+import com.threadfit.glucopilot.user.dto.CancellationDtos.PrecheckView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.QueryView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeView;
@@ -16,6 +17,9 @@ import com.threadfit.glucopilot.user.dto.CancellationDtos.SubmitView;
 public interface AccountCancellationService {
 
     QueryView getStatus(Long userId);
+
+    /** 提交前预检：封禁、注销态、恢复后 24h 锁定、资产、已有申请，与 submit 同口径。 */
+    PrecheckView precheck(Long userId);
 
     /** 取一次性滑动验证票据（绑定 userId，180 秒有效）。 */
     CaptchaView captcha(Long userId);

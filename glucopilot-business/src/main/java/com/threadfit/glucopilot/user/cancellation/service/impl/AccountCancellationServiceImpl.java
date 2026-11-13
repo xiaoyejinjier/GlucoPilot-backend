@@ -17,6 +17,8 @@ import com.threadfit.glucopilot.user.cancellation.service.CaptchaService;
 import com.threadfit.glucopilot.user.cancellation.service.WalletCheckService;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CancellationView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CaptchaView;
+import com.threadfit.glucopilot.user.dto.CancellationDtos.PrecheckCheck;
+import com.threadfit.glucopilot.user.dto.CancellationDtos.PrecheckView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.QueryView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeView;
@@ -35,6 +37,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -93,6 +96,107 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
                                 : null)
                 .cancellation(latest == null ? null : toView(latest))
                 .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PrecheckView precheck(Long userId) {
+        UserAccount account = requireAccount(userId);
+        int status = account.getAccountStatus() == null ? -1 : account.getAccountStatus();
+
+        UserAccountCancellation active = findActive(userId);
+        LocalDateTime recoveredAt = latestRecoveredAt(userId);
+        boolean recentlyRecovered = recoveredAt != null && isWithinReapplyLock(recoveredAt);
+        boolean assetPassed = walletCheckService.check(userId).passed();
+
+        String blockCode = null;
+        String blockMessage = null;
+        Long isolateUntil = null;
+        if (status == AccountStatus.CANCELLING.getCode()) {
+            blockCode = "CANCELLING";
+            blockMessage = "账号注销处理中，无法重复申请";
+            isolateUntil = active == null ? null : toMillis(active.getIsolateUntil());
+        } else if (status == AccountStatus.CANCELLED.getCode()) {
+            blockCode = "ACCOUNT_CANCELLED";
+            blockMessage = "账号已注销，无法再次申请";
+        } else if (active != null || status == AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
+            // 幂等优先于封禁：已提交的申请先返回现状，不因随后被封禁而报错
+            blockCode = "ALREADY_APPLIED";
+            blockMessage = "已有进行中的注销申请";
+            isolateUntil = active == null ? null : toMillis(active.getIsolateUntil());
+        } else if (status == AccountStatus.DISABLED.getCode()) {
+            blockCode = "ACCOUNT_DISABLED";
+            blockMessage = "账号已被封禁，请联系客服申请解冻后再注销";
+        } else if (recentlyRecovered) {
+            blockCode = "RECENTLY_RECOVERED";
+            blockMessage = "账号恢复后 24 小时内不可再次注销，请稍后再试";
+        } else if (!assetPassed) {
+            blockCode = "ASSET_PENDING";
+            blockMessage = "存在未结清资产，请先提现或结清后再申请";
+        } else if (status != AccountStatus.NORMAL.getCode()) {
+            blockCode = "ACCOUNT_UNUSABLE";
+            blockMessage = "当前账号状态不可注销";
+        }
+
+        boolean noActiveApplication = active == null
+                && status != AccountStatus.CANCELLING.getCode()
+                && status != AccountStatus.CANCELLED_RECOVERABLE.getCode();
+        List<PrecheckCheck> checks = new ArrayList<>(4);
+        checks.add(
+                PrecheckCheck.builder()
+                        .code("ACCOUNT_SAFE")
+                        .passed(status == AccountStatus.NORMAL.getCode())
+                        .title("账号处于正常状态")
+                        .detail(accountStatusDetail(status))
+                        .build());
+        checks.add(
+                PrecheckCheck.builder()
+                        .code("ASSET_CLEARED")
+                        .passed(assetPassed)
+                        .title("资产已结清")
+                        .detail(assetPassed ? "无未提现余额或未结清订单" : "存在未提现余额或未结清订单")
+                        .build());
+        checks.add(
+                PrecheckCheck.builder()
+                        .code("NO_ACTIVE_APPLICATION")
+                        .passed(noActiveApplication)
+                        .title("无进行中的注销申请")
+                        .detail(noActiveApplication ? "当前没有待处理的注销申请" : "已有进行中的注销申请")
+                        .build());
+        checks.add(
+                PrecheckCheck.builder()
+                        .code("RECENTLY_RECOVERED")
+                        .passed(!recentlyRecovered)
+                        .title("已过重新提交间隔")
+                        .detail(recentlyRecovered ? "距上次恢复不足 24 小时" : "距上次恢复已超过 24 小时")
+                        .build());
+
+        return PrecheckView.builder()
+                .canCancel(blockCode == null)
+                .blockCode(blockCode)
+                .blockMessage(blockMessage)
+                .isolateUntil(isolateUntil)
+                .checks(checks)
+                .build();
+    }
+
+    private static String accountStatusDetail(int status) {
+        if (status == AccountStatus.NORMAL.getCode()) {
+            return "账号状态正常，可办理注销";
+        }
+        if (status == AccountStatus.DISABLED.getCode()) {
+            return "当前账号已被封禁";
+        }
+        if (status == AccountStatus.CANCELLING.getCode()) {
+            return "账号注销处理中";
+        }
+        if (status == AccountStatus.CANCELLED.getCode()) {
+            return "账号已注销";
+        }
+        if (status == AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
+            return "账号处于注销可恢复状态";
+        }
+        return "当前账号状态不可注销";
     }
 
     @Override
@@ -167,8 +271,11 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         if (status == AccountStatus.CANCELLED.getCode()) {
             throw new BizException(ErrorCode.CONFLICT, "账号已注销，无法再次申请");
         }
-        if (status != AccountStatus.NORMAL.getCode()
-                && status != AccountStatus.DISABLED.getCode()) {
+        // 封禁账号不允许自助注销（与 precheck 口径一致），需先联系客服解冻
+        if (status == AccountStatus.DISABLED.getCode()) {
+            throw new BizException(ErrorCode.FORBIDDEN, "账号已被封禁，请联系客服申请解冻后再注销");
+        }
+        if (status != AccountStatus.NORMAL.getCode()) {
             throw new BizException(ErrorCode.FORBIDDEN, "当前账号状态不可注销");
         }
         rejectIfRecentlyRecovered(userId);
@@ -244,6 +351,14 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
     }
 
     private void rejectIfRecentlyRecovered(Long userId) {
+        LocalDateTime recoveredAt = latestRecoveredAt(userId);
+        if (recoveredAt != null && isWithinReapplyLock(recoveredAt)) {
+            throw new BizException(ErrorCode.CONFLICT, "恢复后 24 小时内不可再次注销");
+        }
+    }
+
+    /** 最近一次"已恢复"凭据的恢复时间，无则为 null（与 submit 的 24h 判定同源）。 */
+    private LocalDateTime latestRecoveredAt(Long userId) {
         List<UserAccountCancellation> list =
                 cancellationMapper.selectList(
                         new LambdaQueryWrapper<UserAccountCancellation>()
@@ -253,14 +368,12 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
                                         CancellationStatus.RECOVERED.getCode())
                                 .orderByDesc(UserAccountCancellation::getRecoveredAt)
                                 .last("LIMIT 1"));
-        if (list.isEmpty()) {
-            return;
-        }
-        LocalDateTime recoveredAt = list.get(0).getRecoveredAt();
-        if (recoveredAt != null
-                && recoveredAt.isAfter(LocalDateTime.now().minusSeconds(24 * 3600))) {
-            throw new BizException(ErrorCode.CONFLICT, "恢复后 24 小时内不可再次注销");
-        }
+        return list.isEmpty() ? null : list.get(0).getRecoveredAt();
+    }
+
+    private static boolean isWithinReapplyLock(LocalDateTime recoveredAt) {
+        return recoveredAt.isAfter(
+                LocalDateTime.now().minusSeconds(RECOVER_REAPPLY_LOCK_MS / 1000));
     }
 
     /** 验证方式必须与实际绑定一致，避免把不可用的通道当成凭证。 */

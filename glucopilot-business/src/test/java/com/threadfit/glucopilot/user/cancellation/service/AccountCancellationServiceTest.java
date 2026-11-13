@@ -293,6 +293,156 @@ class AccountCancellationServiceTest {
         verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
     }
 
+    @Test
+    void precheckAllowsNormalAccount() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.NORMAL.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+
+        var view = service.precheck(1L);
+
+        assertTrue(view.getCanCancel());
+        assertEquals(null, view.getBlockCode());
+        assertEquals(4, view.getChecks().size());
+        assertTrue(view.getChecks().stream().allMatch(check -> Boolean.TRUE.equals(check.getPassed())));
+    }
+
+    @Test
+    void precheckBlocksDisabledAccount() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.DISABLED.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("ACCOUNT_DISABLED", view.getBlockCode());
+        assertEquals(
+                Boolean.FALSE,
+                view.getChecks().stream()
+                        .filter(check -> "ACCOUNT_SAFE".equals(check.getCode()))
+                        .findFirst()
+                        .orElseThrow()
+                        .getPassed());
+    }
+
+    @Test
+    void precheckReportsActiveApplicationWithDeadline() {
+        UserAccountCancellation active = pending(7L, LocalDateTime.now().plusDays(7));
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of(active));
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("ALREADY_APPLIED", view.getBlockCode());
+        assertNotNull(view.getIsolateUntil());
+    }
+
+    @Test
+    void precheckTreatsRecoverableStatusWithoutRecordAsAlreadyApplied() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+
+        var view = service.precheck(1L);
+
+        assertEquals("ALREADY_APPLIED", view.getBlockCode());
+        assertEquals(null, view.getIsolateUntil());
+    }
+
+    @Test
+    void precheckReportsCancellingAndCancelledAccounts() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.CANCELLING.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+        assertEquals("CANCELLING", service.precheck(1L).getBlockCode());
+
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.CANCELLED.getCode()));
+        assertEquals("ACCOUNT_CANCELLED", service.precheck(1L).getBlockCode());
+    }
+
+    @Test
+    void precheckBlocksWithin24HoursAfterRecovery() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.NORMAL.getCode()));
+        UserAccountCancellation recovered = new UserAccountCancellation();
+        recovered.setId(9L);
+        recovered.setStatus(CancellationStatus.RECOVERED.getCode());
+        recovered.setRecoveredAt(LocalDateTime.now().minusHours(23));
+        // 第一次 = findActive（无）；第二次 = latestRecoveredAt（23 小时前）
+        when(cancellationMapper.selectList(any()))
+                .thenReturn(List.of())
+                .thenReturn(List.of(recovered));
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("RECENTLY_RECOVERED", view.getBlockCode());
+        assertFalse(
+                view.getChecks().stream()
+                        .filter(check -> "RECENTLY_RECOVERED".equals(check.getCode()))
+                        .findFirst()
+                        .orElseThrow()
+                        .getPassed());
+    }
+
+    @Test
+    void precheckBlocksWhenWalletCheckFails() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.NORMAL.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+        when(walletCheckService.check(1L))
+                .thenReturn(new WalletCheckService.WalletCheckResult(false, "BALANCE"));
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("ASSET_PENDING", view.getBlockCode());
+    }
+
+    @Test
+    void submitIsRejectedForDisabledAccount() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.DISABLED.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+
+        BizException error =
+                assertThrows(
+                        BizException.class,
+                        () -> service.submit(1L, submit(CancellationMode.ISOLATE_7D.getCode())));
+
+        assertEquals(ErrorCode.FORBIDDEN, error.getErrorCode());
+        assertTrue(error.getMessage().contains("封禁"));
+        verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
+        verify(authService, never()).revokeAllSessions(any());
+    }
+
+    @Test
+    void submitIsIdempotentWhenDisabledButApplicationExists() {
+        UserAccountCancellation active = pending(7L, LocalDateTime.now().plusDays(7));
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.DISABLED.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of(active));
+
+        var view = service.submit(1L, submit(CancellationMode.ISOLATE_7D.getCode()));
+
+        assertEquals(AccountStatus.DISABLED.getCode(), view.getAccountStatus());
+        verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
+    }
+
+    private static UserAccountCancellation pending(long id, LocalDateTime isolateUntil) {
+        UserAccountCancellation record = new UserAccountCancellation();
+        record.setId(id);
+        record.setUserId(1L);
+        record.setMode(CancellationMode.ISOLATE_7D.getCode());
+        record.setStatus(CancellationStatus.PENDING.getCode());
+        record.setIsolateUntil(isolateUntil);
+        return record;
+    }
+
     private static UserAccount account(long id, int status) {
         UserAccount account = new UserAccount();
         account.setId(id);

@@ -4,6 +4,7 @@ import com.threadfit.glucopilot.common.api.ApiResponse;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.user.cancellation.service.AccountCancellationService;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.CaptchaView;
+import com.threadfit.glucopilot.user.dto.CancellationDtos.PrecheckView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.QueryView;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeView;
@@ -39,6 +40,20 @@ public class AccountCancellationController {
         QueryView result = service.getStatus(userId);
         log.info(
                 "requestId={} cancellation.status userId={} out={} elapsed={}ms",
+                RequestContext.getRequestId(),
+                userId,
+                result,
+                System.currentTimeMillis() - start);
+        return ApiResponse.ok(result);
+    }
+
+    @GetMapping("/precheck")
+    public ApiResponse<PrecheckView> precheck() {
+        long start = System.currentTimeMillis();
+        Long userId = RequestContext.requireUserId();
+        PrecheckView result = service.precheck(userId);
+        log.info(
+                "requestId={} cancellation.precheck userId={} out={} elapsed={}ms",
                 RequestContext.getRequestId(),
                 userId,
                 result,

@@ -7,6 +7,8 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
@@ -132,33 +134,28 @@ class SecondBatchToolContractTest {
 
     // ---------- search_chat_history ----------
 
+    private static ChatMessage message(long id, long sessionId, int role, int seqNo, String text) {
+        ChatMessage message = new ChatMessage();
+        message.setId(id);
+        message.setSessionId(sessionId);
+        message.setMsgRole(role);
+        message.setSeqNo(seqNo);
+        message.setContentText(text);
+        message.setGmtCreate(LocalDateTime.now());
+        return message;
+    }
+
     @Test
     void 历史检索应按会话去重并只给关键词片段() {
         ChatMessageMapper messageMapper = mock(ChatMessageMapper.class);
         ChatSessionMapper sessionMapper = mock(ChatSessionMapper.class);
 
-        ChatMessage first = new ChatMessage();
-        first.setId(100L);
-        first.setSessionId(SESSION_ID);
-        first.setMsgRole(1);
-        first.setContentText("今天早餐后血糖 9.8，有点担心是不是吃多了面条");
-        first.setGmtCreate(LocalDateTime.now());
+        // 同一轮的用户问与助手答只算一处：两条都命中时只留一条
+        ChatMessage first = message(100L, SESSION_ID, 1, 3, "今天早餐后血糖 9.8，有点担心是不是吃多了面条");
+        ChatMessage second = message(101L, SESSION_ID, 2, 4, "血糖偏高可以先看看最近几天的趋势");
+        ChatMessage other = message(102L, SESSION_ID + 1, 1, 1, "血糖又是 9.8");
 
-        ChatMessage second = new ChatMessage();
-        second.setId(101L);
-        second.setSessionId(SESSION_ID);
-        second.setMsgRole(2);
-        second.setContentText("血糖偏高可以先看看最近几天的趋势");
-        second.setGmtCreate(LocalDateTime.now());
-
-        ChatMessage other = new ChatMessage();
-        other.setId(102L);
-        other.setSessionId(SESSION_ID + 1);
-        other.setMsgRole(1);
-        other.setContentText("血糖又是 9.8");
-        other.setGmtCreate(LocalDateTime.now());
-
-        when(messageMapper.searchInUserSessions(eq(USER_ID), any(), eq("血糖"), anyInt()))
+        when(messageMapper.searchInUserSessions(eq(USER_ID), any(), any(), eq("血糖"), any(), anyInt()))
                 .thenReturn(List.of(first, second, other));
 
         ChatSession session = new ChatSession();
@@ -168,15 +165,101 @@ class SecondBatchToolContractTest {
 
         String json =
                 new ChatHistoryTools(messageMapper, sessionMapper, json())
-                        .searchChatHistory("血糖", 90, 5, CONTEXT);
+                        .searchChatHistory("血糖", 90, 5, null, CONTEXT);
 
         assertThat(json)
                 .contains("\"sessionCount\":2")
                 .contains("餐后血糖偏高")
                 .contains("9.8")
+                .contains("\"sessionMatches\":1")
+                .contains("\"moreInSession\":false")
                 .contains("snippet");
         // 原文不外泄：只给片段，不给整段对话
         assertThat(json).doesNotContain("contentText");
+    }
+
+    @Test
+    void 历史检索同会话多轮时应保留两处并提示还能续查() {
+        ChatMessageMapper messageMapper = mock(ChatMessageMapper.class);
+        ChatSessionMapper sessionMapper = mock(ChatSessionMapper.class);
+
+        // 三轮讨论，每轮一问一答；每会话只回两处，所以第三轮要能通过 sessionId 续查
+        ChatMessage first = message(200L, SESSION_ID, 1, 1, "早餐后血糖 9.8 有点高");
+        ChatMessage second = message(201L, SESSION_ID, 2, 2, "血糖偏高先看趋势");
+        ChatMessage third = message(202L, SESSION_ID, 1, 3, "那血糖这样要不要加药");
+        ChatMessage fourth = message(203L, SESSION_ID, 2, 4, "血糖用药得问医生");
+        ChatMessage fifth = message(204L, SESSION_ID, 1, 5, "血糖还要注意什么");
+        ChatMessage sixth = message(205L, SESSION_ID, 2, 6, "血糖记录要按时");
+
+        when(messageMapper.searchInUserSessions(eq(USER_ID), any(), any(), eq("血糖"), any(), anyInt()))
+                .thenReturn(List.of(first, second, third, fourth, fifth, sixth));
+
+        ChatSession session = new ChatSession();
+        session.setId(SESSION_ID);
+        session.setTitle("餐后血糖偏高");
+        when(sessionMapper.selectBatchIds(any())).thenReturn(List.of(session));
+
+        String json =
+                new ChatHistoryTools(messageMapper, sessionMapper, json())
+                        .searchChatHistory("血糖", 90, 5, null, CONTEXT);
+
+        assertThat(json)
+                .contains("\"sessionCount\":1")
+                .contains("\"snippetCount\":2")
+                .contains("\"sessionMatches\":3")
+                .contains("\"moreInSession\":true")
+                .contains("sessionId=");
+        // 第三轮（第五、六条）没有回给模型，避免一段长对话占满名额
+        assertThat(json).doesNotContain("血糖还要注意什么");
+    }
+
+    @Test
+    void 历史检索带会话标识时应只查该会话() {
+        ChatMessageMapper messageMapper = mock(ChatMessageMapper.class);
+        ChatSessionMapper sessionMapper = mock(ChatSessionMapper.class);
+
+        when(messageMapper.searchInUserSessions(
+                        eq(USER_ID), eq(SESSION_ID), any(), eq("血糖"), any(), anyInt()))
+                .thenReturn(List.of(
+                        message(300L, SESSION_ID, 1, 1, "血糖 9.8"),
+                        message(301L, SESSION_ID, 2, 2, "血糖偏高"),
+                        message(302L, SESSION_ID, 1, 3, "血糖要复查吗"),
+                        message(303L, SESSION_ID, 2, 4, "血糖复查三个月一次")));
+
+        String json =
+                new ChatHistoryTools(messageMapper, sessionMapper, json())
+                        .searchChatHistory("血糖", 30, 2, SESSION_ID, CONTEXT);
+
+        assertThat(json)
+                .contains("\"sessionId\":\"19\"")
+                .contains("\"sessionCount\":1")
+                .contains("\"snippetCount\":2");
+        verify(messageMapper)
+                .searchInUserSessions(eq(USER_ID), eq(SESSION_ID), any(), eq("血糖"), any(), anyInt());
+    }
+
+    @Test
+    void 历史检索首屏全在一个会话时应翻页补齐会话数() {
+        ChatMessageMapper messageMapper = mock(ChatMessageMapper.class);
+        ChatSessionMapper sessionMapper = mock(ChatSessionMapper.class);
+
+        List<ChatMessage> firstPage = new ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            firstPage.add(message(400L + i, SESSION_ID, i % 2 == 0 ? 1 : 2, i + 1, "血糖第 " + i + " 条"));
+        }
+        // 首屏 12 条全来自同一个会话 → 会话数不够，应按 id 游标往前再翻一页
+        when(messageMapper.searchInUserSessions(eq(USER_ID), any(), any(), eq("血糖"), any(), anyInt()))
+                .thenReturn(firstPage, List.of(
+                        message(500L, SESSION_ID + 1, 1, 1, "另一个会话里的血糖记录"),
+                        message(501L, SESSION_ID + 2, 1, 1, "第三个会话里的血糖记录")));
+
+        String json =
+                new ChatHistoryTools(messageMapper, sessionMapper, json())
+                        .searchChatHistory("血糖", 90, 3, null, CONTEXT);
+
+        assertThat(json).contains("\"sessionCount\":3");
+        verify(messageMapper, times(2))
+                .searchInUserSessions(eq(USER_ID), any(), any(), eq("血糖"), any(), anyInt());
     }
 
     @Test
@@ -184,7 +267,7 @@ class SecondBatchToolContractTest {
         String json =
                 new ChatHistoryTools(
                                 mock(ChatMessageMapper.class), mock(ChatSessionMapper.class), json())
-                        .searchChatHistory("血", 90, 5, CONTEXT);
+                        .searchChatHistory("血", 90, 5, null, CONTEXT);
 
         assertThat(json).contains("error").contains("2");
     }

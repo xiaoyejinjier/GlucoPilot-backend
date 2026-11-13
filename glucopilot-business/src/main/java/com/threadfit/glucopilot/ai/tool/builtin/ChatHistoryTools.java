@@ -42,6 +42,16 @@ import java.util.Set;
  *   <li><b>强制关键词、强制时间范围</b>：不给关键词就等于"把整段历史塞给模型"；
  *       默认 90 天是为了让"上次"落在合理区间里。
  * </ol>
+ *
+ * <p><b>去重粒度是「一问一答」而不是「会话」</b>：早先版本每个会话只留最新一条命中，
+ * 结果是「上次说二甲双胍时我还问了什么」这类**天然集中在一个会话里**的追问被裁成一句，
+ * 而 {@code hint} 里"去那个会话看"却没有可执行路径。现在改成：同一轮的用户问 + 助手答只留一条
+ * （避免同一句话被算两次），不同轮各自保留，每个会话最多 {@value #MAX_ROUNDS_PER_SESSION} 处；
+ * 需要更多时把返回里的 {@code sessionId} 传回来续查。
+ *
+ * <p><b>取数是游标翻页而不是固定倍数</b>：关键词可能密集出现在少数几个会话里，
+ * 固定 {@code limit * 4} 的窗口会"只取回一个会话的命中、凑不够要返回的会话数"。
+ * 现在取不满就按 {@code id} 往前翻，直到够 {@value #MAX_PAGES} 页或触顶 {@value #MAX_FETCH} 条。
  */
 @Slf4j
 @Component
@@ -66,8 +76,17 @@ public class ChatHistoryTools {
     /** 片段前后各留多少字。 */
     private static final int SNIPPET_PAD = 24;
 
-    /** 一次多取几条再按会话去重：同一会话连发多条命中时，不能让它们挤掉别的会话。 */
+    /** 首屏取回 = limit × 这个倍数；取不满再翻页。 */
     private static final int FETCH_FACTOR = 4;
+
+    /** 单次检索最多取回多少条原始命中（翻页的总兜底）。 */
+    private static final int MAX_FETCH = 200;
+
+    /** 最多翻几页：极端数据（同一会话刷屏）下不让一次工具调用无限放大查询。 */
+    private static final int MAX_PAGES = 4;
+
+    /** 跨会话模式下，每个会话最多给几处命中（不同轮）。 */
+    private static final int MAX_ROUNDS_PER_SESSION = 2;
 
     private final ChatMessageMapper chatMessageMapper;
 
@@ -79,13 +98,20 @@ public class ChatHistoryTools {
             name = "search_chat_history",
             description =
                     "在当前用户的历史对话里按关键词检索，返回命中的会话标题、时间与关键词前后的一小段原文。"
+                            + "同一轮问答只算一条，每个会话最多给 2 处命中，所以 limit 指的是「几个会话」。"
                             + "用户提到「我上次说」「我之前问过」「你以前建议过」「还记得我说的…吗」这类窗口外的内容时使用。"
                             + "keyword 用用户话里最有辨识度的 2~20 个字（如「失眠」「二甲双胍」「早餐」），不要传整句话；"
-                            + "days 默认 90，用户说「很久以前」可以给 365。")
+                            + "days 默认 90，用户说「很久以前」可以给 365。"
+                            + "如果返回里提示某个会话还有更多命中，把那个 sessionId 再传进来，就只在该会话里继续检索。")
     public String searchChatHistory(
             @ToolParam(description = "要检索的关键词，2~20 个字，取用户话里最有辨识度的名词或短语") String keyword,
             @ToolParam(required = false, description = "回溯多少天（含今天），默认 90，最长 365") Integer days,
-            @ToolParam(required = false, description = "最多返回几个会话，默认 5，最多 10") Integer limit,
+            @ToolParam(required = false, description = "最多返回几个会话，默认 5，最多 10")
+            Integer limit,
+            @ToolParam(
+                            required = false,
+                            description = "只查这一个会话内的命中（用上一轮返回里的 sessionId）；此时 limit 表示最多返回几处")
+                    Long sessionId,
             ToolContext toolContext) {
 
         Long userId = AiToolContext.requireUserId(toolContext);
@@ -113,31 +139,63 @@ public class ChatHistoryTools {
 
         List<ChatMessage> rows;
         try {
-            rows = chatMessageMapper.searchInUserSessions(userId, from, word, size * FETCH_FACTOR);
+            rows = sessionId == null
+                    ? fetchAcrossSessions(userId, from, word, size)
+                    : fetchOneSession(userId, sessionId, from, word, size);
         } catch (RuntimeException e) {
-            log.error("工具 search_chat_history 查询失败 userId={} keyword={}", userId, word, e);
+            log.error("工具 search_chat_history 查询失败 userId={} keyword={} sessionId={}",
+                    userId, word, sessionId, e);
             return error("检索历史对话时出错，请稍后重试");
         }
 
-        // 按会话去重：同一会话的多条命中留最新一条，把名额让给别的会话
-        Map<Long, ChatMessage> bySession = new LinkedHashMap<>();
-        Set<Long> sessionIds = new LinkedHashSet<>();
+        // 会话内模式：limit 就是片段数；跨会话模式：每个会话 ≤2 处，总量随 limit 走
+        int sessionCap = sessionId != null ? size : MAX_ROUNDS_PER_SESSION;
+        int snippetCap = sessionId != null ? size : Math.min(size * MAX_ROUNDS_PER_SESSION, MAX_FETCH);
+
+        Map<Long, Group> groups = new LinkedHashMap<>();
         for (ChatMessage row : rows) {
             if (row.getSessionId() == null) {
                 continue;
             }
-            if (bySession.putIfAbsent(row.getSessionId(), row) == null) {
-                sessionIds.add(row.getSessionId());
+            Group group = groups.computeIfAbsent(row.getSessionId(), key -> new Group());
+            // 同一轮问答只保留一条（用户问 + 助手答的内容高度重合，算两次纯属浪费名额）
+            if (!group.rounds.add(roundKey(row))) {
+                continue;
             }
-            if (bySession.size() >= size) {
+            if (group.picked.size() < sessionCap) {
+                group.picked.add(row);
+            }
+        }
+
+        List<ChatMessage> flat = new ArrayList<>(Math.min(groups.size() * sessionCap, snippetCap));
+        for (Group group : groups.values()) {
+            for (ChatMessage row : group.picked) {
+                if (flat.size() >= snippetCap) {
+                    break;
+                }
+                flat.add(row);
+            }
+            if (flat.size() >= snippetCap) {
                 break;
             }
         }
 
+        Set<Long> sessionIds = new LinkedHashSet<>();
+        for (ChatMessage row : flat) {
+            sessionIds.add(row.getSessionId());
+        }
         Map<Long, String> titles = titles(sessionIds);
 
-        List<Map<String, Object>> items = new ArrayList<>(bySession.size());
-        for (ChatMessage row : bySession.values()) {
+        List<Map<String, Object>> items = new ArrayList<>(flat.size());
+        Set<Long> returnedSessions = new LinkedHashSet<>();
+        Long firstWithMore = null;
+        for (ChatMessage row : flat) {
+            Group group = groups.get(row.getSessionId());
+            int rounds = group == null ? 1 : group.rounds.size();
+            boolean moreInSession = group != null && rounds > group.picked.size();
+            if (moreInSession && firstWithMore == null && sessionId == null) {
+                firstWithMore = row.getSessionId();
+            }
             String snippet = snippet(row, word);
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("sessionId", String.valueOf(row.getSessionId()));
@@ -146,22 +204,113 @@ public class ChatHistoryTools {
             item.put("roleName", roleName(row.getMsgRole()));
             item.put("at", row.getGmtCreate() == null ? null : row.getGmtCreate().toString());
             item.put("snippet", snippet == null ? "" : snippet);
+            item.put("sessionMatches", rounds);
+            item.put("moreInSession", moreInSession);
             items.add(item);
+            returnedSessions.add(row.getSessionId());
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("keyword", word);
         result.put("from", fromDate.toString());
         result.put("to", today.toString());
-        result.put("sessionCount", items.size());
+        if (sessionId != null) {
+            result.put("sessionId", String.valueOf(sessionId));
+        }
+        result.put("sessionCount", returnedSessions.size());
+        result.put("snippetCount", items.size());
+        result.put("scanned", rows.size());
         result.put("items", items);
-        result.put("hint", items.isEmpty()
-                ? "最近 " + span + " 天没有检索到相关内容。可以换一个更口语的关键词再试一次，仍没有就如实告诉用户「没找到」，不要编造他以前说过的话。"
-                : "这里只有片段。引用时要说清是哪次对话（时间/标题），不要把它当成用户此刻的原话；需要完整上下文请看那个会话。");
-        log.info(
-                "工具 search_chat_history 执行 userId={} keyword={} 命中会话 {} 个",
-                userId, word, items.size());
+        result.put("hint", hint(sessionId, items, firstWithMore, span, rows.size()));
+        log.info("工具 search_chat_history 执行 userId={} keyword={} sessionId={} 扫描 {} 条、返回 {} 个会话 / {} 段",
+                userId, word, sessionId, rows.size(), returnedSessions.size(), items.size());
         return jsonUtils.toJson(result);
+    }
+
+    /**
+     * 跨会话取数：先取 {@code size * 4} 条，凑不够 {@code size} 个会话就按 id 往前翻。
+     *
+     * <p>固定倍数在「关键词密集出现在少数会话」时会失效（20 条全来自 1 个会话），
+     * 翻页才是真正的兜底；{@link #MAX_PAGES} 与 {@link #MAX_FETCH} 保证放大有界。
+     */
+    private List<ChatMessage> fetchAcrossSessions(Long userId, LocalDateTime from, String word, int size) {
+        List<ChatMessage> rows = new ArrayList<>();
+        Long beforeId = null;
+        int fetch = Math.min(size * FETCH_FACTOR, MAX_FETCH);
+        for (int page = 0; page < MAX_PAGES; page++) {
+            List<ChatMessage> batch = chatMessageMapper.searchInUserSessions(
+                    userId, null, from, word, beforeId, fetch);
+            if (batch == null || batch.isEmpty()) {
+                break;
+            }
+            rows.addAll(batch);
+            boolean windowFull = batch.size() >= fetch;
+            boolean enoughSessions = distinctSessions(rows) >= size;
+            if (!windowFull || enoughSessions || rows.size() >= MAX_FETCH) {
+                break;
+            }
+            ChatMessage last = batch.get(batch.size() - 1);
+            beforeId = last.getId();
+            fetch = Math.min(Math.max(fetch, size) * 2, MAX_FETCH - rows.size());
+            if (fetch <= 0) {
+                break;
+            }
+        }
+        return rows;
+    }
+
+    /** 会话内取数：一次取回即可（limit ≤ 10，取回窗口足够覆盖）。 */
+    private List<ChatMessage> fetchOneSession(
+            Long userId, Long sessionId, LocalDateTime from, String word, int size) {
+        int fetch = Math.min(Math.max(size * FETCH_FACTOR, size), MAX_FETCH);
+        List<ChatMessage> rows =
+                chatMessageMapper.searchInUserSessions(userId, sessionId, from, word, null, fetch);
+        return rows == null ? List.of() : rows;
+    }
+
+    private static int distinctSessions(List<ChatMessage> rows) {
+        Set<Long> ids = new LinkedHashSet<>();
+        for (ChatMessage row : rows) {
+            if (row.getSessionId() != null) {
+                ids.add(row.getSessionId());
+            }
+        }
+        return ids.size();
+    }
+
+    /**
+     * 一问答为一组：用户与助手成对写入，所以 {@code seq_no} 相邻两条同属一轮
+     * （{@code (seq + 1) / 2} 与 {@code chat_context} 的轮次口径一致）。
+     * 没有 seq_no 时退化成按消息 id 分组——至少不会把两条不同的命中误判成同一轮。
+     */
+    private static String roundKey(ChatMessage row) {
+        Integer seq = row.getSeqNo();
+        if (seq != null && seq > 0) {
+            return "r" + ((seq + 1) / 2);
+        }
+        return "m" + row.getId();
+    }
+
+    private String hint(Long sessionId, List<Map<String, Object>> items, Long firstWithMore,
+                        int span, int scanned) {
+        if (items.isEmpty()) {
+            if (sessionId != null) {
+                return "这个会话里最近 " + span + " 天没有检索到「该关键词」。可以换一个更口语的词再试，"
+                        + "或去掉 sessionId 在其他会话里找一次；仍没有就如实告诉用户「没找到」。";
+            }
+            return "最近 " + span + " 天没有检索到相关内容。可以换一个更口语的关键词再试一次，仍没有就如实告诉用户「没找到」，不要编造他以前说过的话。";
+        }
+        StringBuilder text = new StringBuilder();
+        text.append("这里只有片段：引用时要说清是哪次对话（时间/标题），不要把它当成用户此刻的原话。");
+        if (firstWithMore != null) {
+            text.append("会话 ").append(firstWithMore)
+                    .append(" 里还有更多命中，需要的话带上 sessionId=").append(firstWithMore)
+                    .append(" 再查一次。");
+        }
+        if (scanned >= MAX_FETCH) {
+            text.append("命中很多，把 days 收窄会更准。");
+        }
+        return text.toString();
     }
 
     private Map<Long, String> titles(Set<Long> sessionIds) {
@@ -218,5 +367,13 @@ public class ChatHistoryTools {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("error", message);
         return jsonUtils.toJson(map);
+    }
+
+    /** 一个会话的命中：{@code rounds} 是命中的轮次数，{@code picked} 是实际回给模型的那几处。 */
+    private static final class Group {
+
+        private final Set<String> rounds = new LinkedHashSet<>();
+
+        private final List<ChatMessage> picked = new ArrayList<>();
     }
 }

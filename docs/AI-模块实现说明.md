@@ -5,7 +5,7 @@
 
 - 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、11 个工具、9 份提示词、59 个 AI 测试类；全量 985 用例 0 失败；Flyway v60
+- 现状：8 个场景、11 个工具、9 份提示词、59 个 AI 测试类；全量 988 用例 0 失败；Flyway v60
 
 ---
 
@@ -592,12 +592,16 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 | 类 | 工具名 | 用途 |
 | --- | --- | --- |
 | `GlucoseStatsTools` | `query_glucose_stats` | 只给聚合：达标率/偏高偏低计数/均值/极值/变异系数/按时段与周的走势（≤92 天，**不返回明细**） |
-| `ChatHistoryTools` | `search_chat_history` | 在本人历史会话里按关键词找片段（≤365 天、≤10 条、按会话去重） |
+| `ChatHistoryTools` | `search_chat_history` | 在本人历史会话里按关键词找片段（≤365 天、按会话给结果、按「一问一答」去重、每会话 ≤2 处、可带 `sessionId` 续查） |
 | `SessionStateTools` | `get_session_state` | 当前会话的状态：摘要、已调用过的工具及结论摘要 |
 | `ReminderTools` | `list_reminders` | 今日提醒（服药/测糖等）与待回复的回访 |
 | `ArticleSearchTools` | `search_community_articles` | 检索社区文章（与 feed 同一套可见性过滤，只给摘要与作者） |
 
 **明细与聚合分开**是刻意的：`query_glucose_range` 用来回答「3 号早上多少」，`query_glucose_stats` 用来回答「这个月控制得怎么样」。前者逐条返回（有上限），后者只给聚合且**不返回 items**——两者都能回答问题时优先用聚合，省上下文。
+
+**历史检索的去重粒度是「一问一答」，不是「会话」**：同会话里用户问与助手答属于同一轮（`seq_no` 相邻，按 `(seq_no + 1) / 2` 归组），两条都命中只留一条；不同轮各自保留，每会话最多 2 处，总量 = `2 × limit`（`limit ≤ 10` → 最多 20 段）。早先的「每会话只留最新一条」会把「上次说二甲双胍时我还问了什么」这类**天然集中在一个会话里**的追问裁成一句，而 `hint` 说的「去那个会话看」并没有可执行路径；现在返回体每项带 `sessionMatches`（该会话命中几轮）与 `moreInSession`（是否还有没给出的），把 `sessionId` 传回来即可续查（此时 `limit` 表示最多几处）。
+
+**取数是游标翻页，不是固定倍数**：首屏取 `4 × limit`，若凑不够 `limit` 个会话就按 `id` 往前翻（最多 4 页、总量兜底 200 条）。关键词密集出现在少数会话时，固定倍数只会「取回一堆同会话的命中却凑不够会话数」。
 
 ### 8.4 重复调用治理：`ToolRepeatGuard` + `RepeatAwareToolCallback`
 
@@ -1265,7 +1269,7 @@ ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessi
 | 层次 | 数量/内容 |
 | --- | --- |
 | AI 相关测试类 | 59 个（`ai/**` 下） |
-| 全量单测 | 985 用例，0 失败 0 错误 5 跳过 |
+| 全量单测 | 988 用例，0 失败 0 错误 5 跳过 |
 | 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`AdvisorChainOrderTest`（已带 system 的请求喂给记忆顾问后的消息顺序）、`ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包）、`ToolRepeatGuardTest`、`RepeatAwareToolCallbackTest`、`SecondBatchToolContractTest`（第二批 5 个工具的契约） |
 | 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
 | 迁移 | Flyway v60（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`、V55 审计菜单；V56~V60 为队友的社区/预测迁移） |

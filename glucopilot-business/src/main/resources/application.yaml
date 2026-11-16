@@ -160,6 +160,12 @@ ai:
     # StructuredOutputValidationAdvisor 校验/重试，避免模型在 JSON 外夹解释文字。
     # 代码默认 false（单测里 mock 的客户端只桩了 content()），部署时在此打开。
     structured-output: true
+    # 记忆抽取的窗口化：每个窗口看多少条、一次最多回溯几个窗口（回看上限 = 40 × 2 = 80 条）。
+    # 不一次性把整段会话丢给模型，是因为输入有字符上限（memory-extract-input-max-chars），
+    # 长会话会被截到只剩最近几轮；窗口化让靠前的对话也有机会进模型视野。
+    # 顺序为老窗先、新窗后：两个窗口提到同一个键时，后写的新说法才留得下来。
+    memory-extract-window-messages: 40
+    memory-extract-max-windows: 2
 
   # 医疗安全硬拦截：命中敏感词的请求不会发给模型，直接返回固定话术。
   # 提示词里的合规约束是软约束（模型可能不遵守），这里是硬约束。

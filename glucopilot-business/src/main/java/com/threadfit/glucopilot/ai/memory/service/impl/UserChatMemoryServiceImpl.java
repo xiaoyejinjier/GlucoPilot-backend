@@ -362,27 +362,55 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             return 0;
         }
         try {
-            List<ChatMessage> messages = chatMessageMapper.selectRecentBySession(sessionId,
-                    aiProperties.getMemory().getMemoryExtractMaxMessages());
-            if (messages == null || messages.isEmpty()) {
+            int windowSize = Math.max(aiProperties.getMemory().getMemoryExtractWindowMessages(), 1);
+            int maxWindows = Math.max(aiProperties.getMemory().getMemoryExtractMaxWindows(), 1);
+            List<ChatMessage> recent = chatMessageMapper.selectRecentBySession(sessionId, windowSize * maxWindows);
+            if (recent == null || recent.isEmpty()) {
                 return 0;
             }
-            String input = buildInput(userId, messages);
-            List<MemoryCandidate> candidates = extractCandidates(input);
             int written = 0;
-            for (MemoryCandidate candidate : candidates) {
-                if (upsert(userId, candidate.key(), candidate.text(), candidate.confidence(), sessionId)) {
-                    written++;
+            int windows = 0;
+            // 老窗先、新窗后：两个窗口提到同一个键时，后写的新说法才留得下来
+            for (List<ChatMessage> window : splitOldestFirst(recent, windowSize)) {
+                windows++;
+                List<MemoryCandidate> candidates = extractCandidates(buildInput(userId, window));
+                for (MemoryCandidate candidate : candidates) {
+                    if (upsert(userId, candidate.key(), candidate.text(), candidate.confidence(), sessionId)) {
+                        written++;
+                    }
                 }
             }
-            log.info("长期记忆抽取完成 userId={} sessionId={} 原因={} 候选={} 写入={}",
-                    userId, sessionId, reason, candidates.size(), written);
+            log.info("长期记忆抽取完成 userId={} sessionId={} 原因={} 窗口={} 覆盖消息={} 写入={}",
+                    userId, sessionId, reason, windows, recent.size(), written);
             return written;
         } catch (RuntimeException e) {
             // 记忆是增强项：抽取失败绝不能影响已经成功的回复
             log.warn("长期记忆抽取失败（忽略，下次再试）userId={} sessionId={}", userId, sessionId, e);
             return 0;
         }
+    }
+
+    /**
+     * 把「最近 N 条，新→旧」切成若干窗口，按<b>旧→新</b>返回。
+     *
+     * <p>入参是 {@code selectRecentBySession} 的结果（{@code ORDER BY seq_no DESC}），
+     * 所以从尾部往前切片，切出来的第一段就是最老的一段；调用方按返回顺序依次送模型，
+     * 后处理的窗口天然覆盖先处理的结论。
+     *
+     * @param recentDesc 新→旧的消息列表
+     * @param windowSize 每个窗口的条数（≥1，调用方已兜底）
+     */
+    static List<List<ChatMessage>> splitOldestFirst(List<ChatMessage> recentDesc, int windowSize) {
+        List<List<ChatMessage>> windows = new ArrayList<>();
+        for (int end = recentDesc.size(); end > 0; end -= windowSize) {
+            int start = Math.max(0, end - windowSize);
+            // subList 仍是「新→旧」，翻正后才是模型看到的时间顺序
+            List<ChatMessage> slice = new ArrayList<>(recentDesc.subList(start, end));
+            // 从尾部往前切：第一刀切出来的就是最老的一段，所以循环顺序天然是「老→新」
+            java.util.Collections.reverse(slice);
+            windows.add(slice);
+        }
+        return windows;
     }
 
     /** 抽取输入：已知记忆（供模型判断"要不要更正"）+ 对话原文（时间正序，超长只取最近部分）。 */

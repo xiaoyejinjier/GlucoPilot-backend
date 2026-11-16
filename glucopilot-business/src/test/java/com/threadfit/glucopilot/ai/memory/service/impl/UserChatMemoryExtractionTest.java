@@ -139,4 +139,48 @@ class UserChatMemoryExtractionTest {
         verify(memoryMapper).insert(captor.capture());
         assertThat(captor.getValue().getMemoryText()).isEqualTo("餐后控制在 8 以下");
     }
+
+    @Test
+    @DisplayName("拆窗：新→旧的列表要切成若干「时间正序」的窗口，且老窗排在前面")
+    void splitOldestFirstKeepsChronologicalWindows() {
+        List<ChatMessage> recentDesc = List.of(message(105L, "第5句"), message(104L, "第4句"),
+                message(103L, "第3句"), message(102L, "第2句"), message(101L, "第1句"));
+
+        List<List<ChatMessage>> windows = UserChatMemoryServiceImpl.splitOldestFirst(recentDesc, 2);
+
+        assertThat(windows).hasSize(3);
+        assertThat(windows.get(0)).extracting(ChatMessage::getId).containsExactly(101L, 102L);
+        assertThat(windows.get(1)).extracting(ChatMessage::getId).containsExactly(103L, 104L);
+        assertThat(windows.get(2)).extracting(ChatMessage::getId).containsExactly(105L);
+    }
+
+    @Test
+    @DisplayName("长会话按窗口抽取：老窗先送模型，新窗后送（后写的新说法才留得下来）")
+    void longSessionIsExtractedWindowByWindowOldestFirst() {
+        aiProperties.getMemory().setStructuredOutput(false);
+        aiProperties.getMemory().setMemoryExtractWindowMessages(1);
+        aiProperties.getMemory().setMemoryExtractMaxWindows(2);
+        // 入参是新→旧：id 大的是最近说的
+        when(chatMessageMapper.selectRecentBySession(any(), any())).thenReturn(
+                List.of(message(100L, "我最近不能吃辣了"), message(99L, "医生让我少油少盐")));
+        when(callSpec.content()).thenReturn("{\"memories\":[]}");
+
+        service.runExtract(7L, 8L, "session-ended");
+
+        // 回看上限 = 1 条/窗 × 2 窗
+        verify(chatMessageMapper).selectRecentBySession(8L, 2);
+        ArgumentCaptor<String> inputs = ArgumentCaptor.forClass(String.class);
+        verify(requestSpec, org.mockito.Mockito.times(2)).user(inputs.capture());
+        assertThat(inputs.getAllValues().get(0)).contains("少油少盐").doesNotContain("不能吃辣");
+        assertThat(inputs.getAllValues().get(1)).contains("不能吃辣").doesNotContain("少油少盐");
+    }
+
+    private static ChatMessage message(Long id, String text) {
+        ChatMessage message = new ChatMessage();
+        message.setId(id);
+        message.setMsgRole(1);
+        message.setContentText(text);
+        message.setGmtCreate(LocalDateTime.now());
+        return message;
+    }
 }

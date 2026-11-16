@@ -212,8 +212,22 @@ public class AIProperties {
         /** 注入上下文的最多记忆条数（按置信度降序取）；0 = 不注入。 */
         private int injectMaxItems = 8;
 
-        /** 抽取时最多回看多少条消息（长期记忆只要稳定事实，不需要整段历史）。 */
-        private int memoryExtractMaxMessages = 60;
+        /**
+         * 每个抽取窗口看多少条消息。
+         * <p>
+         * 整段会话不是一次性丢给模型：长会话（语音转写尤其明显）会先撞下面
+         * {@code memoryExtractInputMaxChars} 的字符上限，排在前面几轮就被静默丢掉。
+         * 切成固定大小的窗口，保证靠前的对话也有机会进入模型视野。
+         */
+        private int memoryExtractWindowMessages = 40;
+
+        /**
+         * 一次抽取最多回溯几个窗口（回看上限 = 窗口数 × 每窗条数，默认 40 × 2 = 80 条）。
+         * <p>
+         * 有界而不是全量：几十轮的闲聊里，真正有长期价值的往往集中在最近两窗，
+         * 全量重扫既贵又容易把早期已经更正的旧说法再抽出来。
+         */
+        private int memoryExtractMaxWindows = 2;
 
         /** 抽取输入的字符上限（超长只取最近的部分）。 */
         private int memoryExtractInputMaxChars = 3000;

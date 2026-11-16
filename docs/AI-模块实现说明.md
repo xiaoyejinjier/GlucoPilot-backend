@@ -5,7 +5,7 @@
 
 - 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、12 个工具（其中 1 个写工具）、9 份提示词、60 个 AI 测试类；全量 992 用例 0 失败；Flyway v60
+- 现状：8 个场景、12 个工具（其中 1 个写工具）、9 份提示词、60 个 AI 测试类；全量 1018 用例 0 失败；Flyway v60
 
 ---
 
@@ -883,7 +883,7 @@ P1 之前，后台保存模型配置只做**格式**校验：编码非空、能�
 
 ## 10. 记忆与摘要
 
-### 10.1 `UserChatMemoryServiceImpl`（427 行）：抽取长期记忆
+### 10.1 `UserChatMemoryServiceImpl`（576 行）：抽取长期记忆
 
 ```java
 public void extractAsync(Long userId, Long sessionId, String reason) {
@@ -899,11 +899,18 @@ public void extractAsync(Long userId, Long sessionId, String reason) {
 `runExtract` 的输入构造是重点：
 
 ```java
-List<ChatMessage> recent = chatMessageMapper.selectRecentBySession(sid, ai.memory.memory-extract-max-messages);
-String input = buildInput(recent);
-// ① 先把「已知的长期记忆」放前面，让模型可以更正而不是重复新增
-// ② 再按 memory-extract-input-max-chars 从最新往回装对话原文
+int windowSize = ai.memory.memory-extract-window-messages;   // 默认 40
+int maxWindows = ai.memory.memory-extract-max-windows;       // 默认 2
+List<ChatMessage> recent = chatMessageMapper.selectRecentBySession(sid, windowSize * maxWindows);
+for (List<ChatMessage> window : splitOldestFirst(recent, windowSize)) {   // 老窗先、新窗后
+    extractCandidates(buildInput(userId, window)).forEach(...);            // 写库都走同一个 write(...)
+}
+// buildInput 内部：① 先把「已知的长期记忆」放前面，让模型可以更正而不是重复新增
+//                 ② 再按 memory-extract-input-max-chars 从最新往回装对话原文
 ```
+
+**为什么窗口化**：`buildInput` 有字符上限（3000 字），长会话（语音转写尤其明显）会被截到只剩最近几轮，早期「我最近不能吃辣了」这类事实静默丢失。切成固定大小的窗口后，每一窗都有机会进模型视野；窗口数 × 窗宽就是回看上限（默认 80 条），仍然有界。
+**为什么老窗先、新窗后**：两个窗口提到同一个键时，后写的新说法留得下来——否则旧窗的结论会覆盖掉用户刚刚的更正。
 
 调用与解析：
 
@@ -1287,7 +1294,7 @@ ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessi
 | 层次 | 数量/内容 |
 | --- | --- |
 | AI 相关测试类 | 59 个（`ai/**` 下） |
-| 全量单测 | 988 用例，0 失败 0 错误 5 跳过 |
+| 全量单测 | 1018 用例，0 失败 0 错误 5 跳过 |
 | 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`AdvisorChainOrderTest`（已带 system 的请求喂给记忆顾问后的消息顺序）、`ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包）、`ToolRepeatGuardTest`、`RepeatAwareToolCallbackTest`、`SecondBatchToolContractTest`（第二批 5 个工具的契约） |
 | 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
 | 迁移 | Flyway v60（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`、V55 审计菜单；V56~V60 为队友的社区/预测迁移） |

@@ -152,10 +152,10 @@ public class ToolRepeatGuard {
     /** 单个会话的 LRU 缓存。 */
     private static final class SessionCache {
 
-        private final LinkedHashMap<String, Entry> entries =
+        private final LinkedHashMap<String, ToolRepeatGuard.Entry> entries =
                 new LinkedHashMap<>(16, 0.75f, true) {
                     @Override
-                    protected boolean removeEldestEntry(Map.Entry<String, Entry> eldest) {
+                    protected boolean removeEldestEntry(Map.Entry<String, ToolRepeatGuard.Entry> eldest) {
                         return size() > MAX_ENTRIES_PER_SESSION;
                     }
                 };

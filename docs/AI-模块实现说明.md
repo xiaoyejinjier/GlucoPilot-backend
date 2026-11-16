@@ -5,7 +5,7 @@
 
 - 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、11 个工具、9 份提示词、59 个 AI 测试类；全量 988 用例 0 失败；Flyway v60
+- 现状：8 个场景、12 个工具（其中 1 个写工具）、9 份提示词、60 个 AI 测试类；全量 992 用例 0 失败；Flyway v60
 
 ---
 
@@ -574,7 +574,7 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 
 `CALL_COUNTER` 放在 `toolContext` 里而不是类字段，是刻意的：并发两轮各数各的，天然隔离。
 
-### 8.3 现有 11 个工具（10 个类）
+### 8.3 现有 12 个工具（11 个类）
 
 第一批（明细类，回答「具体是哪条」）：
 
@@ -596,6 +596,14 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 | `SessionStateTools` | `get_session_state` | 当前会话的状态：摘要、已调用过的工具及结论摘要 |
 | `ReminderTools` | `list_reminders` | 今日提醒（服药/测糖等）与待回复的回访 |
 | `ArticleSearchTools` | `search_community_articles` | 检索社区文章（与 feed 同一套可见性过滤，只给摘要与作者） |
+
+第三批（写入类，唯一一个写工具）：
+
+| 类 | 工具名 | 用途 |
+| --- | --- | --- |
+| `MemoryTools` | `save_long_term_memory` | 把用户当轮陈述的长期事实写进跨会话记忆（键限五类、≤200 字、置信度服务端固定 85） |
+
+**为什么敢开一个写工具**：它写的是「系统对用户的记忆」，可撤销（记忆页可删）、有界（5 键 × 每键 1 条 × 200 字）、不触碰任何业务单据；而"这句话是不是长期事实"本质是语义判断——旧的关键词判定（「记住 / 记一下 / 帮我记」）对「我最近不能吃辣了」「医生让我少油少盐」完全失效。写血糖、写饮食这类动作**不可照抄**，必须走用户显式确认。
 
 **明细与聚合分开**是刻意的：`query_glucose_range` 用来回答「3 号早上多少」，`query_glucose_stats` 用来回答「这个月控制得怎么样」。前者逐条返回（有上限），后者只给聚合且**不返回 items**——两者都能回答问题时优先用聚合，省上下文。
 
@@ -908,6 +916,16 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 ```
 
 对外三个方法：`forInjection(userId)`（按置信度取前 N 条注入系统提示词）、`listOwnForUser`、`deleteAllForUser`（用户自助清空）。`FORBIDDEN_MARKERS` 是一层兜底：即使模型抽出了像密钥/身份证的内容，也不入库。
+
+**写入入口有三个，写库通道只有一个**：工具 `save_long_term_memory`（用户当轮亲口说的）、会话结束（`openNew` 对上一段会话复盘）、归档补齐。三者窗口与冲突策略不同，但都落到同一个 `write(...)`：
+
+| 来源 | 窗口 | 置信度 | 冲突策略 |
+| --- | --- | --- | --- |
+| `WriteSource.EXPLICIT`（工具） | 当轮一句 | 服务端固定 85 | **无条件覆盖**：用户刚说的应当盖掉历史推断 |
+| `WriteSource.BATCH`（结束/归档） | 整段会话 | 模型自评（≥60 才收） | **只升不降**：`score < 既有置信度` 时拒绝覆盖，避免老会话的迟到抽取盖掉今天的新事实 |
+
+`write(...)` 返回 `SaveOutcome(saved, reason)`，四道闸（键 ∈ 五类 / 非空且 ≤200 字 / 置信度 ≥60 / 不含剂量与诊断词）各自给出**可执行**的拒绝原因——工具回执会进上下文，模型据此换键或放弃，重试同样内容没有意义。
+
 
 ### 10.2 `ChatSummaryServiceImpl`（298 行）：滚动摘要
 

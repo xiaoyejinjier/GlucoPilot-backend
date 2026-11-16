@@ -66,6 +66,14 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     /** 单条记忆文本上限（列是 varchar(512)，但记忆本身就该短，太长说明抽错了）。 */
     static final int MAX_TEXT_CHARS = 200;
 
+    /**
+     * 显式写入（{@code save_long_term_memory} 工具路径）的固定置信度。
+     * <p>
+     * 85 而不是 100：它不是"模型多确定"，只是"用户亲口说的"这一档先验——留出余量，
+     * 以后若要做多来源加权（例如用户手改的记忆给 100），这一档才有区分度。
+     */
+    static final int EXPLICIT_CONFIDENCE = 85;
+
     /** 命中这些词的内容不许进长期记忆（诊断/用药类内容只该留在对话里）。 */
     private static final List<String> FORBIDDEN_MARKERS =
             List.of("剂量", "加量", "减量", "停药", "换药", "开药", "处方", "确诊", "诊断为", "胰岛素用量");
@@ -208,32 +216,57 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     // ------------------------------------------------------------------ 写入
 
     /**
+     * 显式写入（工具 {@code save_long_term_memory} 的落地）。
+     * <p>
+     * 置信度固定 {@link #EXPLICIT_CONFIDENCE}：这句话是用户当轮亲口说的，让模型自评"我有多确定"
+     * 只会引入噪声（它可能给出 40 分导致一条真事实被丢掉）。真正的把关是四道闸，不是模型的自评。
+     */
+    @Override
+    public SaveOutcome saveExplicit(Long userId, Long sourceSessionId, String key, String text) {
+        if (userId == null) {
+            // 正常路径不会走到：工具调用前 AiToolContext.requireUserId 已经拦过
+            return SaveOutcome.rejected("缺少用户上下文，未记录");
+        }
+        return write(userId, key, text, EXPLICIT_CONFIDENCE, sourceSessionId, WriteSource.EXPLICIT);
+    }
+
+    /**
      * 写入/覆盖一条记忆（同 key 覆盖）。
      * <p>
-     * 返回是否写入。四道闸（键、置信度、长度、危险词）在这里统一施加——
-     * 调用方（抽取路径）不需要自己重复判断，也就不可能漏掉某一道。
+     * 四道闸（键、长度、置信度、危险词）在<b>这里统一施加</b>——三条写入入口（工具、会话结束、
+     * 归档补齐）都从这里过，调用方不需要自己重复判断，也就不可能漏掉某一道。
+     * <p>
+     * 冲突策略由 {@code source} 决定：
+     * <ul>
+     *   <li>{@link WriteSource#EXPLICIT}：无条件覆盖（用户刚说的算数）；</li>
+     *   <li>{@link WriteSource#BATCH}：只有新置信度 ≥ 既有置信度时才覆盖——否则一段老会话的
+     *       迟到抽取会把用户今天刚说的事实盖回旧版本。</li>
+     * </ul>
+     * 返回的是给模型/日志看的回执，拒绝原因是可执行的具体说明，不是一个笼统的"失败"。
      */
-    boolean upsert(Long userId, String key, String text, Integer confidence, Long sourceSessionId) {
+    SaveOutcome write(Long userId, String key, String text, Integer confidence, Long sourceSessionId,
+                      WriteSource source) {
         String normalizedKey = StringUtils.hasText(key) ? key.trim() : "";
         if (!ALLOWED_KEYS.contains(normalizedKey)) {
             log.debug("丢弃不在允许清单里的记忆键：key={} userId={}", key, userId);
-            return false;
+            return SaveOutcome.rejected("键不合法，只能是 diet_taboo（忌口）/ glucose_goal（控糖目标）"
+                    + "/ health_context（健康状况）/ habit（习惯）/ preference（偏好）");
         }
         String normalizedText = text == null ? "" : text.trim().replaceAll("\\s+", " ");
         if (!StringUtils.hasText(normalizedText) || normalizedText.length() > MAX_TEXT_CHARS) {
             log.debug("丢弃长度不合适的记忆：key={} len={}", normalizedKey, normalizedText.length());
-            return false;
+            return SaveOutcome.rejected("内容为空或超过 " + MAX_TEXT_CHARS + " 字，未记录");
         }
         int score = confidence == null ? 0 : confidence;
         if (score < MIN_CONFIDENCE) {
             log.debug("丢弃置信度不足的记忆：key={} confidence={}", normalizedKey, score);
-            return false;
+            return SaveOutcome.rejected("置信度不足（" + score + " < " + MIN_CONFIDENCE + "），未记录");
         }
         for (String marker : FORBIDDEN_MARKERS) {
             if (normalizedText.contains(marker)) {
                 // 诊断/用药类内容不许进长期记忆：它会在此后每一轮里被当作"用户的事实"复述
                 log.info("丢弃含诊断/用药内容的记忆：key={} userId={}（内容不入库，仅记键名）", normalizedKey, userId);
-                return false;
+                return SaveOutcome.rejected("内容涉及诊断或用药，长期记忆不保存这类信息，未记录");
             }
         }
 
@@ -249,9 +282,20 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             row.setConfidence(Math.min(score, 100));
             row.setSourceSessionId(sourceSessionId);
             memoryMapper.insert(row);
-            log.info("新增长期记忆 userId={} key={} confidence={} 来源会话={}",
-                    userId, normalizedKey, score, sourceSessionId);
-            return true;
+            log.info("新增长期记忆 userId={} key={} confidence={} 来源会话={} 来源={}",
+                    userId, normalizedKey, score, sourceSessionId, source);
+            return SaveOutcome.ok();
+        }
+        int existingConfidence = existing.getConfidence() == null ? 0 : existing.getConfidence();
+        if (source == WriteSource.BATCH && score < existingConfidence) {
+            log.info("跳过覆盖长期记忆 userId={} key={}（批量抽取置信度 {} < 既有 {}）",
+                    userId, normalizedKey, score, existingConfidence);
+            return SaveOutcome.rejected("已有更可信的记忆（置信度 " + existingConfidence + "），本次不覆盖");
+        }
+        if (normalizedText.equals(existing.getMemoryText())) {
+            // 内容没变化就不写库：避免每次会话结束都刷新 gmt_modified，把"最近更新"变成噪声
+            log.debug("记忆内容未变化，跳过写入 userId={} key={}", userId, normalizedKey);
+            return SaveOutcome.ok();
         }
         ChatUserMemoryEntity update = new ChatUserMemoryEntity();
         update.setId(existing.getId());
@@ -259,10 +303,19 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         update.setConfidence(Math.min(score, 100));
         update.setSourceSessionId(sourceSessionId);
         memoryMapper.updateById(update);
-        log.info("覆盖长期记忆 userId={} key={} confidence={}（旧值长度 {} → 新值长度 {}）",
-                userId, normalizedKey, score,
+        log.info("覆盖长期记忆 userId={} key={} confidence={} 来源={}（旧值长度 {} → 新值长度 {}）",
+                userId, normalizedKey, score, source,
                 existing.getMemoryText() == null ? 0 : existing.getMemoryText().length(), normalizedText.length());
-        return true;
+        return SaveOutcome.ok();
+    }
+
+    /**
+     * 批量抽取用的布尔壳：保留旧签名让抽取循环不必关心回执文案。
+     * <p>
+     * 走 {@link WriteSource#BATCH}——旧会话的迟到抽取不许盖掉更新的事实。
+     */
+    boolean upsert(Long userId, String key, String text, Integer confidence, Long sourceSessionId) {
+        return write(userId, key, text, confidence, sourceSessionId, WriteSource.BATCH).saved();
     }
 
     /** 账号注销：物理删除该用户全部长期记忆。 */

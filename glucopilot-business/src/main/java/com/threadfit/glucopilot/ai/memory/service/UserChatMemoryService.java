@@ -14,12 +14,18 @@ import java.util.Set;
  * 因此实现里设了四道闸：键固定（{@link #ALLOWED_KEYS}）、置信度门限、内容体检（诊断/用药词拦截）、
  * 来源可追溯且可删。
  *
- * <h2>触发时机（刻意不做"每轮都抽"）</h2>
+ * <h2>三个写入入口（刻意不做"每轮都抽"）</h2>
  * <ul>
- *   <li><b>会话结束时</b>（用户点"新对话"、会话被删除）——长期记忆本来就不该每轮都写；</li>
- *   <li><b>用户显式要求记住时</b>（{@link #looksExplicit(String)}）——用户主动表达，最可信。</li>
+ *   <li><b>模型调用 {@code save_long_term_memory} 时</b>
+ *       （{@link #saveExplicit(Long, Long, String, String)}）——用户当轮亲口说的长期事实，
+ *       最可信，也最快生效（下一轮就能注入）；</li>
+ *   <li><b>会话结束时</b>——把整段会话复盘一遍，兜住"该记但模型没当场记"的事实；</li>
+ *   <li><b>会话被闲置归档时</b>——用户再也没回来，这段对话不补抽就永久丢失。</li>
  * </ul>
- * 每轮都抽的成本是对话的两倍，噪声也大得多。
+ * 三条入口的<b>输入窗口与冲突策略</b>不同（即时看到一轮 / 复盘看到几十轮；前者可无条件覆盖、
+ * 后者只能被不低于既有置信度的候选覆盖），但写库都走同一个 {@code upsert}：
+ * 四道闸（键、长度、置信度、危险词）是红线，不能有两份实现。
+ * 每轮都抽的成本是对话的两倍，噪声也大得多，所以不做。
  *
  * <h2>两处读取的失败语义刻意不同</h2>
  * <ul>
@@ -38,6 +44,38 @@ public interface UserChatMemoryService {
 
     /** 送入上下文的一条记忆。 */
     record MemoryItem(String key, String text, int confidence) {
+    }
+
+    /**
+     * 写入来源：决定<b>冲突时谁能覆盖谁</b>。
+     * <p>
+     * 为什么需要这个区分：`upsert` 是"同键覆盖"，谁最后写谁赢。而三条入口的可信度并不相同——
+     * 用户当轮亲口说的（"我不吃香菜了"）应当盖掉任何历史推断；反过来，一段三天前的老会话
+     * 在归档补齐时抽出的"用户吃香菜"，绝不能盖掉用户今天刚说的新版。把差异放在这个枚举上，
+     * 而不是复制两套写库代码，是为了让四道闸只有一处实现。
+     */
+    enum WriteSource {
+        /** 用户当轮亲口要求记住：无条件覆盖（即使旧值置信度更高）。 */
+        EXPLICIT,
+        /** 会话结束 / 归档补齐的批量复盘：只在置信度不低于既有值时才覆盖。 */
+        BATCH
+    }
+
+    /**
+     * 一次显式写入的结果，同时也是给模型的回执。
+     * <p>
+     * 拒绝时 {@code reason} 会被模型看到，所以措辞要能指导它的下一步（例如"键不在允许范围"而不是
+     * "写入失败"）——模型看到"键不合法、只能是这五类"才知道该换个键重试，看到"失败"只会重试同样的东西。
+     */
+    record SaveOutcome(boolean saved, String reason) {
+
+        public static SaveOutcome ok() {
+            return new SaveOutcome(true, "已记录");
+        }
+
+        public static SaveOutcome rejected(String reason) {
+            return new SaveOutcome(false, reason);
+        }
     }
 
     /**
@@ -66,12 +104,26 @@ public interface UserChatMemoryService {
     void purgeAccountData(Long userId);
 
     /**
+     * 用户当轮显式要求记住一条长期事实（{@code save_long_term_memory} 工具的唯一入口）。
+     * <p>
+     * 与 {@link #extractAsync} 的区别：这里只写<b>模型明确指定的一条</b>，不读会话、不调模型，
+     * 因此可以同步返回结果给模型；置信度由服务端固定（用户亲口说的就是高可信，不需要模型自评）。
+     * <p>
+     * <b>不抛异常</b>：工具调用不该因为一次写入失败而打断整轮对话，失败一律折成
+     * {@link SaveOutcome#rejected(String)} 让模型知道"没记住"。
+     *
+     * @param sourceSessionId 来源会话（可空：无会话上下文时不记来源）
+     */
+    SaveOutcome saveExplicit(Long userId, Long sourceSessionId, String key, String text);
+
+    /**
      * 异步抽取某个会话的长期记忆。
      * <p>
      * <b>不阻塞、不抛异常</b>：单飞（同一会话同时只跑一个抽取任务），失败只记日志——
      * 抽取是增强项，绝不能因为一次抽取失败影响已经成功的回复或刚建好的会话。
      *
-     * @param reason 触发原因（{@code explicit} / {@code session-ended}），只用于日志
+     * @param reason 触发原因（{@code session-ended} / {@code session-archived} /
+     *               {@code explicit}（仅无工具部署的兜底）），只用于日志
      */
     void extractAsync(Long userId, Long sessionId, String reason);
 
@@ -79,7 +131,11 @@ public interface UserChatMemoryService {
     boolean inFlight();
 
     /**
-     * 用户消息里是否含"记住…"这类显式要求（决定要不要立刻抽取一次）。
+     * 用户消息里是否含"记住…"这类显式要求。
+     * <p>
+     * <b>只作为兜底</b>：正常情况下"要不要记"由模型判断并调用 {@code save_long_term_memory}，
+     * 关键词枚举天生漏（"我最近不能吃辣了""医生让我少油"都不含"记住"），只适合在
+     * <b>没有 tool calling 的部署</b>里当降级手段，由 {@code ai.memory.keyword-trigger-fallback} 控制。
      * <p>
      * 静态方法：判据是纯文本规则，不依赖任何状态；接口静态方法不会被实现类继承，调用方请写全限定名。
      */

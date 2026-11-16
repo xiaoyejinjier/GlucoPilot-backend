@@ -18,6 +18,7 @@ import com.threadfit.glucopilot.ai.tool.builtin.GlucoseQueryTools;
 import com.threadfit.glucopilot.ai.tool.builtin.GlucoseStatsTools;
 import com.threadfit.glucopilot.ai.tool.builtin.HealthProfileTools;
 import com.threadfit.glucopilot.ai.tool.builtin.MealRecordTools;
+import com.threadfit.glucopilot.ai.tool.builtin.MemoryTools;
 import com.threadfit.glucopilot.ai.tool.builtin.ReminderTools;
 import com.threadfit.glucopilot.ai.tool.builtin.SessionStateTools;
 import com.threadfit.glucopilot.ai.tool.builtin.StatisticsTools;
@@ -195,6 +196,12 @@ class AiToolCallingWiringTest {
                         () ->
                                 new ArticleSearchTools(
                                         mock(com.threadfit.glucopilot.ai.tool.port.ArticleSearchQuery.class),
+                                        jsonUtils))
+                .withBean(
+                        MemoryTools.class,
+                        () ->
+                                new MemoryTools(
+                                        mock(com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService.class),
                                         jsonUtils))
                 .withUserConfiguration(AiToolConfig.class);
     }

@@ -166,6 +166,11 @@ ai:
     # 顺序为老窗先、新窗后：两个窗口提到同一个键时，后写的新说法才留得下来。
     memory-extract-window-messages: 40
     memory-extract-max-windows: 2
+    # 关键词兜底：没有 tool calling 的部署才打开。打开后用「记住/记一下/别忘了」等词猜意图，
+    # 窗口收窄到 keyword-fallback-window-messages 条——它是聊天主链路顺带触发的，
+    # 不能像终局复盘那样一次回看 80 条。
+    keyword-trigger-fallback: false
+    keyword-fallback-window-messages: 6
 
   # 医疗安全硬拦截：命中敏感词的请求不会发给模型，直接返回固定话术。
   # 提示词里的合规约束是软约束（模型可能不遵守），这里是硬约束。

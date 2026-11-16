@@ -82,6 +82,14 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     private static final String EXTRACT_KEY_PREFIX = "chat-memory-extract:";
 
     /**
+     * 关键词兜底触发的抽取原因（{@link #looksExplicit} 命中，见 {@code ChatCompletionServiceImpl}）。
+     * <p>
+     * 它和工具路径的区别：工具是模型主动调用、只记当轮一句；这里是「没有 tool calling 的部署」下
+     * 用关键词猜意图，所以窗口收窄到最近几条，避免每轮闲聊都触发一次整段复盘。
+     */
+    static final String REASON_KEYWORD_FALLBACK = "explicit";
+
+    /**
      * 结构化输出校验器（复用同一个实例：它只持有 schema 与重试次数，无状态）。
      * <p>
      * {@code entity(...)} 只是把"期望的格式说明"放进请求 context，真正把说明追加到用户消息、
@@ -337,6 +345,13 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         if (!clients.utilityAvailable() || userId == null || sessionId == null) {
             return;
         }
+        // 关键词兜底默认关闭：有 tool calling 时由模型调 save_long_term_memory 决定记不记，
+        // 关键词只会误判（"我记住了"、"记住这个数明天再看"）。开关放在这里而不是调用点，
+        // 是因为它属于"这条抽取要不要做"的策略，和窗口宽度、冲突规则是同一层的事。
+        if (REASON_KEYWORD_FALLBACK.equals(reason) && !aiProperties.getMemory().isKeywordTriggerFallback()) {
+            log.debug("关键词兜底未开启，跳过抽取 sessionId={}", sessionId);
+            return;
+        }
         String key = EXTRACT_KEY_PREFIX + sessionId;
         if (!extractGuard.tryAcquire(key)) {
             log.debug("该会话已有记忆抽取任务在跑，跳过 sessionId={}", sessionId);
@@ -367,8 +382,16 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             return 0;
         }
         try {
-            int windowSize = Math.max(aiProperties.getMemory().getMemoryExtractWindowMessages(), 1);
-            int maxWindows = Math.max(aiProperties.getMemory().getMemoryExtractMaxWindows(), 1);
+            // 关键词兜底（没有 tool calling 的部署）只处理「用户刚刚说的那几句」：
+            // 它由聊天主链路顺带触发、每轮都可能命中，窗口必须比终局复盘小得多，否则一次闲聊
+            // 就烧掉两窗 × 40 条的模型输入。真正的整段复盘只发生在会话结束/归档。
+            boolean fallback = REASON_KEYWORD_FALLBACK.equals(reason);
+            int windowSize = fallback
+                    ? Math.max(aiProperties.getMemory().getKeywordFallbackWindowMessages(), 1)
+                    : Math.max(aiProperties.getMemory().getMemoryExtractWindowMessages(), 1);
+            int maxWindows = fallback
+                    ? 1
+                    : Math.max(aiProperties.getMemory().getMemoryExtractMaxWindows(), 1);
             List<ChatMessage> recent = chatMessageMapper.selectRecentBySession(sessionId, windowSize * maxWindows);
             if (recent == null || recent.isEmpty()) {
                 return 0;

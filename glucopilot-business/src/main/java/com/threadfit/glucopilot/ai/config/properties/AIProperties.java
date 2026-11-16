@@ -229,6 +229,17 @@ public class AIProperties {
          */
         private int memoryExtractMaxWindows = 2;
 
+        /**
+         * 关键词兜底：没有 tool calling 的部署里，靠「记住 / 记一下 / 别忘了」这类词猜用户想让我们记住。
+         * <p>
+         * 默认关闭——有工具时由模型自己决定要不要记，关键词只会误判（"我记住了"、"帮我记住这个数"）。
+         * 打开后窗口收窄到 {@link #keywordFallbackWindowMessages} 条，避免闲聊每轮都触发整段复盘。
+         */
+        private boolean keywordTriggerFallback = false;
+
+        /** 关键词兜底时回看的消息条数（只处理用户刚说的几句，默认 6）。 */
+        private int keywordFallbackWindowMessages = 6;
+
         /** 抽取输入的字符上限（超长只取最近的部分）。 */
         private int memoryExtractInputMaxChars = 3000;
 

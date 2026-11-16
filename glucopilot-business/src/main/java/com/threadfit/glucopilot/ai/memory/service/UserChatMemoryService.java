@@ -123,7 +123,11 @@ public interface UserChatMemoryService {
      * 抽取是增强项，绝不能因为一次抽取失败影响已经成功的回复或刚建好的会话。
      *
      * @param reason 触发原因（{@code session-ended} / {@code session-archived} /
-     *               {@code explicit}（仅无工具部署的兜底）），只用于日志
+     *               {@code explicit}（仅无工具部署的兜底）），只用于日志与窗口选择
+     *               <p>
+     *               {@code explicit} 受 {@code ai.memory.keyword-trigger-fallback} 控制：默认关闭，
+     *               打开时只回看 {@code ai.memory.keyword-fallback-window-messages} 条
+     *               （默认 6）——它由聊天主链路顺带触发，不能像终局复盘那样一次回看整段
      */
     void extractAsync(Long userId, Long sessionId, String reason);
 

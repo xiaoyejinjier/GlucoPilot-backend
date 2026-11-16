@@ -14,6 +14,7 @@ import com.threadfit.glucopilot.ai.memory.service.impl.UserChatMemoryServiceImpl
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.util.JsonUtils;
+import java.util.concurrent.Executor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,11 +24,11 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -46,6 +47,7 @@ class UserChatMemoryExtractionTest {
     private ChatUserMemoryMapper memoryMapper;
     private ChatMessageMapper chatMessageMapper;
     private ChatSessionMapper chatSessionMapper;
+    private Executor executor;
     private ChatClient chatClient;
     private ChatClient.ChatClientRequestSpec requestSpec;
     private ChatClient.CallResponseSpec callSpec;
@@ -58,6 +60,7 @@ class UserChatMemoryExtractionTest {
         memoryMapper = mock(ChatUserMemoryMapper.class);
         chatMessageMapper = mock(ChatMessageMapper.class);
         chatSessionMapper = mock(ChatSessionMapper.class);
+        executor = mock(Executor.class);
         chatClient = mock(ChatClient.class);
         requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
         callSpec = mock(ChatClient.CallResponseSpec.class);
@@ -88,7 +91,7 @@ class UserChatMemoryExtractionTest {
 
         service = new UserChatMemoryServiceImpl(clients, memoryMapper, chatMessageMapper, chatSessionMapper, promptService,
                 resolver, aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), new ChatRoundGuard(),
-                mock(Executor.class));
+                executor);
     }
 
     @Test
@@ -191,6 +194,29 @@ class UserChatMemoryExtractionTest {
 
         assertThat(written).isZero();
         verify(chatSessionMapper).markMemoryExtracted(8L, 1L);
+    }
+
+    @Test
+    @DisplayName("关键词兜底默认关闭：没有 tool calling 的部署不打开它，就不该因为「记住」两个字烧模型")
+    void keywordFallbackIsOffByDefault() {
+        service.extractAsync(7L, 8L, "explicit");
+
+        verify(executor, org.mockito.Mockito.never()).execute(any());
+        verify(chatMessageMapper, org.mockito.Mockito.never()).selectRecentBySession(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("关键词兜底打开后只回看最近 6 条：它由聊天主链路顺带触发，不能像终局复盘那样回看 80 条")
+    void keywordFallbackUsesNarrowWindow() {
+        aiProperties.getMemory().setKeywordTriggerFallback(true);
+        aiProperties.getMemory().setStructuredOutput(false);
+        when(chatMessageMapper.selectRecentBySession(any(), any())).thenReturn(List.of(message(100L, "记住我不吃辣")));
+        when(callSpec.content()).thenReturn("{\"memories\":[]}");
+
+        service.runExtract(7L, 8L, "explicit");
+
+        verify(chatMessageMapper).selectRecentBySession(8L, 6);
+        verify(requestSpec, org.mockito.Mockito.times(1)).user(anyString());
     }
 
     private static ChatMessage message(Long id, String text) {

@@ -125,6 +125,25 @@ class ChatHistoryAssemblerTest {
     }
 
     @Test
+    void 长期记忆条数要写进统计() {
+        // 这条数被写进 advisor 的日志「记忆=N」：用户说"它记不住我"时，
+        // 第一眼要能区分"库里没有"和"查到了但没进 prompt"。
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                List.of(new UserMessage("我爸也有糖尿病")),
+                List.of(new UserMessage("本轮")),
+                null, List.of(),
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "用户不吃香菜", 90),
+                        new UserChatMemoryService.MemoryItem("habit", "  ", 80),
+                        new UserChatMemoryService.MemoryItem("glucose_goal", "餐后控制在 8 以内", 85)),
+                0);
+
+        assertEquals(2, result.stats().memoryItems(), "空白条目不算注入一条");
+        String context = result.messages().get(0).getText();
+        assertTrue(context.contains("不吃香菜"));
+        assertTrue(context.contains("餐后控制在 8 以内"));
+    }
+
+    @Test
     void 摘要与工具摘要作为一条系统消息插在最前() {
         ChatHistoryAssembler.Assembled result = assembler.assemble(
                 List.of(new UserMessage("第一条")),

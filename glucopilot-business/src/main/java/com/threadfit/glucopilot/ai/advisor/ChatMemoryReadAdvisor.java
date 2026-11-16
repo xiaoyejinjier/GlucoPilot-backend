@@ -101,11 +101,13 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
 
         ChatHistoryAssembler.Assembled assembled = assembler.assemble(history, current, summary, toolDigests, memories, fixedOverhead);
         ChatHistoryAssembler.Stats stats = assembled.stats();
-        if (stats.droppedHistory() > 0 || stats.summaryUsed() || stats.toolDigestUsed()) {
-            log.info("会话记忆装配 sessionId={} 保留历史={} 裁剪={} 估算token={} 预算={} 摘要={} 工具摘要={}"
+        if (stats.droppedHistory() > 0 || stats.summaryUsed() || stats.toolDigestUsed() || stats.memoryItems() > 0) {
+            // 「记忆=N」是排查"用户说它记不住"的第一现场：N=0 说明一条长期记忆都没进 prompt
+            // （没查到 / 被过滤 / userId 没传到 advisor 参数），N>0 才说明注入到位。
+            log.info("会话记忆装配 sessionId={} 记忆={} 保留历史={} 裁剪={} 估算token={} 预算={} 摘要={} 工具摘要={}"
                             + (stats.budgetExceeded() ? "（超预算：保底条数优先）" : ""),
-                    sessionId, stats.keptHistory(), stats.droppedHistory(), stats.estimatedTokens(),
-                    stats.budgetTokens(), stats.summaryUsed(), stats.toolDigestUsed());
+                    sessionId, stats.memoryItems(), stats.keptHistory(), stats.droppedHistory(),
+                    stats.estimatedTokens(), stats.budgetTokens(), stats.summaryUsed(), stats.toolDigestUsed());
         } else {
             log.debug("会话记忆装配 sessionId={} 保留历史={} 估算token={}", sessionId,
                     stats.keptHistory(), stats.estimatedTokens());

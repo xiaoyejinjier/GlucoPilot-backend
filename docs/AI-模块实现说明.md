@@ -5,7 +5,7 @@
 
 - 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、12 个工具（其中 1 个写工具）、9 份提示词、60 个 AI 测试类；全量 1023 用例 0 失败；Flyway v61
+- 现状：8 个场景、12 个工具（其中 1 个写工具）、10 份提示词、60 个 AI 测试类；全量 1024 用例 0 失败；Flyway v62
 
 ---
 
@@ -503,7 +503,20 @@ AiPromptTemplateService.validateRenderable(text, config.getVariables(), "classpa
 ```
 而不是 `{"verdict": "REJECT"}`。解析侧 `ContentModerationParser` 因此写成逐行 `key：value`，容忍中英文冒号、`=`、Markdown。
 
-### 7.3 注入点：调用点请求级，而不是 advisor
+### 7.3 版本演进：CHAT 从 v1 到 v3
+
+对话主提示词已经历三次播种，`ai_prompt_template` 里 v1/v2 都保留着（`is_enabled=0`），随时可在后台切回：
+
+| 版本 | 来源 | 变化 |
+| --- | --- | --- |
+| v1 | V18 | 首版：角色、安全规则、工具规范 |
+| v2 | （历史版本，已停用） | 草稿/回滚点 |
+| v3 | V62 | 新增 `save_long_term_memory` 的使用边界：只记长期事实、一次性安排与用药细节不记、同键覆盖不要重复调用 |
+| 兜底 | `resources/prompts/chat/system.md` | 与 v3 逐字一致，DB 不可用时用它 |
+
+**为什么加版本而不是改 v1**：`chat_session.system_prompt_ver` 记的是 `chat@vN`，原地改会让「这条回复用的是哪版提示词」失去意义，也让历史会话无法复现；后台按 `is_enabled` 切换版本，是我们唯一可回滚的手段。
+
+### 7.4 注入点：调用点请求级，而不是 advisor
 
 ```java
 // ChatCompletionServiceImpl#startStream
@@ -942,6 +955,14 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 
 **关键词兜底（默认关闭）**：`ai.memory.keyword-trigger-fallback=false`。没有 tool calling 的部署可以打开它，用「记住 / 记一下 / 帮我记 / 要记得 / 别忘了」猜意图；打开后窗口收窄到 `ai.memory.keyword-fallback-window-messages`（默认 6）条、只跑 1 窗，因为它是聊天主链路顺带触发的，不能像终局复盘那样一次回看 80 条。开关判定放在 `extractAsync` 里（属于「这条抽取要不要做」的策略），而不是调用点。
 
+**观测：日志里的「记忆=N」**。`ChatMemoryReadAdvisor` 的装配日志现在长这样：
+
+```
+会话记忆装配 sessionId=164 记忆=1 保留历史=4 裁剪=0 估算token=7369 预算=4096 摘要=false 工具摘要=true（超预算：保底条数优先）
+```
+
+`记忆=N` 是**真正写进 prompt 的条数**，不是"库里查到几条"——空白条目会被丢掉、每条约 120 字截断（`ChatHistoryAssembler.appendMemories` 返回的就是这个计数，落在 `Stats.memoryItems()`）。排查"用户说它记不住"时先看这个数：N=0 说明一条都没进 prompt（没抽到 / userId 没传到 advisor 参数 / 被过滤），N>0 才说明注入到位、问题在别处（提示词措辞或模型忽略）。E2E `memory-tool-e2e.ps1` 的第 2 组断言就是按这个数判断注入的。
+
 
 ### 10.2 `ChatSummaryServiceImpl`（298 行）：滚动摘要
 
@@ -1303,7 +1324,7 @@ ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessi
 | 层次 | 数量/内容 |
 | --- | --- |
 | AI 相关测试类 | 59 个（`ai/**` 下） |
-| 全量单测 | 1023 用例，0 失败 0 错误 5 跳过 |
+| 全量单测 | 1024 用例，0 失败 0 错误 5 跳过 |
 | 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`AdvisorChainOrderTest`（已带 system 的请求喂给记忆顾问后的消息顺序）、`ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包）、`ToolRepeatGuardTest`、`RepeatAwareToolCallbackTest`、`SecondBatchToolContractTest`（第二批 5 个工具的契约） |
 | 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
 | 迁移 | Flyway v60（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`、V55 审计菜单；V56~V60 为队友的社区/预测迁移） |

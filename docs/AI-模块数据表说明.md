@@ -165,12 +165,13 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 16 | `change_note` | varchar(255) | YES | — | 改动说明（审计与回溯用，如 `V43：…`） |
 | 17 | `config_version` | bigint unsigned | NO | 1 | 乐观锁版本，任何写操作 +1 |
 
-**当前开发库的 9 行**（正好演示「同场景多版本靠 `is_enabled` 选生效版」）：
+**当前开发库的 10 行**（正好演示「同场景多版本靠 `is_enabled` 选生效版」）：
 
 | scene_code | version | 启用 | 正文长度 |
 | --- | --- | --- | --- |
-| `CHAT` | 1 | ✅ | 1651 |
+| `CHAT` | 1 | ❌（v3 接替，保留回滚点） | 1651 |
 | `CHAT` | 2 | ❌（草稿/回滚点） | 1624 |
+| `CHAT` | 3 | ✅ | 1867（V62 播种，加了长期记忆工具边界；正文源在 `resources/prompts/chat/system.md`） |
 | `CHAT_IMAGE` | 1 | ✅ | 935 |
 | `MEAL_ANALYSIS` | 1 | ✅ | 515 |
 | `MEMORY` | 1 | ✅ | 1220 |
@@ -180,7 +181,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | `TRANSLATION` | 1 | ✅ | 1034（V54 播种，正文源在 `resources/prompts/translation/system.md`） |
 
 > `scene_code` 用的是 `SceneCode` 枚举名（大写），与 yaml 的 `ai.scenes.<小写 key>` 不是一套写法——库里按枚举 `getCode()` 存，比较时用 `BINARY` 区分大小写。
-> `legacy_chat_system` / `legacy_meal_analysis` / `legacy_glucose_advice` 三行是早期场景编码（V16/V18 改名中间产物，不在枚举里、运行时不会命中），V50 已逻辑删除并在 `change_note` 里记了原因；`CHAT` 的 v2 是真实历史版本，保留以便回滚。
+> `legacy_chat_system` / `legacy_meal_analysis` / `legacy_glucose_advice` 三行是早期场景编码（V16/V18 改名中间产物，不在枚举里、运行时不会命中），V50 已逻辑删除并在 `change_note` 里记了原因；`CHAT` 的 v1/v2 是真实历史版本，保留以便回滚（V62 起 v3 生效）。
 
 ---
 

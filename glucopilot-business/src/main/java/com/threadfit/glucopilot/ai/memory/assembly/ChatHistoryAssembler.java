@@ -61,9 +61,11 @@ public class ChatHistoryAssembler {
      * @param budgetTokens     预算上限
      * @param summaryUsed      是否用了滚动摘要
      * @param toolDigestUsed   是否注入了工具结果摘要
+     * @param memoryItems      实际注入的长期记忆条数（不是"查到几条"：空白与超长的会被丢掉，
+     *                         所以排查"用户说记不住"时要看这个数而不是库里有没有行）
      */
     public record Stats(int keptHistory, int droppedHistory, int estimatedTokens, int budgetTokens,
-                        boolean summaryUsed, boolean toolDigestUsed) {
+                        boolean summaryUsed, boolean toolDigestUsed, int memoryItems) {
 
         public boolean budgetExceeded() {
             return estimatedTokens > budgetTokens;
@@ -112,7 +114,8 @@ public class ChatHistoryAssembler {
         StringBuilder memorySection = new StringBuilder();
         StringBuilder summarySection = new StringBuilder();
         StringBuilder toolSection = new StringBuilder();
-        boolean memoryUsed = appendMemories(memorySection, memories);
+        int memoryItems = appendMemories(memorySection, memories);
+        boolean memoryUsed = memoryItems > 0;
         boolean summaryUsed = appendSummary(summarySection, summary, config.getSummaryMaxChars());
         boolean toolDigestUsed = appendToolDigests(toolSection, toolDigests, config.getToolReplayMaxItems());
 
@@ -200,7 +203,7 @@ public class ChatHistoryAssembler {
         messages.addAll(currentBody);
         return new Assembled(List.copyOf(messages),
                 new Stats(keptCount, safeHistory.size() - keptCount - droppedDuplicate, used, budget,
-                        summaryUsed, toolDigestUsed),
+                        summaryUsed, toolDigestUsed, memoryItems),
                 shards);
     }
 
@@ -272,12 +275,15 @@ public class ChatHistoryAssembler {
      * 长期记忆作为附加上下文的第一段（比摘要更靠前：它是"你是谁"，比"聊过什么"更基础）。
      * <p>
      * 条数由调用方（读取侧）限制；这里再限一次长度，避免一条超长记忆把预算吃光。
+     *
+     * @return 实际写进上下文的条数（空白条目会被跳过，因此可能小于 {@code memories.size()}）
      */
-    private static boolean appendMemories(StringBuilder context, List<UserChatMemoryService.MemoryItem> memories) {
+    private static int appendMemories(StringBuilder context, List<UserChatMemoryService.MemoryItem> memories) {
         if (memories == null || memories.isEmpty()) {
-            return false;
+            return 0;
         }
-        context.append("【关于这位用户的长期记忆（系统记住的事实，供你参考）】\n");
+        StringBuilder body = new StringBuilder();
+        int count = 0;
         for (UserChatMemoryService.MemoryItem item : memories) {
             if (item == null || item.text() == null || item.text().isBlank()) {
                 continue;
@@ -286,10 +292,17 @@ public class ChatHistoryAssembler {
             if (text.length() > 120) {
                 text = text.substring(0, 120);
             }
-            context.append("- ").append(item.key()).append('：').append(text).append('\n');
+            body.append("- ").append(item.key()).append('：').append(text).append('\n');
+            count++;
         }
-        context.append("（这些是长期背景，不要复述给用户、不要据此下诊断或用药建议；与用户本轮说法冲突时以本轮为准）");
-        return true;
+        if (count == 0) {
+            // 一条都没进来就不要留一个空标题：那会让"注入了什么"更难读
+            return 0;
+        }
+        context.append("【关于这位用户的长期记忆（系统记住的事实，供你参考）】\n")
+                .append(body)
+                .append("（这些是长期背景，不要复述给用户、不要据此下诊断或用药建议；与用户本轮说法冲突时以本轮为准）");
+        return count;
     }
     /** 摘要作为附加上下文的第一段；显式标注"不是本轮原话"。 */
     private static boolean appendSummary(StringBuilder context, String summary, int maxChars) {

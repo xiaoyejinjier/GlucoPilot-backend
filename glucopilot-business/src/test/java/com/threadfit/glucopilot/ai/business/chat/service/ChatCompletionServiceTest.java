@@ -24,6 +24,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -39,6 +41,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -162,6 +165,22 @@ class ChatCompletionServiceTest {
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
                 eq("你好，今天"), eq("test-model"), eq(0), eq(0),
                 eq(CodeEnum.ChatFinishReason.NORMAL.getCode()), anyInt());
+    }
+
+    @Test
+    void 发给模型的请求首条必须是当前场景提示词() {
+        useModelCapturing(Flux.just(textChunk("你好")));
+
+        collect();
+
+        assertEquals(1, capturedPrompts.size(), "一次请求只调用一次模型");
+        List<Message> instructions = capturedPrompts.get(0).getInstructions();
+        // 提示词从 advisor 挪到请求级注入之后，没有任何一层替我们"补上"它：
+        // 调用点漏写 .system(...) 不会抛异常，只会静默丢掉人设与医疗约束——所以这里必须红。
+        assertInstanceOf(SystemMessage.class, instructions.get(0), "第一条必须是 SystemMessage");
+        assertEquals("system prompt", instructions.get(0).getText());
+        // 只读一次：注入用的文本与估算固定开销用的文本必须是同一份，否则两次读之间提示词刷新会错位
+        verify(promptTemplateService, times(1)).systemPrompt(SceneCode.CHAT);
     }
 
     @Test

@@ -141,7 +141,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 ## 3. `ai_prompt_template` — AI 提示词模板表
 
-**用途**：库优先提示词，`AiPromptTemplateServiceImpl` 启动 `load()` 读它，`DynamicPromptAdvisor` 每请求现取。classpath `prompts/<scene>/system.md` 只作兜底。
+**用途**：库优先提示词，`AiPromptTemplateServiceImpl` 启动 `load()` 读它，`ChatCompletionServiceImpl` 每轮请求现取一次（请求级 `.system(...)` 注入）。classpath `prompts/<scene>/system.md` 只作兜底。
 
 **索引**：`PRIMARY(id)`、`uk_scene_ver_active(scene_code,version_no,is_deleted)`、`idx_scene_en(scene_code,is_enabled)`
 

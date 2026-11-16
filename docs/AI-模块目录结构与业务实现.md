@@ -70,7 +70,6 @@ ai/
 ├── channel/                         AiChannel + AiChannelProperties（协议/连接/凭据）
 ├── client/AiChatClientRegistry      「拿 client / 模型」的唯一入口
 ├── advisor/                         全部 ChatClient Advisor
-│   ├── DynamicPromptAdvisor         CHAT 场景提示词注入
 │   ├── MedicalGuardAdvisor          医疗硬拦截
 │   ├── ChatMemoryReadAdvisor        历史/摘要/工具摘要/长期记忆装配
 │   └── ChatMemoryAdvisorParams      参数名常量
@@ -86,7 +85,9 @@ ai/
 │   ├── reader/ChatContextReader     （从 advisor 移出：它是读取器，不是 advisor）
 │   ├── repository/ config/ controller/ dto/ entity/ mapper/ service/ service/impl/
 ├── tool/
-│   ├── builtin/                     5 个工具类
+│   ├── builtin/                     10 个工具类（第二批 +5：聚合/历史/会话态/提醒/社区检索）
+│   ├── port/                        对外端口（社区文章检索，由 community 实现）
+│   ├── runtime/                     registry / tracing / 去重装饰器
 │   ├── runtime/                     AiToolRegistry、TracingToolCallback、AiToolContext
 │   └── trace/                       ToolCallTraceRecorder、ToolResultDigester
 ├── support/                         TokenEstimator、ChatRoundGuard（跨域，只有这两个）
@@ -221,7 +222,7 @@ requireActive → 幂等检查 → tryAcquireToken(roundKey) → [视觉阶段1]
 ### 10. 提示词（模板加载 + 注入）
 
 - 加载：`AiPromptTemplateServiceImpl` 启动时先加载 classpath `prompts/<key>/system.md` 作为**兜底**（并试渲染校验，写坏则启动失败），再从 `ai_prompt_template` 覆盖；`resolve(scene)` 的优先级是 **DB → classpath → 抛异常**；60s TTL + 后台保存时 `refreshNow()`。
-- 注入：**CHAT 走 advisor**（`DynamicPromptAdvisor` 每请求替换 SystemMessage，因此后台改提示词不用重启）；**其余场景走请求级 `.system(...)`**（SUMMARY/MEMORY/视觉/审核）。
+- 注入：**CHAT 由唯一调用点每轮请求级 `.system(...)` 注入**（`ChatCompletionServiceImpl` 现取 `systemPrompt(CHAT)`，因此后台改提示词不用重启；注入与固定开销估算复用同一份文本）；**其余场景走请求级 `.system(...)`**（SUMMARY/MEMORY/视觉/审核）。
 - 约束：提示词正文**不能出现成对花括号**（ST 模板语法），所以审核场景用「逐行字段清单」而不是 JSON 示例。
 
 ### 11. 场景与模型配置（路由 / 诊断 / 用量）
@@ -246,7 +247,7 @@ requireActive → 幂等检查 → tryAcquireToken(roundKey) → [视觉阶段1]
 
 ### 13. 横切：工具链 / 护栏 / 观测
 
-- **工具链**：`AiToolRegistry.callbacks()` 按 `ai.tools.allow-list` 过滤（白名单为空则一个不注册），每个工具套 `TracingToolCallback` 记录耗时与结果摘要（`ToolResultDigester` 只存摘要，不存原文）；`AiToolContext` 用 `toolContext` 传递 `userId/sessionId/userMsgId/计数器`，`requireUserId` 缺失直接抛（防模型诱导越权）。
+- **工具链**：`AiToolRegistry.callbacks()` 按 `ai.tools.allow-list` 过滤（白名单为空则一个不注册），每个工具套 `TracingToolCallback(RepeatAwareToolCallback(...))`：外层记账（耗时与 `ToolResultDigester` 摘要，只存摘要不存原文），内层按「会话 + 工具 + 入参」去重、同参数直接返回上次结果（30 分钟 TTL，命中照样记账）；`AiToolContext` 用 `toolContext` 传递 `userId/sessionId/userMsgId/计数器`，`requireUserId` 缺失直接抛（防模型诱导越权）。
 - **护栏**：`MedicalGuardAdvisor`（`HIGHEST_PRECEDENCE+100`）只扫**最后一条用户消息**，命中敏感词直接返回固定话术，不调模型。
 - **观测**：`ChatModelFactory` 挂 `ObservationRegistry`/`MeterRegistry`；`chat_message` 落 `prompt_tokens/completion_tokens/latency_ms`，B 批起有 `GET /admin/v1/ai/usage` 消费。
 

@@ -78,6 +78,37 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
     int archiveIdleSessions(@Param("userId") Long userId, @Param("before") LocalDateTime before);
 
     /**
+     * 记录长期记忆抽取到的位置（V61）：<b>只前进、不回退</b>。
+     * <p>
+     * 用「小于才更新」而不是无条件覆盖，是因为并发下两次抽取可能乱序完成——
+     * 一次覆盖 80 条、一次只覆盖 40 条，后完成的若是后者，无条件覆盖会把进度倒退回去，
+     * 归档补齐就会反复重抽同一段。
+     *
+     * @return 受影响行数：0 表示已有更靠后的进度（或会话已被删除）
+     */
+    @Update("UPDATE chat_session SET memory_extracted_upto_msg_id = #{uptoMsgId} "
+            + "WHERE id = #{sessionId} "
+            + "AND (memory_extracted_upto_msg_id IS NULL OR memory_extracted_upto_msg_id < #{uptoMsgId})")
+    int markMemoryExtracted(@Param("sessionId") Long sessionId, @Param("uptoMsgId") Long uptoMsgId);
+
+    /**
+     * 惰性归档时的「记忆补齐」候选：即将被归档、且长期记忆还没覆盖到最后一条消息的会话。
+     * <p>
+     * 条件与 {@link #archiveIdleSessions} 完全一致（同一个 {@code before}、同一套 COALESCE 判空规则），
+     * 否则会出现「查到候选但这一轮并没有被归档」的错位：候选应当是本轮真的要归档的会话。
+     * 用 {@code upto < MAX(消息 id)} 而不是「upto 为 NULL」：窗口抽取可能只覆盖到中间某条，
+     * 之后再聊的内容依然没人抽。
+     *
+     * @return 会话 id（最多 1 个）；没有则 null
+     */
+    @Select("SELECT s.id FROM chat_session s WHERE s.user_id = #{userId} AND s.session_status = 1 "
+            + "AND s.is_deleted = 0 AND COALESCE(s.last_msg_at, s.gmt_create) < #{before} "
+            + "AND (s.memory_extracted_upto_msg_id IS NULL OR s.memory_extracted_upto_msg_id < ("
+            + "SELECT MAX(m.id) FROM chat_message m WHERE m.session_id = s.id AND m.is_deleted = 0)) "
+            + "ORDER BY COALESCE(s.last_msg_at, s.gmt_create) ASC LIMIT 1")
+    Long selectIdleSessionNeedingMemory(@Param("userId") Long userId, @Param("before") LocalDateTime before);
+
+    /**
      * 逻辑删除会话（5.4）。带 user_id 条件：越权删除不能靠"先查再删"两步，
      * 一条语句里把归属写死更安全（并发下也不会删到别人的会话）。
      */

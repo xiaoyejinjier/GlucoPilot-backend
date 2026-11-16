@@ -5,7 +5,7 @@
 
 - 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、12 个工具（其中 1 个写工具）、9 份提示词、60 个 AI 测试类；全量 1018 用例 0 失败；Flyway v60
+- 现状：8 个场景、12 个工具（其中 1 个写工具）、9 份提示词、60 个 AI 测试类；全量 1021 用例 0 失败；Flyway v61
 
 ---
 
@@ -924,14 +924,21 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 
 对外三个方法：`forInjection(userId)`（按置信度取前 N 条注入系统提示词）、`listOwnForUser`、`deleteAllForUser`（用户自助清空）。`FORBIDDEN_MARKERS` 是一层兜底：即使模型抽出了像密钥/身份证的内容，也不入库。
 
-**写入入口有三个，写库通道只有一个**：工具 `save_long_term_memory`（用户当轮亲口说的）、会话结束（`openNew` 对上一段会话复盘）、归档补齐。三者窗口与冲突策略不同，但都落到同一个 `write(...)`：
+**写入入口有三个，写库通道只有一个**：工具 `save_long_term_memory`（用户当轮亲口说的）、会话结束（`openNew` 对上一段会话复盘）、归档补齐（`archiveIdleSessions` 顺带补抽）。三者窗口与冲突策略不同，但都落到同一个 `write(...)`：
 
 | 来源 | 窗口 | 置信度 | 冲突策略 |
 | --- | --- | --- | --- |
 | `WriteSource.EXPLICIT`（工具） | 当轮一句 | 服务端固定 85 | **无条件覆盖**：用户刚说的应当盖掉历史推断 |
-| `WriteSource.BATCH`（结束/归档） | 整段会话 | 模型自评（≥60 才收） | **只升不降**：`score < 既有置信度` 时拒绝覆盖，避免老会话的迟到抽取盖掉今天的新事实 |
+| `WriteSource.BATCH`（结束/归档） | 整段会话（有界多窗） | 模型自评（≥60 才收） | **只升不降**：`score < 既有置信度` 时拒绝覆盖，避免老会话的迟到抽取盖掉今天的新事实 |
 
 `write(...)` 返回 `SaveOutcome(saved, reason)`，四道闸（键 ∈ 五类 / 非空且 ≤200 字 / 置信度 ≥60 / 不含剂量与诊断词）各自给出**可执行**的拒绝原因——工具回执会进上下文，模型据此换键或放弃，重试同样内容没有意义。
+
+**归档补齐（V61 `memory_extracted_upto_msg_id`）**：会话闲置归档时，`ChatSessionServiceImpl.archiveIdleSessions` 先挑出「即将归档、且长期记忆还没覆盖到最后一条消息」的 **1 个**会话（`selectIdleSessionNeedingMemory`），归档后再为它提交一次 `extractAsync(..., "session-archived")`。
+
+- 为什么要补：归档只改状态，归档后会话不再是 ACTIVE，也就永远不会再触发会话结束抽取——不补就是永久丢记忆。
+- 为什么记「位置」而不是「抽过没有」：`runExtract` 只回看有界窗口，抽过不等于抽全；列里存的是本次输入窗口的**上界消息 id**，语义是进度标记，`markMemoryExtracted` 用 `upto < ?` 只前进不回退（并发乱序完成时不会把进度写回去）。
+- 为什么最多 1 个：补抽是列表请求的副作用，批量补会把列表拖慢、并一次烧掉多次模型调用；积压会在后续请求里逐个消化。
+- 工具路径**不写**这一列：用户临时补充的一句不代表整段会话已抽过。
 
 
 ### 10.2 `ChatSummaryServiceImpl`（298 行）：滚动摘要
@@ -1294,7 +1301,7 @@ ChatSummaryServiceImpl ──► utilityChatClient, ChatMessageMapper, ChatSessi
 | 层次 | 数量/内容 |
 | --- | --- |
 | AI 相关测试类 | 59 个（`ai/**` 下） |
-| 全量单测 | 1018 用例，0 失败 0 错误 5 跳过 |
+| 全量单测 | 1021 用例，0 失败 0 错误 5 跳过 |
 | 关键测试类 | `ChatCompletionServiceImplTest`、`ChatHistoryAssemblerTest`、`ChatMemoryReadAdvisorTest`、`AdvisorChainOrderTest`（已带 system 的请求喂给记忆顾问后的消息顺序）、`ChatCompletionServiceTest.发给模型的请求首条必须是当前场景提示词`、`MedicalGuardAdvisorTest`、`AiPromptTemplateServiceImplTest`、`DynamicChatModelOptionsTest`、`ChatControllerSseWireTest`、`MealAnalysisServiceImplTest`、`OcrTaskServiceImplTest`、`ContentModerationParserTest`、`ModelContentModerationServiceTest`、`CommunityModerationWorkerTest`、`CommunityCommentModerationTest`（H2 真实库）、`ModelEnglishTranslatorTest`、`LocalizationServiceTest`、`AiModuleBoundaryTest`（守卫 `ai` 不依赖业务包）、`ToolRepeatGuardTest`、`RepeatAwareToolCallbackTest`、`SecondBatchToolContractTest`（第二批 5 个工具的契约） |
 | 端到端（真实模型） | `scripts/e2e/session-e2e.ps1` 36、`prompt-e2e.ps1` 45、`memory-e2e.ps1` 20、`moderation-e2e.ps1` 56、`default-model-e2e.ps1` 22、`ai-routing-e2e.ps1` 29、`chat-audit-e2e.ps1` 33、`translation-e2e.ps1` 14 |
 | 迁移 | Flyway v60（V48 capability、V49 场景参数、V51 校验跳过原因、V53 审计与用量权限点、V54 翻译场景 + `content_localization.prompt_ver`、V55 审计菜单；V56~V60 为队友的社区/预测迁移） |

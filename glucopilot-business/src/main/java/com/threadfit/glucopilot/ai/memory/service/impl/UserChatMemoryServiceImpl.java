@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.memory.service.impl;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
@@ -97,6 +98,8 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     private final AiChatClientRegistry clients;
     private final ChatUserMemoryMapper memoryMapper;
     private final ChatMessageMapper chatMessageMapper;
+    /** 只用于记录「抽到哪一条」（V61），不参与抽取本身。 */
+    private final ChatSessionMapper chatSessionMapper;
     private final AiPromptTemplateService promptTemplateService;
     private final SceneModelResolver sceneModelResolver;
     private final AIProperties aiProperties;
@@ -107,6 +110,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     public UserChatMemoryServiceImpl(AiChatClientRegistry clients,
                                  ChatUserMemoryMapper memoryMapper,
                                  ChatMessageMapper chatMessageMapper,
+                                 ChatSessionMapper chatSessionMapper,
                                  AiPromptTemplateService promptTemplateService,
                                  SceneModelResolver sceneModelResolver,
                                  AIProperties aiProperties,
@@ -116,6 +120,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         this.clients = clients;
         this.memoryMapper = memoryMapper;
         this.chatMessageMapper = chatMessageMapper;
+        this.chatSessionMapper = chatSessionMapper;
         this.promptTemplateService = promptTemplateService;
         this.sceneModelResolver = sceneModelResolver;
         this.aiProperties = aiProperties;
@@ -380,6 +385,8 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                     }
                 }
             }
+            // recent 是「新→旧」，第 0 条就是这次覆盖到的上界；工具路径不写这一列，见 markExtracted 注释
+            markExtracted(sessionId, recent.get(0).getId());
             log.info("长期记忆抽取完成 userId={} sessionId={} 原因={} 窗口={} 覆盖消息={} 写入={}",
                     userId, sessionId, reason, windows, recent.size(), written);
             return written;
@@ -387,6 +394,27 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             // 记忆是增强项：抽取失败绝不能影响已经成功的回复
             log.warn("长期记忆抽取失败（忽略，下次再试）userId={} sessionId={}", userId, sessionId, e);
             return 0;
+        }
+    }
+
+    /**
+     * 记录「长期记忆抽到哪一条」（V61 列 {@code chat_session.memory_extracted_upto_msg_id}）。
+     * <p>
+     * 用途只有一个：惰性归档时判断这个会话值不值得再补抽一次。它是<b>进度标记</b>，不是"抽全了"的证明——
+     * 窗口只覆盖最近若干条，更早的消息可能从未进过模型。
+     * <p>
+     * 失败只告警：进度标记写不进去，最坏是下次归档重抽一遍（浪费一次模型调用），
+     * 不能因此把已经写入成功的记忆回滚或让调用方以为抽取失败。
+     */
+    private void markExtracted(Long sessionId, Long uptoMsgId) {
+        if (sessionId == null || uptoMsgId == null) {
+            return;
+        }
+        try {
+            chatSessionMapper.markMemoryExtracted(sessionId, uptoMsgId);
+        } catch (RuntimeException e) {
+            log.warn("记录长期记忆抽取位置失败（忽略，下次归档会重抽）sessionId={} upto={}",
+                    sessionId, uptoMsgId, e);
         }
     }
 

@@ -149,11 +149,20 @@ public class ChatSessionServiceImpl implements ChatSessionService {
      * 表现成"点了新对话没反应"。记忆是增强项，新建会话是功能本身，两者不能互相牵连。
      */
     private void extractMemoryQuietly(Long userId, Long endedSessionId) {
+        extractMemoryQuietly(userId, endedSessionId, "session-ended");
+    }
+
+    /**
+     * 旁路提交一次记忆抽取（会话结束 / 归档补齐共用）。
+     *
+     * @param reason 只用于日志与排障：{@code session-ended} / {@code session-archived}
+     */
+    private void extractMemoryQuietly(Long userId, Long sessionId, String reason) {
         try {
-            userChatMemoryService.extractAsync(userId, endedSessionId, "session-ended");
+            userChatMemoryService.extractAsync(userId, sessionId, reason);
         } catch (RuntimeException e) {
-            log.warn("会话结束时的记忆抽取提交失败（忽略，不影响新建会话）userId={} sessionId={}",
-                    userId, endedSessionId, e);
+            log.warn("记忆抽取提交失败（忽略，不影响主流程）userId={} sessionId={} 原因={}",
+                    userId, sessionId, reason, e);
         }
     }
 
@@ -251,9 +260,22 @@ public class ChatSessionServiceImpl implements ChatSessionService {
             return;
         }
         try {
-            int archived = chatSessionMapper.archiveIdleSessions(userId, LocalDateTime.now().minusDays(days));
+            LocalDateTime before = LocalDateTime.now().minusDays(days);
+            // 先挑候选、再批量归档：归档 UPDATE 是批量的，做完就分不清「这一轮到底归档了哪几个」。
+            // 候选条件与 UPDATE 完全一致，所以挑出来的这个必然在本轮被归档。
+            Long pending = null;
+            try {
+                pending = chatSessionMapper.selectIdleSessionNeedingMemory(userId, before);
+            } catch (RuntimeException e) {
+                log.warn("挑选待补抽记忆的归档会话失败（跳过补齐）userId={}", userId, e);
+            }
+            int archived = chatSessionMapper.archiveIdleSessions(userId, before);
             if (archived > 0) {
                 log.info("惰性归档会话 userId={} 条数={} 阈值={}天", userId, archived, days);
+            }
+            // 每次列表请求最多补抽 1 个：补抽是列表请求的副作用，多了会把列表拖慢、也会一次烧掉多次模型调用
+            if (pending != null) {
+                extractMemoryQuietly(userId, pending, "session-archived");
             }
         } catch (RuntimeException e) {
             log.warn("惰性归档会话失败（不影响列表返回）userId={}", userId, e);

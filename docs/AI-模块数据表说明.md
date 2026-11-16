@@ -243,18 +243,19 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 7 | `system_prompt_ver` | varchar(32) | YES | — | 本轮/本会话用的提示词版本标签（如 `chat@v1`），用于「这条回复用的是哪版提示词」回溯 |
 | 8 | `context_summary` | mediumtext | YES | — | 滚动摘要正文（超长对话压缩后供模型续用） |
 | 9 | `summary_upto_msg_id` | bigint unsigned | YES | — | 摘要已覆盖至的消息 ID；`updateSummary ... where upto < ?` 的乐观并发指针 |
-| 10 | `window_msg_count` | smallint unsigned | NO | 20 | **已废弃（V21）**：窗口统一由 `ai.memory.window-messages` 决定，读取侧不再读本列 |
-| 11 | `msg_count` | int unsigned | NO | 0 | 消息条数冗余（`touchOnMessage` 时 +1） |
-| 12 | `last_msg_at` | datetime(3) | YES | — | 最近消息时间；列表排序 + 惰性归档判据 |
-| 13 | `is_pinned` | tinyint unsigned | NO | 0 | 是否置顶 |
-| 14 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
-| 15 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
-| 16 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
-| 17 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
-| 18 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
-| 19 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 20 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
-| 21 | `active_user_id` | bigint unsigned | YES | **生成列** | `STORED GENERATED`：仅「进行中且未删除」的会话等于 `user_id`，其余为 NULL；配合 `uk_user_active` 保证**每用户至多一条进行中会话** |
+| 10 | `memory_extracted_upto_msg_id` | bigint unsigned | YES | — | V61：长期记忆**输入窗口的上界消息 ID**（不是「抽全了」的证明）。只由窗口抽取写入、`upto < ?` 只前进；归档补齐据此判断该会话是否还欠一次抽取 |
+| 11 | `window_msg_count` | smallint unsigned | NO | 20 | **已废弃（V21）**：窗口统一由 `ai.memory.window-messages` 决定，读取侧不再读本列 |
+| 12 | `msg_count` | int unsigned | NO | 0 | 消息条数冗余（`touchOnMessage` 时 +1） |
+| 13 | `last_msg_at` | datetime(3) | YES | — | 最近消息时间；列表排序 + 惰性归档判据 |
+| 14 | `is_pinned` | tinyint unsigned | NO | 0 | 是否置顶 |
+| 15 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
+| 16 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
+| 17 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
+| 18 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
+| 19 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
+| 20 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
+| 21 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 22 | `active_user_id` | bigint unsigned | YES | **生成列** | `STORED GENERATED`：仅「进行中且未删除」的会话等于 `user_id`，其余为 NULL；配合 `uk_user_active` 保证**每用户至多一条进行中会话** |
 
 > 第 21 列是 V11 用来替代「应用层查一次再插入」的：并发两个「开新会话」请求时，第二个会被唯一键挡住，而不是插出两条进行中会话。
 
@@ -521,7 +522,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | `ai_model_config` | ① `thinking`/`top_p`/`last_test_ok` 都是**可空三态**（NULL ≠ 0）；② `api_key_cipher` 只存密文，`cipher_algo`/`key_version` 支撑主密钥轮换；③ 两个完全相同的唯一索引是历史遗留 |
 | `ai_prompt_template` | ① `prompt_body` 不能出现成对花括号（ST 语法）；② 同场景多版本靠 `is_enabled` 选，`uk` 只到 `(scene_code,version_no,is_deleted)`；③ `variables_json` 是保存期校验依据，不是运行时替换来源 |
 | `ai_scene_config` | 参数优先级 DB > yaml；NULL 表示「不覆盖」，所以不能用 0 表示「未设置」 |
-| `chat_session` | ① `active_user_id` 生成列 + `uk_user_active` 保证单进行中会话；② `window_msg_count` 已废弃；③ `summary_upto_msg_id` 是摘要的乐观并发指针 |
+| `chat_session` | ① `active_user_id` 生成列 + `uk_user_active` 保证单进行中会话；② `window_msg_count` 已废弃；③ `summary_upto_msg_id` 是摘要的乐观并发指针；④ `memory_extracted_upto_msg_id` 是记忆抽取的进度标记（工具路径不写） |
 | `chat_message` | ① `seq_no` 靠 `selectNextSeqNo`（**不过滤 is_deleted**）+ 唯一键重试；② `client_msg_id` 幂等；③ `model_code` 存实际调用值，不是配置值 |
 | `chat_context` | ① 只存元数据，`content_text`/`content_json` 自 V28 恒 NULL；② 轮次号由 `seq_no` 反推；③ 每轮 1–5 行 |
 | `chat_tool_call` | ① 只存 `error_type` 类名与 `result_digest`，不存返回原文；② `call_index` 由 toolContext 里的计数器给，按轮隔离 |

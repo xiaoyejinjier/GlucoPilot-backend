@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.memory.service.impl;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
@@ -44,6 +45,7 @@ class UserChatMemoryExtractionTest {
     private AiChatClientRegistry clients;
     private ChatUserMemoryMapper memoryMapper;
     private ChatMessageMapper chatMessageMapper;
+    private ChatSessionMapper chatSessionMapper;
     private ChatClient chatClient;
     private ChatClient.ChatClientRequestSpec requestSpec;
     private ChatClient.CallResponseSpec callSpec;
@@ -55,6 +57,7 @@ class UserChatMemoryExtractionTest {
         clients = mock(AiChatClientRegistry.class);
         memoryMapper = mock(ChatUserMemoryMapper.class);
         chatMessageMapper = mock(ChatMessageMapper.class);
+        chatSessionMapper = mock(ChatSessionMapper.class);
         chatClient = mock(ChatClient.class);
         requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
         callSpec = mock(ChatClient.CallResponseSpec.class);
@@ -83,7 +86,7 @@ class UserChatMemoryExtractionTest {
         when(chatMessageMapper.selectRecentBySession(any(), any())).thenReturn(List.of(message));
         when(memoryMapper.selectOne(any())).thenReturn(null);
 
-        service = new UserChatMemoryServiceImpl(clients, memoryMapper, chatMessageMapper, promptService,
+        service = new UserChatMemoryServiceImpl(clients, memoryMapper, chatMessageMapper, chatSessionMapper, promptService,
                 resolver, aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), new ChatRoundGuard(),
                 mock(Executor.class));
     }
@@ -173,6 +176,21 @@ class UserChatMemoryExtractionTest {
         verify(requestSpec, org.mockito.Mockito.times(2)).user(inputs.capture());
         assertThat(inputs.getAllValues().get(0)).contains("少油少盐").doesNotContain("不能吃辣");
         assertThat(inputs.getAllValues().get(1)).contains("不能吃辣").doesNotContain("少油少盐");
+        // 上界 = 这次真正取到的第一条（最近一条），只用于归档补齐判断，不代表「抽全了」
+        verify(chatSessionMapper).markMemoryExtracted(8L, 100L);
+    }
+
+    @Test
+    @DisplayName("进度标记写失败不影响抽取结果：记忆已经写进去了就不该因为标记失败回滚")
+    void failedProgressMarkDoesNotBreakExtraction() {
+        aiProperties.getMemory().setStructuredOutput(false);
+        when(callSpec.content()).thenReturn("{\"memories\":[]}");
+        when(chatSessionMapper.markMemoryExtracted(any(), any())).thenThrow(new RuntimeException("db down"));
+
+        int written = service.runExtract(7L, 8L, "session-ended");
+
+        assertThat(written).isZero();
+        verify(chatSessionMapper).markMemoryExtracted(8L, 1L);
     }
 
     private static ChatMessage message(Long id, String text) {

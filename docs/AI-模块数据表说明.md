@@ -365,14 +365,15 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 **用途**：`UserChatMemoryServiceImpl` 抽取/更新，`forInjection` 读出来注入系统提示词。
 
-**索引**：`PRIMARY(id)`、`uk_user_key_active(user_id,memory_key,is_deleted)`、`idx_user(user_id)`
+**索引**：`PRIMARY(id)`、`uk_user_key_item(user_id,memory_key,item_hash,is_deleted)`（V70 起；原来是不含 item_hash 的 `uk_user_key_active`）、`idx_user(user_id)`
 
 | # | 列 | 类型 | 空 | 默认 | 含义 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `id` | bigint unsigned | NO | 自增 | 记忆 ID |
 | 2 | `user_id` | bigint unsigned | NO | — | 用户账号 ID |
-| 3 | `memory_key` | varchar(64) | NO | — | 记忆键（如 `diet_taboo`、`allergy`）；同用户同 key 唯一（`upsert` 的依据） |
-| 4 | `memory_text` | varchar(512) | NO | — | 记忆内容（自然语言短句，如「不吃香菜」） |
+| 3 | `memory_key` | varchar(64) | NO | — | 记忆**类**（如 `diet_taboo`、`habit`）；一类下可以有多条，不再唯一 |
+| 4 | `memory_text` | varchar(512) | NO | — | 记忆内容（一句话一件事，如「不吃香菜」） |
+| 4.1 | `item_hash` | char(64) | YES | — | V71：`memory_text` 规范化后的 SHA-256，**条目的身份**；`(user_id, memory_key, item_hash)` 才是「同一句话」。为什么不用正文直接做唯一键：varchar(512) 进索引超长，且空白/大小写差异会被判成两条 |
 | 5 | `source_session_id` | bigint unsigned | YES | — | 来源会话，可空（用户手工加的记忆没有来源会话） |
 | 6 | `confidence` | tinyint unsigned | NO | 100 | 置信度 0–100；注入时按它排序取前 N，同 key 冲突时取高的 |
 | 7 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
@@ -383,7 +384,11 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 12 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
 | 13 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除；与 `deleted_at` 成对写入（`chk_cum_del_consistent`） |
 
-**删除与冷却**：用户在小程序记忆页删除时走 `logicDeleteByKey`（单条）或 `logicDeleteAllByUser`（全部），都只写删除三列。`deleted_at` 还被写入侧当墓碑用：`write(...)` 的 insert 分支查 `selectLastDeletedAt`，若 30 天内（`ai.memory.deleted-key-cooldown-days`）删过同一 `memory_key`，则**拒绝自动重建**（只拦 `WriteSource.BATCH`，工具路径不受限）。所以「已删行」是这个表里有业务含义的数据，物理删除只发生在注销（`purgeByUserId`）。
+**删除与冷却**：用户在小程序记忆页有三种删除——`logicDeleteById`（删一个条目）、`logicDeleteByKey`（清空一类）、`logicDeleteAllByUser`（清空全部），都只写删除三列。`deleted_at` 还被写入侧当墓碑用：`write(...)` 的 insert 分支查 `selectLastDeletedAt(userId, key, itemHash)`，若 30 天内（`ai.memory.deleted-key-cooldown-days`）删过**同一句话**，则**拒绝自动重建**（只拦 `WriteSource.BATCH`，工具路径不受限）；冷却按条目而不是按键，删掉「不吃香菜」不会连累「海鲜过敏」。
+
+**为什么要清墓碑**：唯一键含 `is_deleted`，而它只有 0/1，所以每个 `(user_id, memory_key, item_hash)` 至多留一条已删行。用户「删除→重新说一遍→再删除」时，第二次删除要写同一个 `(…, 1)`，与既有墓碑撞唯一键（`ERROR 1062`）。因此三个删除入口都会先按同范围**物理清掉墓碑**（`purgeTombstoneOfItem` / `purgeTombstonesByKey` / `purgeTombstonesByUser`），但只在**确实有生效行**时才清——否则幂等重复删除会把审计证据一并抹掉。墓碑的业务价值只有冷却，取 `MAX(deleted_at)` 就够了。
+
+**多条目的代价**：存储不设硬上限（同文去重 + 条目级冷却已经兜住失控），但注入必须按预算裁剪——`forInjection` 每类最多取 3 条并合并成一行，否则五类事实会把历史消息的预算挤没；列表接口因此改为分页。
 
 ---
 

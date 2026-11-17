@@ -5,12 +5,14 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.spring.MybatisSqlSessionFactoryBean;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.exception.GlobalExceptionHandler;
 import com.threadfit.glucopilot.common.mybatis.AuditMetaObjectHandler;
@@ -106,11 +108,10 @@ class UserChatMemorySelfServiceTest {
 
     @Test
     void 返回四个对用户有意义的字段() {
-        doReturn(List.of(row("diet_taboo", "对花生过敏", 95, LocalDateTime.of(2026, 10, 2, 9, 30)),
-                row("habit", "晚饭后散步30分钟", 80, LocalDateTime.of(2026, 10, 1, 20, 0))))
-                .when(memoryMapper).selectList(any());
+        stubPage(row("diet_taboo", "对花生过敏", 95, LocalDateTime.of(2026, 10, 2, 9, 30)),
+                row("habit", "晚饭后散步30分钟", 80, LocalDateTime.of(2026, 10, 1, 20, 0)));
 
-        List<UserChatMemoryDtos.MemoryRow> rows = service.listOwnForUser(USER_ID);
+        List<UserChatMemoryDtos.MemoryRow> rows = service.listOwnForUser(USER_ID, new PageQuery()).getRecords();
 
         assertEquals(2, rows.size());
         assertEquals("diet_taboo", rows.get(0).getMemoryKey());
@@ -121,16 +122,22 @@ class UserChatMemorySelfServiceTest {
 
     /**
      * {@code ai.memory.inject-max-items} 是"每轮最多注入几条"的省 token 开关，
-     * 与"用户能看到全部记忆"是两件事。把它误用到合规页面上，用户就会看不到某些被系统记住的事。
+     * 与"用户能看到多少条记忆"是两件事。把它误用到合规页面上，用户就会看不到某些被系统记住的事。
+     * <p>
+     * V71 之后一类可以有多条，页面本身要分页——但<b>分页不是截断</b>：
+     * {@code total} 必须给出真实总数，前端才能表达"还有多少条没看到"。
      */
     @Test
     void 注入上限不影响用户看到全部记忆() {
         aiProperties.getMemory().setInjectMaxItems(1);
-        doReturn(List.of(row("diet_taboo", "对花生过敏", 95, LocalDateTime.now()),
-                row("habit", "晚饭后散步30分钟", 80, LocalDateTime.now())))
-                .when(memoryMapper).selectList(any());
+        stubPage(row("diet_taboo", "对花生过敏", 95, LocalDateTime.now()),
+                row("habit", "晚饭后散步30分钟", 80, LocalDateTime.now()));
 
-        assertEquals(2, service.listOwnForUser(USER_ID).size(), "合规页面不按注入上限截断");
+        PageQuery query = new PageQuery();
+        var page = service.listOwnForUser(USER_ID, query);
+
+        assertEquals(2, page.getRecords().size(), "合规页面不按注入上限截断");
+        assertEquals(2, page.getTotal(), "总数是真实值，不是本页条数");
     }
 
     /**
@@ -138,22 +145,24 @@ class UserChatMemorySelfServiceTest {
      */
     @Test
     void 读失败时抛异常而不是假装没有记忆() {
-        doThrow(new IllegalStateException("db down")).when(memoryMapper).selectList(any());
+        doThrow(new IllegalStateException("db down")).when(memoryMapper).selectPage(any(), any());
 
-        assertThrows(IllegalStateException.class, () -> service.listOwnForUser(USER_ID));
+        assertThrows(IllegalStateException.class,
+                () -> service.listOwnForUser(USER_ID, new PageQuery()));
     }
 
     @Test
     void 没有记忆时返回空列表() {
-        doReturn(List.of()).when(memoryMapper).selectList(any());
+        stubPage();
 
-        assertTrue(service.listOwnForUser(USER_ID).isEmpty());
+        assertTrue(service.listOwnForUser(USER_ID, new PageQuery()).getRecords().isEmpty());
     }
 
     // ---------------------------------------------------------------- 删除
 
     @Test
     void 删除返回真实条数() {
+        doReturn(3).when(memoryMapper).countActiveByUser(USER_ID);
         doReturn(3).when(memoryMapper).logicDeleteAllByUser(USER_ID, null);
 
         assertEquals(3, service.deleteAllForUser(USER_ID));
@@ -175,6 +184,7 @@ class UserChatMemorySelfServiceTest {
     @Test
     void 用户自助删除不把运营ID写进deleted_by() {
         RequestContext.setOpsId(99L);
+        doReturn(1).when(memoryMapper).countActiveByUser(USER_ID);
         doReturn(1).when(memoryMapper).logicDeleteAllByUser(USER_ID, null);
 
         service.deleteAllForUser(USER_ID);
@@ -186,8 +196,7 @@ class UserChatMemorySelfServiceTest {
 
     @Test
     void 契约查询返回records且不含内部字段() throws Exception {
-        doReturn(List.of(row("diet_taboo", "对花生过敏", 95, LocalDateTime.of(2026, 10, 2, 9, 30))))
-                .when(memoryMapper).selectList(any());
+        stubPage(row("diet_taboo", "对花生过敏", 95, LocalDateTime.of(2026, 10, 2, 9, 30)));
 
         MockMvcBuilders.standaloneSetup(new UserChatMemoryController(service)).build()
                 .perform(get("/api/v1/users/me/ai-memories"))
@@ -198,15 +207,17 @@ class UserChatMemorySelfServiceTest {
                 .andExpect(jsonPath("$.data.records[0].memoryText").value("对花生过敏"))
                 .andExpect(jsonPath("$.data.records[0].confidence").value(95))
                 .andExpect(jsonPath("$.data.records[0].updatedAt").exists())
-                // 内部标识一个都不能漏：前端拿到 id 就会想做单条删除，
-                // 拿到 sourceSessionId 就等于知道"那段对话在系统里还留着痕迹"
-                .andExpect(jsonPath("$.data.records[0].id").doesNotExist())
+                // id 必须给：V71 之后"同一类可以有多条"，没有 id 前端就没法只删记错的那一条
+                .andExpect(jsonPath("$.data.records[0].id").exists())
+                // 但内部来源一个都不能漏：拿到 sourceSessionId 等于知道"那段对话在系统里还留着痕迹"
                 .andExpect(jsonPath("$.data.records[0].sourceSessionId").doesNotExist())
+                .andExpect(jsonPath("$.data.records[0].itemHash").doesNotExist())
                 .andExpect(jsonPath("$.data.records[0].isAuto").doesNotExist());
     }
 
     @Test
     void 契约删除返回deleted条数() throws Exception {
+        doReturn(2).when(memoryMapper).countActiveByUser(USER_ID);
         doReturn(2).when(memoryMapper).logicDeleteAllByUser(USER_ID, null);
 
         MockMvcBuilders.standaloneSetup(new UserChatMemoryController(service)).build()
@@ -247,7 +258,7 @@ class UserChatMemorySelfServiceTest {
     /** 服务层自己也守住 null：不查库、不删库，返回空结果/0。 */
     @Test
     void 服务层对空userId不做任何数据库操作() {
-        assertTrue(service.listOwnForUser(null).isEmpty());
+        assertTrue(service.listOwnForUser(null, new PageQuery()).getRecords().isEmpty());
         assertEquals(0, service.deleteAllForUser(null));
 
         verifyNoInteractions(memoryMapper);
@@ -282,16 +293,16 @@ class UserChatMemorySelfServiceTest {
             ChatUserMemoryMapper realMapper = session.getMapper(ChatUserMemoryMapper.class);
             UserChatMemoryService realService = realServiceWith(realMapper);
 
-            List<UserChatMemoryDtos.MemoryRow> rows = realService.listOwnForUser(USER_ID);
+            List<UserChatMemoryDtos.MemoryRow> rows = realService.listOwnForUser(USER_ID, new PageQuery()).getRecords();
             assertEquals(2, rows.size(), "已删除的行与他人的记忆都不算");
             assertEquals(List.of("diet_taboo", "habit"), rows.stream()
                     .map(UserChatMemoryDtos.MemoryRow::getMemoryKey).toList(),
                     "按置信度降序：更确定的排前面");
 
             assertEquals(2, realService.deleteAllForUser(USER_ID));
-            assertTrue(realService.listOwnForUser(USER_ID).isEmpty(), "删完之后自己查不到");
+            assertTrue(realService.listOwnForUser(USER_ID, new PageQuery()).getRecords().isEmpty(), "删完之后自己查不到");
 
-            List<UserChatMemoryDtos.MemoryRow> others = realService.listOwnForUser(OTHER_USER_ID);
+            List<UserChatMemoryDtos.MemoryRow> others = realService.listOwnForUser(OTHER_USER_ID, new PageQuery()).getRecords();
             assertEquals(1, others.size(), "别人的记忆一条都不能动");
 
             try (var statement = session.getConnection().createStatement();
@@ -315,6 +326,7 @@ class UserChatMemorySelfServiceTest {
      */
     @Test
     void 契约单条删除返回deleted条数() throws Exception {
+        doReturn(1).when(memoryMapper).countActiveByKey(USER_ID, "habit");
         doReturn(1).when(memoryMapper).logicDeleteByKey(USER_ID, "habit", null);
 
         MockMvcBuilders.standaloneSetup(new UserChatMemoryController(service)).build()
@@ -365,10 +377,10 @@ class UserChatMemorySelfServiceTest {
 
             assertEquals(1, realService.deleteByKeyForUser(USER_ID, "habit"), "只删 habit 这一个键");
 
-            List<UserChatMemoryDtos.MemoryRow> mine = realService.listOwnForUser(USER_ID);
+            List<UserChatMemoryDtos.MemoryRow> mine = realService.listOwnForUser(USER_ID, new PageQuery()).getRecords();
             assertEquals(1, mine.size(), "另一个键还在");
             assertEquals("diet_taboo", mine.get(0).getMemoryKey());
-            assertEquals(1, realService.listOwnForUser(OTHER_USER_ID).size(), "别人的同名键不受影响");
+            assertEquals(1, realService.listOwnForUser(OTHER_USER_ID, new PageQuery()).getRecords().size(), "别人的同名键不受影响");
 
             assertEquals(0, realService.deleteByKeyForUser(USER_ID, "habit"), "重复删除是幂等的 0");
 
@@ -401,14 +413,32 @@ class UserChatMemorySelfServiceTest {
                 Runnable::run);
     }
 
+    private static long ROW_SEQ = 0;
+
     private static ChatUserMemoryEntity row(String key, String text, int confidence, LocalDateTime updatedAt) {
         ChatUserMemoryEntity row = new ChatUserMemoryEntity();
+        row.setId(++ROW_SEQ);
         row.setUserId(USER_ID);
         row.setMemoryKey(key);
         row.setMemoryText(text);
+        row.setItemHash(UserChatMemoryServiceImpl.itemHashOf(text));
         row.setConfidence(confidence);
         row.setGmtModified(updatedAt);
         return row;
+    }
+
+    /**
+     * 让 mock 的 {@code selectPage} 返回一页数据。
+     * <p>
+     * MyBatis-Plus 的分页是「传入一个 IPage、它把结果塞回去」，所以这里必须返回同一个 page 对象，
+     * 否则截取的 {@code total} 会是 0，分页断言就会变成"永远是空页"的假绿。
+     */
+    @SafeVarargs
+    private void stubPage(ChatUserMemoryEntity... rows) {
+        Page<ChatUserMemoryEntity> page = new Page<>(1, 20);
+        page.setRecords(List.of(rows));
+        page.setTotal(rows.length);
+        doReturn(page).when(memoryMapper).selectPage(any(), any());
     }
 
     private static UnpooledDataSource memoryDatasource() {
@@ -416,12 +446,19 @@ class UserChatMemorySelfServiceTest {
                 "jdbc:h2:mem:selfmem_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
     }
 
-    /** 建表：列与约束照搬 V1 迁移（唯一键 + 删除一致性 CHECK）。 */
+    /**
+     * 建表：列与约束照搬 V1 + V70（条目级唯一键 + 删除一致性 CHECK）。
+     * <p>
+     * 唯一键必须是 {@code (user_id, memory_key, item_hash, is_deleted)}：
+     * 这是 V70 的核心变化，写成旧的 {@code (user_id, memory_key, is_deleted)} 会让
+     * "同一类记两句"在真库上撞键，而这类失败恰好是单测最该抓住的。
+     */
     private static void createMemoryTable(DataSource datasource) throws SQLException {
         try (var connection = datasource.getConnection(); var sql = connection.createStatement()) {
             sql.execute("CREATE TABLE chat_user_memory ("
                     + "id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, "
                     + "memory_key VARCHAR(64) NOT NULL, memory_text VARCHAR(512) NOT NULL, "
+                    + "item_hash VARCHAR(64) NULL, "
                     + "source_session_id BIGINT NULL, confidence TINYINT NOT NULL DEFAULT 100, "
                     + "created_by BIGINT NOT NULL DEFAULT 0, "
                     + "gmt_create TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), "
@@ -429,7 +466,7 @@ class UserChatMemorySelfServiceTest {
                     + "gmt_modified TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), "
                     + "deleted_by BIGINT NULL, deleted_at TIMESTAMP(3) NULL, "
                     + "is_deleted TINYINT NOT NULL DEFAULT 0, "
-                    + "CONSTRAINT uk_user_key_active UNIQUE (user_id, memory_key, is_deleted), "
+                    + "CONSTRAINT uk_user_key_item UNIQUE (user_id, memory_key, item_hash, is_deleted), "
                     + "CONSTRAINT chk_cum_del_consistent CHECK ("
                     + "(is_deleted = 0 AND deleted_at IS NULL AND deleted_by IS NULL) "
                     + "OR (is_deleted = 1 AND deleted_at IS NOT NULL)))");

@@ -896,7 +896,7 @@ P1 之前，后台保存模型配置只做**格式**校验：编码非空、能�
 
 ## 10. 记忆与摘要
 
-### 10.1 `UserChatMemoryServiceImpl`（576 行）：抽取长期记忆
+### 10.1 `UserChatMemoryServiceImpl`：抽取长期记忆（分类 + 多条目）
 
 ```java
 public void extractAsync(Long userId, Long sessionId, String reason) {
@@ -935,7 +935,7 @@ String raw = memoryClient.prompt()
 parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memories[]，同 key 取置信度高者
 ```
 
-对外方法：`forInjection(userId)`（按置信度取前 N 条注入系统提示词）、`listOwnForUser`（用户自助查看）、`deleteByKeyForUser`（按 `memoryKey` 删单条）、`deleteAllForUser`（清空）。`FORBIDDEN_MARKERS` 是一层兜底：即使模型抽出了像密钥/身份证的内容，也不入库。
+对外方法：`forInjection(userId)`（按类分组合并后注入）、`listOwnForUser(userId, pageQuery)`（用户自助查看，分页）、`deleteByIdForUser`（删一个条目）、`deleteByKeyForUser`（清空一类）、`deleteAllForUser`（清空全部）。`FORBIDDEN_MARKERS` 是一层兜底：即使模型抽出了像密钥/身份证的内容，也不入库。
 
 **写入入口有三个，写库通道只有一个**：工具 `save_long_term_memory`（用户当轮亲口说的）、会话结束（`openNew` 对上一段会话复盘）、归档补齐（`archiveIdleSessions` 顺带补抽）。三者窗口与冲突策略不同，但都落到同一个 `write(...)`：
 
@@ -943,6 +943,26 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 | --- | --- | --- | --- |
 | `WriteSource.EXPLICIT`（工具） | 当轮一句 | 服务端固定 85 | **无条件覆盖**：用户刚说的应当盖掉历史推断 |
 | `WriteSource.BATCH`（结束/归档） | 整段会话（有界多窗） | 模型自评（≥60 才收） | **只升不降**：`score < 既有置信度` 时拒绝覆盖，避免老会话的迟到抽取盖掉今天的新事实 |
+
+**V71：从「槽位」到「条目」**。改造前 `(user_id, memory_key)` 唯一，一类只能有一条记录，三个后果都踩到了：
+
+1. 删除粒度只能到「类」——用户想删记错的那半句，只能把整类（含对的那半句）删掉；
+2. 模型被迫合并句子——「不吃香菜、不吃辣、海鲜过敏」越拼越长，一次抽错整类报废；
+3. **新事实被旧事实挡住**——BATCH「只升不降」的保护会把置信度更低的新忌口挡在门外，过敏信息反而进不来。
+
+现在的身份是「这句话」：`item_hash = SHA-256(规范化正文)` 参与唯一键 `uk_user_key_item(user_id, memory_key, item_hash, is_deleted)`。
+
+| 行为 | 改造前 | 改造后 |
+| --- | --- | --- |
+| 写入同一类的新说法 | 覆盖旧记录 | 新增条目（同文则视为同一条，只在置信度提高时刷新） |
+| 删除 | 按 key 删整类 | 按 `id` 删一条 / 按 key 清一类 / 清空全部 |
+| 冷却（挡自动重建） | 键级 | **条目级**：删「不吃香菜」不连累「海鲜过敏」 |
+| 注入 | 每类一条，最多 5 行 | 每类最多 3 条**合并成一行**，仍是 ≤5 行 |
+| 列表 | 一次性返回 | 分页（存储不设硬上限，但列表必须分页） |
+
+**「来源会话」的语义**：记「哪一次最确信地说过它」，不是「最近一次提到」。所以只有置信度提高时才刷新 `source_session_id` 与 `gmt_modified`——否则每轮闲聊都会刷新，「最近更新」会变成噪声。
+
+**为什么删除前先清墓碑**：唯一键含只有 0/1 的 `is_deleted`，每个 `(user, key, item_hash)` 至多留一条已删行；删→重建→再删必然撞唯一键（实测 `ERROR 1062`）。三个删除入口都先按同范围物理清墓碑，但只在**确实有生效行**时清，避免幂等重复删除抹掉审计证据。
 
 `write(...)` 返回 `SaveOutcome(saved, reason)`，四道闸（键 ∈ 五类 / 非空且 ≤200 字 / 置信度 ≥60 / 不含剂量与诊断词）各自给出**可执行**的拒绝原因——工具回执会进上下文，模型据此换键或放弃，重试同样内容没有意义。
 

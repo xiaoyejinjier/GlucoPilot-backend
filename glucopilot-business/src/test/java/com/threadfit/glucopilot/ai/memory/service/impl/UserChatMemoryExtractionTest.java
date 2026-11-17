@@ -231,7 +231,7 @@ class UserChatMemoryExtractionTest {
     @Test
     @DisplayName("删过的键在冷却期内不被自动抽取重建，但用户当轮亲口说的照记")
     void cooldownBlocksBatchButNotExplicitWrite() {
-        when(memoryMapper.selectLastDeletedAt(7L, "habit")).thenReturn(LocalDateTime.now().minusDays(3));
+        when(memoryMapper.selectLastDeletedAt(7L, "habit", UserChatMemoryServiceImpl.itemHashOf("每天晚饭后散步30分钟"))).thenReturn(LocalDateTime.now().minusDays(3));
 
         // 自动抽取（BATCH）：被第五道闸拦下，连 insert 都不发
         assertThat(service.upsert(7L, "habit", "每天晚饭后散步30分钟", 90, null)).isFalse();
@@ -250,7 +250,7 @@ class UserChatMemoryExtractionTest {
 
         assertThat(service.upsert(7L, "habit", "每天晚饭后散步30分钟", 90, null)).isTrue();
 
-        verify(memoryMapper, never()).selectLastDeletedAt(any(), any());
+        verify(memoryMapper, never()).selectLastDeletedAt(any(), any(), any());
         verify(memoryMapper).insert(any(ChatUserMemoryEntity.class));
     }
 

@@ -9,51 +9,51 @@ import org.apache.ibatis.annotations.Update;
 import com.threadfit.glucopilot.ai.memory.entity.ChatUserMemoryEntity;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 长期记忆读写（chat_user_memory）。
  *
- * <h2>为什么带 user_id 的删除写成自写 SQL，而不是循环 updateById</h2>
+ * <h2>条目的身份是「内容」，不是「类」</h2>
+ * 唯一键 {@code uk_user_key_item(user_id, memory_key, item_hash, is_deleted)}：
+ * 同一个人的同一类里，<b>同一句话</b>只有一条生效行，不同内容各占一行。
+ * 于是「忌口」能同时记着不吃香菜、不吃辣、海鲜过敏（V71 之前是三类事实抢一个槽位）。
+ *
+ * <h2>为什么删除要先清墓碑</h2>
+ * 唯一键把 {@code is_deleted} 编了进去（0 = 生效、1 = 已删），而它只有两个取值——
+ * 这意味着每个 {@code (user, key, item_hash)} <b>最多只能存一条已删行</b>。
+ * 但用户的真实动线是「删掉香菜 → 又说了一次不能吃香菜 → 再删一次」：
+ * 第二次删除会把 {@code is_deleted} 从 0 改成 1，与第一条墓碑撞键（MySQL 1062）。
+ * 因此所有删除入口都先把同范围的历史墓碑物理删掉，再置删除位：
  * <ul>
- *   <li><b>一条语句 vs N 条</b>：合规删除面对的是"这个用户的全部记忆"，
- *       逐条逻辑删除既慢又会把删除过程拉长成多事务；一条 UPDATE 原子完成；</li>
- *   <li><b>归属写进 WHERE</b>：越权删除不能靠"先查再删"两步（并发下来单会漏），
- *       把 user_id 直接写进条件，删不到别人的记忆；</li>
- *   <li><b>三个列必须同一条语句里一起改</b>：DDL 的 {@code chk_cum_del_consistent} 要求
- *       {@code is_deleted = 1} 时 {@code deleted_at} 非空。MyBatis-Plus 的逻辑删除只会置
- *       {@code is_deleted}，缺了 deleted_at 会被 CHECK 拒绝——这类失败在测试环境很难复现，
- *       所以这里显式写全。</li>
+ *   <li>墓碑的唯一用途是写入侧的「防复活」冷却，而冷却只取 {@code MAX(deleted_at)}，
+ *       留更早的墓碑没有任何功能价值；</li>
+ *   <li>真正需要留痕的是运营侧审计与用户侧的"我删过什么"，前者走 {@code ops_audit_log}，
+ *       后者不需要历史版本（用户看到"已删除"就够了）。</li>
  * </ul>
- * 逻辑删除后同 key 可以再写新记忆：唯一键是 {@code uk_user_key_active(user_id, memory_key, is_deleted)}，
- * 生效行（0）与已删行（1）互不冲突。<b>刻意不做物理删除</b>——"系统曾经记过什么"本身就是要留痕的事实。
+ *
+ * <h2>为什么带 user_id 的删除写成自写 SQL，而不是循环 updateById</h2>
+ * 一条 UPDATE 原子完成全部删除；把 {@code user_id} 写进 WHERE，删不到别人的记忆；
+ * 三个列同一条语句里一起改，满足 {@code chk_cum_del_consistent}
+ * （{@code is_deleted = 1} 时 {@code deleted_at} 必须非空，而 MyBatis-Plus 的逻辑删除只置标记位）。
  */
 public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
 
     /**
-     * 逻辑删除某用户的全部长期记忆（管理端 4.15）。
+     * 逻辑删除某用户的全部长期记忆（C 端「清空全部」、管理端 4.15）。
      *
-     * @param userId    用户 ID（写进 WHERE，防止越权删到别人）
-     * @param deletedBy 操作人（运营账号 ID）；列允许为空，
-     *                  非运营线程（如用户自助清除）拿不到 opsId 时按 null 落库
-     * @return 实际逻辑删除的条数；0 表示该用户本来就没有记忆（幂等，不报错）
+     * @param userId    用户 ID（写进 WHERE，防止越权）
+     * @param deletedBy 操作人（运营账号 ID）；用户自助删除时为 null
+     * @return 实际逻辑删除的条数；0 表示本来就没有生效记忆（幂等，不报错）
      */
     @Update("UPDATE chat_user_memory SET is_deleted = 1, deleted_at = NOW(3), deleted_by = #{deletedBy} "
             + "WHERE user_id = #{userId} AND is_deleted = 0")
     int logicDeleteAllByUser(@Param("userId") Long userId, @Param("deletedBy") Long deletedBy);
 
     /**
-     * 逻辑删除某个键的长期记忆（C 端记忆页「删除这一条」）。
+     * 逻辑删除某一类下的全部条目（C 端记忆页「清空本类」）。
      *
-     * <p>为什么按 {@code memory_key} 而不是按 {@code id}：用户面对的是"系统记下的这条忌口"，
-     * 不是数据库里的某一行；键受 {@code ALLOWED_KEYS} 白名单约束、同一时间至多一条生效行，
-     * 所以 {@code (user_id, memory_key)} 就是用户眼里的"这一条"。用 id 反而要求 DTO 把内部主键
-     * 暴露给客户端——那是越权删别人记忆的入口。
-     *
-     * <p>与 {@link #logicDeleteAllByUser} 同样三个列一起改：DDL 的 {@code chk_cum_del_consistent}
-     * 要求删除态必须同时写 {@code deleted_at}，只置 {@code is_deleted} 会被 MySQL 拒绝。
-     *
-     * @param deletedBy 恒为 {@code null}：用户行使删除权，不是运营代删（运营留痕走 ops_audit_log）
-     * @return 1 = 删掉了；0 = 本来就没有这条（幂等，不算错误）
+     * @return 实际删除条数；0 = 这一类本来就没有生效条目
      */
     @Update("UPDATE chat_user_memory SET is_deleted = 1, deleted_at = NOW(3), deleted_by = #{deletedBy} "
             + "WHERE user_id = #{userId} AND memory_key = #{memoryKey} AND is_deleted = 0")
@@ -62,24 +62,77 @@ public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
                          @Param("deletedBy") Long deletedBy);
 
     /**
-     * 该用户这个键<b>最近一次被删除</b>的时间（没删过则为 null）。
+     * 逻辑删除一个条目（C 端记忆页「删除这一条」）。
      *
-     * <p>用途只有一个：写入侧的"防复活"闸门——用户删掉一条记忆后，会话结束时的自动抽取
-     * 会从会话原文里把同一个事实再读出来、再插回去，用户看到的就是"删除没生效"。
-     * 判断依据只能是 {@code deleted_at}（DDL 保证删除态一定有值），所以这里<b>刻意绕开</b>
-     * {@code @TableLogic}：要查的正是被它隐藏掉的已删行。
-     *
-     * <p>走 {@code uk_user_key_active(user_id, memory_key, is_deleted)} 的键前缀，成本可忽略。
+     * <p>{@code user_id} 与 {@code id} 同时进 WHERE：客户端拿到的 id 是它自己列表里的，
+     * 但没有理由相信它不会改成别人的 id 再发一次。
      */
-    @Select("SELECT MAX(deleted_at) FROM chat_user_memory "
-            + "WHERE user_id = #{userId} AND memory_key = #{memoryKey} AND is_deleted = 1")
-    LocalDateTime selectLastDeletedAt(@Param("userId") Long userId, @Param("memoryKey") String memoryKey);
+    @Update("UPDATE chat_user_memory SET is_deleted = 1, deleted_at = NOW(3), deleted_by = #{deletedBy} "
+            + "WHERE id = #{id} AND user_id = #{userId} AND is_deleted = 0")
+    int logicDeleteById(@Param("id") Long id,
+                        @Param("userId") Long userId,
+                        @Param("deletedBy") Long deletedBy);
+
+    /** 物理清掉某个条目的历史墓碑（删除前调用，避免二次删除撞唯一键）。 */
+    @Delete("DELETE FROM chat_user_memory "
+            + "WHERE user_id = #{userId} AND memory_key = #{memoryKey} AND item_hash = #{itemHash} AND is_deleted = 1")
+    int purgeTombstoneOfItem(@Param("userId") Long userId,
+                             @Param("memoryKey") String memoryKey,
+                             @Param("itemHash") String itemHash);
+
+    /** 物理清掉某一类的历史墓碑（清空本类前调用）。 */
+    @Delete("DELETE FROM chat_user_memory WHERE user_id = #{userId} AND memory_key = #{memoryKey} AND is_deleted = 1")
+    int purgeTombstonesByKey(@Param("userId") Long userId, @Param("memoryKey") String memoryKey);
+
+    /** 物理清掉该用户的全部历史墓碑（清空全部前调用）。 */
+    @Delete("DELETE FROM chat_user_memory WHERE user_id = #{userId} AND is_deleted = 1")
+    int purgeTombstonesByUser(@Param("userId") Long userId);
 
     /**
-     * 账号注销：物理删除该用户的全部长期记忆。
+     * 该用户这个条目<b>最近一次被删除</b>的时间（没删过则为 null）。
+     *
+     * <p>用途只有一个：写入侧的「防复活」闸门——用户删掉一条记忆后，会话结束时的自动抽取
+     * 会从会话原文里把同一句话再读出来、再插回去，用户看到的就是"删除没生效"。
+     * 判断粒度是<b>条目</b>（key + item_hash）：删掉"不吃香菜"不该连累"海鲜过敏"被一起冻结。
+     *
+     * <p>刻意绕开 {@code @TableLogic}：要查的正是被它隐藏掉的已删行。
+     */
+    @Select("SELECT MAX(deleted_at) FROM chat_user_memory "
+            + "WHERE user_id = #{userId} AND memory_key = #{memoryKey} AND item_hash = #{itemHash} "
+            + "AND is_deleted = 1")
+    LocalDateTime selectLastDeletedAt(@Param("userId") Long userId,
+                                      @Param("memoryKey") String memoryKey,
+                                      @Param("itemHash") String itemHash);
+
+    /**
+     * 注入用的候选集：生效条目按「置信度降序、最近更新降序」取前 N 条。
+     *
+     * <p>为什么在 SQL 里 LIMIT 而不是全量取出再在内存里裁：条目数不设上限，
+     * 重度用户可能有几百条，全量拉取既慢又没必要——注入侧只关心最靠前的那批。
+     */
+    @Select("SELECT * FROM chat_user_memory WHERE user_id = #{userId} AND is_deleted = 0 "
+            + "ORDER BY confidence DESC, gmt_modified DESC, id DESC LIMIT #{limit}")
+    List<ChatUserMemoryEntity> selectActiveByUser(@Param("userId") Long userId, @Param("limit") int limit);
+
+    /** 该用户当前生效条目数（只用于"抽取是否失控"的告警，不做硬限制）。 */
+    @Select("SELECT COUNT(*) FROM chat_user_memory WHERE user_id = #{userId} AND is_deleted = 0")
+    int countActiveByUser(@Param("userId") Long userId);
+
+    /**
+     * 某一类下还有多少条生效条目。
+     *
+     * <p>删除入口用它做前置判断：<b>没有生效行就不要清墓碑</b>。
+     * 否则"重复点删除"会把上一次删除留下的墓碑一并物理删掉——那条墓碑正是审计与冷却要用的证据，
+     * 幂等的删除请求不该产生这种副作用。
+     */
+    @Select("SELECT COUNT(*) FROM chat_user_memory "
+            + "WHERE user_id = #{userId} AND memory_key = #{memoryKey} AND is_deleted = 0")
+    int countActiveByKey(@Param("userId") Long userId, @Param("memoryKey") String memoryKey);
+
+    /**
+     * 账号注销：物理删除该用户的全部长期记忆（含墓碑）。
      * <p>
-     * 与上面的逻辑删除刻意不同——注销后"系统记过什么"不能以任何形式留存，
-     * 逻辑删除的行仍然可读，不满足删除权。
+     * 与逻辑删除刻意不同——注销后"系统记过什么"不能以任何形式留存。
      */
     @Delete("DELETE FROM chat_user_memory WHERE user_id = #{userId}")
     int purgeByUserId(@Param("userId") Long userId);
@@ -89,10 +142,9 @@ public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
      *
      * <p>{@code includeDeleted} 的取舍：默认只看生效行，因为运营日常要回答的是
      * 「系统现在记着什么」；但审计要能回答「曾经记过什么、什么时候被抹掉的」，
-     * 所以给了显式开关，而不是干脆把已删行滤掉——滤掉就等于失去了核查删除行为的能力。
+     * 所以给了显式开关。
      *
-     * <p>排序用 {@code gmt_modified DESC}：记忆是「最新覆盖最旧」的更新型数据，
-     * 按创建时间排会把刚被改写的老记忆压到后面。
+     * <p>排序用 {@code gmt_modified DESC}：记忆是「最近更新最有价值」的数据。
      */
     @Select("<script>"
             + "SELECT * FROM chat_user_memory WHERE 1 = 1"

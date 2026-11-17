@@ -16,11 +16,13 @@ import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
  * 逻辑删除列由基类的 {@code @TableLogic} 提供，因此所有查询都会自动带上 {@code is_deleted = 0}，
  * 业务 SQL 里<b>不应再手写一遍这个条件</b>（写重了不报错，但两份条件漂移时会出现"看起来删了却还在用"）。
  *
- * <h2>唯一键与"删掉同一条键之后还能再写"</h2>
- * 唯一键是 {@code uk_user_key_active(user_id, memory_key, is_deleted)}：生效行为 0、已删行为 1，
- * 于是"同一把键的有效记忆至多一条"和"逻辑删除后可以再写一条新的"同时成立（见
- * {@code ChatUserMemoryMapper#logicDeleteAllByUser} 的说明）。也正因为如此，
- * <b>这里不能改成物理删除</b>：删掉的记忆要能解释"系统曾经记过什么"，这正是合规审计要看的东西。
+ * <h2>唯一键与"删掉同一句话之后还能再写"</h2>
+ * 唯一键是 {@code uk_user_key_item(user_id, memory_key, item_hash, is_deleted)}：
+ * 类别之下还有条目，{@code item_hash} 是正文规范化后的 SHA-256，条目的身份是「哪句话」而不是「哪个类」。
+ * 生效行 {@code is_deleted=0}、已删行 {@code is_deleted=1}，两者能共存，
+ * 因此"删掉一条之后同类还能继续记"与"删掉的那句不会再被写回来"同时成立。
+ * <b>这里不能改成物理删除</b>：删除态要能解释"系统曾经记过什么"，冷却闸门也依赖 {@code deleted_at}
+ * （墓碑的清理交给删除入口，见 {@code ChatUserMemoryMapper} 顶部说明）。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -34,6 +36,14 @@ public class ChatUserMemoryEntity extends BaseEntity {
 
     /** 记忆正文（varchar(512)）。 */
     private String memoryText;
+
+    /**
+     * 正文规范化后的 SHA-256（V71）：条目的身份，参与唯一键。
+     * <p>
+     * 为什么不直接拿 {@code memory_text} 做唯一键：正文列 varchar(512) 全列进索引会超长，
+     * 而且大小写与空白差异会把"同一句话"判成两条。
+     */
+    private String itemHash;
 
     /** 来源会话 ID，可空（用户自助添加的记忆没有来源会话）。 */
     private Long sourceSessionId;

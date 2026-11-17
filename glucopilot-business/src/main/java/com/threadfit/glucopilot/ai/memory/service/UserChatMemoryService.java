@@ -1,6 +1,8 @@
 package com.threadfit.glucopilot.ai.memory.service;
 
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
+import com.threadfit.glucopilot.common.api.PageQuery;
+import com.threadfit.glucopilot.common.api.PageResult;
 
 import java.util.List;
 import java.util.Set;
@@ -86,29 +88,41 @@ public interface UserChatMemoryService {
     List<MemoryItem> forInjection(Long userId);
 
     /**
-     * 用户自己看自己的记忆（C 端合规自助）：返回全部有效记忆，<b>不按注入上限截断</b>、不返回内部字段。
+     * 用户自己看自己的记忆（C 端合规自助）：<b>分页</b>返回有效条目，不按注入上限截断。
+     * <p>
+     * 为什么必须分页：类别是有界的（五类），但<b>条目不再有界</b>——「饮食忌口」下可以同时记着
+     * 不吃香菜、不吃辣、海鲜过敏……重度用户一年下来可能攒到几百条。一次全量返回既拖慢首屏，
+     * 也会让"系统到底记了我什么"这个问题变成一屏滚不到底的列表。
      * <p>
      * 读失败<b>照常抛出</b>——"系统到底记住了我什么"这个问题不能用空列表糊弄过去。
      */
-    List<UserChatMemoryDtos.MemoryRow> listOwnForUser(Long userId);
+    PageResult<UserChatMemoryDtos.MemoryRow> listOwnForUser(Long userId, PageQuery query);
 
     /** 用户自助删除全部长期记忆（合规：用户有权清掉系统对他的记忆）。返回删除条数。 */
     int deleteAllForUser(Long userId);
 
     /**
-     * 用户自助删除<b>某一个键</b>的记忆（记忆页每张卡片的「删除」）。
+     * 用户自助删除<b>某一个类别下的全部条目</b>（记忆页每类卡片上的「清空本类」）。
      *
-     * <p>为什么在"全部清空"之外还要有单条删除：用户往往只错记了其中一条（"我不吃香菜"其实是不吃葱），
-     * 而清空会连带删掉四条正确的记忆，他反而要重新讲一遍。粒度按 {@code memoryKey} 而不是内部主键，
-     * 见 {@code UserChatMemoryDtos} 的字段取舍。
+     * <p>与 {@link #deleteByIdForUser} 的分工：用户说"忌口别记了"用这个，说"删掉香菜那条"用那个。
+     * 少了前者，用户要把三类忌口一条条点掉；少了后者，用户点一条却连带删掉另外两条。
      *
-     * <p>删除是逻辑删除 + 写入侧冷却（{@code ai.memory.deleted-key-cooldown-days}）：
-     * 否则会话结束时的自动抽取会把同一个事实从原文里再读出来、再插回去。
+     * <p>删除是逻辑删除 + 写入侧条目级冷却（{@code ai.memory.deleted-key-cooldown-days}）：
+     * 否则会话结束时的自动抽取会把同一句话从原文里再读出来、再插回去。
      *
-     * @return 1 = 删掉了；0 = 本来就没有这条（幂等）
+     * @return 实际删除条数；0 = 这一类本来就没有生效条目（幂等）
      * @throws com.threadfit.glucopilot.common.exception.BizException 键不在白名单里时抛 400
      */
     int deleteByKeyForUser(Long userId, String memoryKey);
+
+    /**
+     * 用户自助删除<b>一个条目</b>（记忆页每张卡片的「删除」）。
+     *
+     * @param id 条目主键（来自 {@link #listOwnForUser}）；服务端仍会带 {@code user_id} 过滤，
+     *           拿到别人的 id 只会删到 0 行
+     * @return 1 = 删掉了；0 = 本来就没有这条（幂等，含"这个 id 不属于你"）
+     */
+    int deleteByIdForUser(Long userId, Long id);
 
     /**
      * 账号注销：物理删除该用户全部长期记忆。

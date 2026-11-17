@@ -11,17 +11,25 @@ import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.api.PageQuery;
+import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.advisor.StructuredOutputValidationAdvisor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -68,6 +76,15 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
 
     /** 单条记忆文本上限（列是 varchar(512)，但记忆本身就该短，太长说明抽错了）。 */
     static final int MAX_TEXT_CHARS = 200;
+
+    /**
+     * 注入时每个类别最多带几条（V71 之后一类可以有多条）。
+     * <p>
+     * 三条的取舍：一条常常不够（"不吃香菜 + 不吃辣 + 海鲜过敏"是三次对话分别记下的），
+     * 但十条会让一行变成一段话，把历史消息的预算挤掉。更多的条目留给用户自己的记忆页——
+     * 那一页的用途是"看清全貌"，而注入的用途是"别答错"。
+     */
+    static final int MAX_ITEMS_PER_KEY_INJECTED = 3;
 
     /**
      * 显式写入（{@code save_long_term_memory} 工具路径）的固定置信度。
@@ -144,7 +161,13 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     // ------------------------------------------------------------------ 读取（供上下文装配）
 
     /**
-     * 取要注入上下文的记忆：按置信度降序、更新时间降序，最多 {@code ai.memory.inject-max-items} 条。
+     * 取要注入上下文的记忆：<b>按类分组</b>，一类一行，最多 {@code ai.memory.inject-max-items} 行。
+     * <p>
+     * 为什么是「一类一行」而不是「一条一行」：V71 之后同一类下可以有多条（不吃香菜 / 不吃辣 /
+     * 海鲜过敏）。如果每条单独占一行，五类事实多起来就会挤掉历史消息与摘要的预算；而分组之后
+     * 「饮食忌口：不吃香菜、不吃辣、海鲜过敏」既完整又只占一行的位置。
+     * 每类最多取 {@link #MAX_ITEMS_PER_KEY_INJECTED} 条——再多的条目对回答没有增量信息，
+     * 完整的清单留给用户自己的记忆页去看。
      * <p>
      * 读失败返回空列表（记忆是增强项，读不到就当没有，绝不让这一轮问答失败）。
      */
@@ -158,16 +181,33 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             return List.of();
         }
         try {
-            List<ChatUserMemoryEntity> rows = memoryMapper.selectList(
-                    new LambdaQueryWrapper<ChatUserMemoryEntity>()
-                            .eq(ChatUserMemoryEntity::getUserId, userId)
-                            .orderByDesc(ChatUserMemoryEntity::getConfidence)
-                            .orderByDesc(ChatUserMemoryEntity::getGmtModified)
-                            .last("LIMIT " + max));
-            List<MemoryItem> items = new ArrayList<>();
+            // 按置信度/更新时间排序取回，多取一些：分组之后需要的行数取决于每类几条，
+            // 只取 max 行可能全落在同一类里，导致别的类一条都进不来。
+            List<ChatUserMemoryEntity> rows = memoryMapper.selectActiveByUser(userId, max * MAX_ITEMS_PER_KEY_INJECTED);
+            Map<String, List<ChatUserMemoryEntity>> grouped = new LinkedHashMap<>();
             for (ChatUserMemoryEntity row : rows) {
-                items.add(new MemoryItem(row.getMemoryKey(), row.getMemoryText(),
-                        row.getConfidence() == null ? 100 : row.getConfidence()));
+                List<ChatUserMemoryEntity> bucket =
+                        grouped.computeIfAbsent(row.getMemoryKey(), k -> new ArrayList<>());
+                if (bucket.size() < MAX_ITEMS_PER_KEY_INJECTED) {
+                    bucket.add(row);
+                }
+            }
+            List<MemoryItem> items = new ArrayList<>(Math.min(grouped.size(), max));
+            for (Map.Entry<String, List<ChatUserMemoryEntity>> entry : grouped.entrySet()) {
+                if (items.size() >= max) {
+                    break;
+                }
+                List<ChatUserMemoryEntity> bucket = entry.getValue();
+                StringBuilder joined = new StringBuilder();
+                int confidence = 0;
+                for (ChatUserMemoryEntity row : bucket) {
+                    if (joined.length() > 0) {
+                        joined.append('、');
+                    }
+                    joined.append(row.getMemoryText().trim());
+                    confidence = Math.max(confidence, row.getConfidence() == null ? 100 : row.getConfidence());
+                }
+                items.add(new MemoryItem(entry.getKey(), joined.toString(), confidence));
             }
             return items;
         } catch (RuntimeException e) {
@@ -187,30 +227,37 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      *       而事实相反。合规场景里这种"善意的降级"就是撒谎，因此读失败<b>照常抛出</b>，
      *       让用户看到错误并重试。</li>
      * </ul>
-     * 另外它不做 {@code inject-max-items} 截断：那个上限是为了省 token，不是为了隐瞒；
-     * 这里给出全部有效记忆（键只允许五类、同键至多一条，行数天然有界）。
+     *
+     * <h2>为什么分页、为什么排序是「类升序 + 时间降序」</h2>
+     * 条目不再有界（一类可以有很多条），全量返回会让"我到底被记了什么"变成滚不到底的列表。
+     * 排序把同一类放在一起：用户想"把忌口都清掉"时能一眼看完一类；类内按最近更新排序，
+     * 因为用户最可能想删的是刚被记错的那条。
      */
     @Override
-    public List<UserChatMemoryDtos.MemoryRow> listOwnForUser(Long userId) {
+    public PageResult<UserChatMemoryDtos.MemoryRow> listOwnForUser(Long userId, PageQuery query) {
+        long pageNum = query == null ? 1 : Math.max(1, query.getPageNum());
+        long pageSize = query == null ? 20 : Math.max(1, Math.min(100, query.getPageSize()));
         if (userId == null) {
-            return List.of();
+            return PageResult.empty(pageNum, pageSize);
         }
-        List<ChatUserMemoryEntity> rows = memoryMapper.selectList(
+        Page<ChatUserMemoryEntity> page = new Page<>(pageNum, pageSize);
+        IPage<ChatUserMemoryEntity> result = memoryMapper.selectPage(page,
                 new LambdaQueryWrapper<ChatUserMemoryEntity>()
                         .eq(ChatUserMemoryEntity::getUserId, userId)
-                        .orderByDesc(ChatUserMemoryEntity::getConfidence)
+                        .orderByAsc(ChatUserMemoryEntity::getMemoryKey)
                         .orderByDesc(ChatUserMemoryEntity::getGmtModified)
                         .orderByDesc(ChatUserMemoryEntity::getId));
-        List<UserChatMemoryDtos.MemoryRow> items = new ArrayList<>(rows.size());
-        for (ChatUserMemoryEntity row : rows) {
+        List<UserChatMemoryDtos.MemoryRow> items = new ArrayList<>();
+        for (ChatUserMemoryEntity row : result.getRecords()) {
             items.add(UserChatMemoryDtos.MemoryRow.builder()
+                    .id(row.getId())
                     .memoryKey(row.getMemoryKey())
                     .memoryText(row.getMemoryText())
                     .confidence(row.getConfidence())
                     .updatedAt(row.getGmtModified())
                     .build());
         }
-        return items;
+        return PageResult.of(pageNum, pageSize, result.getTotal(), items);
     }
 
     /** 用户自助删除全部长期记忆（合规：用户有权清掉系统对他的记忆）。返回删除条数。 */
@@ -219,24 +266,37 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         if (userId == null) {
             return 0;
         }
+        // 没有任何生效条目就直接返回 0：这一刻不许清墓碑。
+        // 墓碑是"系统曾经记过什么 + 什么时候被抹掉"的唯一证据，也是冷却闸门的输入；
+        // 一次幂等的重复删除请求把它清掉，等于用户点错了两次就把审计痕迹擦掉了。
+        if (memoryMapper.countActiveByUser(userId) == 0) {
+            log.debug("用户没有生效记忆，跳过清理 userId={}", userId);
+            return 0;
+        }
+        // 先请墓碑：唯一键含 is_deleted（只有 0/1），每个条目的墓碑至多一条。
+        // 用户"删掉忌口 → 又说了一次 → 再清空"时，第二次删除会与第一条墓碑撞键（MySQL 1062）。
+        // 墓碑的唯一用途是冷却（取 MAX(deleted_at)），清掉更早的那条不影响语义。
+        int purged = memoryMapper.purgeTombstonesByUser(userId);
         // ⚠️ 不能用 MP 内置逻辑删除：它只置 is_deleted=1，而 DDL 的 chk_cum_del_consistent 要求
         // 删除态必须同时写 deleted_at，MySQL 8 会直接拒绝（H2 实测复现过）。因此走显式 UPDATE。
         // deleted_by 传 null：这是用户自己行使删除权，不是运营代删，把 C 端 user_id 记进
         // "操作人"列会让管理端的删除留痕把用户和运营混在一起（运营侧的留痕走 ops_audit_log）。
         int deleted = memoryMapper.logicDeleteAllByUser(userId, null);
-        log.info("用户自助清除长期记忆 userId={} 条数={}", userId, deleted);
+        log.info("用户自助清除长期记忆 userId={} 条数={} 清理过期墓碑={}", userId, deleted, purged);
         return deleted;
     }
 
     /**
-     * 用户自助删除某一个键的记忆（记忆页每张卡片的「删除」）。
+     * 用户自助清空某一类的全部条目（记忆页每类卡片上的「清空本类」）。
      *
-     * <p>键先过白名单：{@code DELETE /users/me/ai-memories/{memoryKey}} 的路径参数是客户端传的，
-     * 不校验就会把"随便什么字符串"变成一次 UPDATE（虽然删不到东西，但日志里会留下噪声，
-     * 而且用户拼错键时应当看到明确的 400，而不是"删除成功 0 条"的错觉）。
+     * <p>键先过白名单：路径参数是客户端传的，不校验就会把"随便什么字符串"变成一次 UPDATE
+     * （虽然删不到东西，但日志里会留下噪声，而且用户拼错键时应当看到明确的 400，
+     * 而不是"删除成功 0 条"的错觉）。
      *
-     * <p>删除之后由写入侧的冷却闸门负责"别再自动记回来"，见
-     * {@link #write(Long, String, String, Integer, Long, WriteSource)}。
+     * <p>同样先清该类墓碑再置删除位，原因见 {@link #deleteAllForUser}。
+     *
+     * <p>删除之后由写入侧的条目级冷却负责"别再自动记回来"，见
+     * {@link #withinDeletedCooldown(Long, String, String)}。
      */
     @Override
     public int deleteByKeyForUser(Long userId, String memoryKey) {
@@ -249,9 +309,44 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                     "未知的记忆类型：" + normalizedKey + "，只能是 diet_taboo / glucose_goal / "
                             + "health_context / habit / preference");
         }
-        // 与删除全部同样：显式 UPDATE 三列，绕开 MP 逻辑删除只写 is_deleted 的坑。
+        // 没有生效条目就返回 0，且不清墓碑（理由同 deleteAllForUser：墓碑是审计与冷却的证据）。
+        if (memoryMapper.countActiveByKey(userId, normalizedKey) == 0) {
+            log.debug("该类没有生效记忆，跳过清理 userId={} key={}", userId, normalizedKey);
+            return 0;
+        }
+        int purged = memoryMapper.purgeTombstonesByKey(userId, normalizedKey);
         int deleted = memoryMapper.logicDeleteByKey(userId, normalizedKey, null);
-        log.info("用户自助删除单条长期记忆 userId={} key={} 条数={}", userId, normalizedKey, deleted);
+        log.info("用户自助清空一类长期记忆 userId={} key={} 条数={} 清理过期墓碑={}",
+                userId, normalizedKey, deleted, purged);
+        return deleted;
+    }
+
+    /**
+     * 用户自助删除一个条目（记忆页每张卡片的「删除」）。
+     *
+     * <p>先把这一行读出来（读不到 = 本来就没有 或 不属于这个用户，两者都返回 0，不区分——
+     * 区分开就等于提供一个探测别人记忆 id 是否存在的接口），再用它的 {@code (key, item_hash)}
+     * 清墓碑，最后按主键置删除位。三步的顺序不能换：先删行再读 key 就拿不到 key 了。
+     */
+    @Override
+    public int deleteByIdForUser(Long userId, Long id) {
+        if (userId == null || id == null) {
+            return 0;
+        }
+        ChatUserMemoryEntity row = memoryMapper.selectOne(new LambdaQueryWrapper<ChatUserMemoryEntity>()
+                .eq(ChatUserMemoryEntity::getUserId, userId)
+                .eq(ChatUserMemoryEntity::getId, id)
+                .last("LIMIT 1"));
+        if (row == null) {
+            log.debug("待删除的记忆不存在或不属于该用户 userId={} id={}", userId, id);
+            return 0;
+        }
+        int purged = row.getItemHash() == null
+                ? 0
+                : memoryMapper.purgeTombstoneOfItem(userId, row.getMemoryKey(), row.getItemHash());
+        int deleted = memoryMapper.logicDeleteById(id, userId, null);
+        log.info("用户自助删除单个长期记忆 userId={} id={} key={} 条数={} 清理墓碑={}",
+                userId, id, row.getMemoryKey(), deleted, purged);
         return deleted;
     }
 
@@ -273,16 +368,24 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     }
 
     /**
-     * 写入/覆盖一条记忆（同 key 覆盖）。
-     * <p>
-     * 四道闸（键、长度、置信度、危险词）在<b>这里统一施加</b>——三条写入入口（工具、会话结束、
+     * 写入一条记忆（<b>条目级</b>去重，V70）。
+     *
+     * <p>四道闸（键、长度、置信度、危险词）在<b>这里统一施加</b>——三条写入入口（工具、会话结束、
      * 归档补齐）都从这里过，调用方不需要自己重复判断，也就不可能漏掉某一道。
-     * <p>
-     * 冲突策略由 {@code source} 决定：
+     *
+     * <h2>去重粒度：同一句话，不是同一类</h2>
+     * 身份由 {@code item_hash = SHA-256(规范化正文)} 决定：
      * <ul>
-     *   <li>{@link WriteSource#EXPLICIT}：无条件覆盖（用户刚说的算数）；</li>
-     *   <li>{@link WriteSource#BATCH}：只有新置信度 ≥ 既有置信度时才覆盖——否则一段老会话的
-     *       迟到抽取会把用户今天刚说的事实盖回旧版本。</li>
+     *   <li>同一类、同一句话再写一次 → 命中已有行（刷新置信度/来源，不新增）；</li>
+     *   <li>同一类、不同的话 → <b>新增一个条目</b>。这是 V70 的核心变化：以前「忌口」只有一个槽位，
+     *       "不吃香菜"会被"海鲜过敏"覆盖掉。</li>
+     * </ul>
+     *
+     * <h2>冲突策略</h2>
+     * <ul>
+     *   <li>{@link WriteSource#EXPLICIT}：用户当轮亲口说的算数；</li>
+     *   <li>{@link WriteSource#BATCH}：同一句话的新置信度低于既有值时不刷新——否则一段老会话的
+     *       迟到抽取会把用户今天刚说过的话的置信度拉低。</li>
      * </ul>
      * 返回的是给模型/日志看的回执，拒绝原因是可执行的具体说明，不是一个笼统的"失败"。
      */
@@ -312,47 +415,53 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             }
         }
 
+        String itemHash = itemHashOf(normalizedText);
         ChatUserMemoryEntity existing = memoryMapper.selectOne(new LambdaQueryWrapper<ChatUserMemoryEntity>()
                 .eq(ChatUserMemoryEntity::getUserId, userId)
                 .eq(ChatUserMemoryEntity::getMemoryKey, normalizedKey)
+                .eq(ChatUserMemoryEntity::getItemHash, itemHash)
                 .last("LIMIT 1"));
         if (existing == null) {
-            // 第五道闸（防复活）：用户刚刚删过这个键，自动抽取不许把它重新插回来。
-            // 只拦 BATCH（会话结束/归档补齐）；EXPLICIT 是用户当轮亲口说的，照记。
-            if (source == WriteSource.BATCH && withinDeletedCooldown(userId, normalizedKey)) {
+            // 第五道闸（防复活）：用户刚删过<b>这一条</b>，自动抽取不许把它重新插回来。
+            // 粒度是条目而不是类：删掉"不吃香菜"不该连累"海鲜过敏"在冷却期内都记不进来。
+            if (source == WriteSource.BATCH && withinDeletedCooldown(userId, normalizedKey, itemHash)) {
                 return SaveOutcome.rejected("该记忆刚被用户删除，冷却期内不自动重建");
             }
             ChatUserMemoryEntity row = new ChatUserMemoryEntity();
             row.setUserId(userId);
             row.setMemoryKey(normalizedKey);
             row.setMemoryText(normalizedText);
+            row.setItemHash(itemHash);
             row.setConfidence(Math.min(score, 100));
             row.setSourceSessionId(sourceSessionId);
             memoryMapper.insert(row);
-            log.info("新增长期记忆 userId={} key={} confidence={} 来源会话={} 来源={}",
-                    userId, normalizedKey, score, sourceSessionId, source);
+            log.info("新增长期记忆 userId={} key={} confidence={} 来源会话={} 来源={} 条目={}",
+                    userId, normalizedKey, score, sourceSessionId, source, itemHash.substring(0, 8));
             return SaveOutcome.ok();
         }
         int existingConfidence = existing.getConfidence() == null ? 0 : existing.getConfidence();
         if (source == WriteSource.BATCH && score < existingConfidence) {
-            log.info("跳过覆盖长期记忆 userId={} key={}（批量抽取置信度 {} < 既有 {}）",
+            log.info("跳过刷新长期记忆 userId={} key={}（批量抽取置信度 {} < 既有 {}）",
                     userId, normalizedKey, score, existingConfidence);
             return SaveOutcome.rejected("已有更可信的记忆（置信度 " + existingConfidence + "），本次不覆盖");
         }
-        if (normalizedText.equals(existing.getMemoryText())) {
-            // 内容没变化就不写库：避免每次会话结束都刷新 gmt_modified，把"最近更新"变成噪声
-            log.debug("记忆内容未变化，跳过写入 userId={} key={}", userId, normalizedKey);
+        if (score <= existingConfidence) {
+            // 同一句话、置信度没有提高：不写库。
+            // 这里刻意<b>不</b>因为"来源会话变了"就刷新：来源应记"哪一次最确信地说过它"，
+            // 而不是"最近一次提到它"；否则每轮闲聊都会刷新 gmt_modified，
+            // 用户记忆页上的"最近更新"就变成噪声，冷却判断也会跟着漂移。
+            log.debug("记忆条目未变化，跳过写入 userId={} key={} 条目={}",
+                    userId, normalizedKey, itemHash.substring(0, 8));
             return SaveOutcome.ok();
         }
         ChatUserMemoryEntity update = new ChatUserMemoryEntity();
         update.setId(existing.getId());
-        update.setMemoryText(normalizedText);
         update.setConfidence(Math.min(score, 100));
-        update.setSourceSessionId(sourceSessionId);
+        update.setSourceSessionId(sourceSessionId == null ? existing.getSourceSessionId() : sourceSessionId);
         memoryMapper.updateById(update);
-        log.info("覆盖长期记忆 userId={} key={} confidence={} 来源={}（旧值长度 {} → 新值长度 {}）",
-                userId, normalizedKey, score, source,
-                existing.getMemoryText() == null ? 0 : existing.getMemoryText().length(), normalizedText.length());
+        log.info("提升长期记忆置信度 userId={} key={} {} → {} 条目={} 来源={}",
+                userId, normalizedKey, existingConfidence, update.getConfidence(),
+                itemHash.substring(0, 8), source);
         return SaveOutcome.ok();
     }
 
@@ -366,24 +475,27 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     }
 
     /**
-     * 这个键是否处在"用户刚删过"的冷却期里（只用来阻止自动抽取把删掉的记忆重新插回来）。
+     * 这个条目是否处在"用户刚删过"的冷却期里（只用来阻止自动抽取把删掉的记忆重新插回来）。
      *
      * <p>为什么需要它：删除是逻辑删除，而会话结束时的抽取读的是<b>会话原文</b>——
      * 用户删掉"不吃香菜"之后，只要那段对话还在，下一轮抽取就会把这个事实重新读出来并 insert
-     * 一条新的生效行（{@code uk_user_key_active} 带 {@code is_deleted}，所以不撞唯一键）。
-     * 用户看到的就是"删了又回来"。
+     * 一条新的生效行（唯一键带 {@code is_deleted}，所以不撞键）。用户看到的就是"删了又回来"。
+     *
+     * <p>粒度是<b>条目</b>（key + item_hash）而不是类：V71 之后一类有多条，删掉"不吃香菜"
+     * 不该让"海鲜过敏"在 30 天里都记不进来。
      *
      * <p>判断只看 {@code deleted_at}，因此不需要新表、不需要清理，冷却到期自动恢复。
      * 查询失败按"不在冷却期"处理：宁可让它复活（用户还能再删一次），也不要因为一次读失败把记忆饿死。
+     * 日志里只打哈希前 8 位：记忆正文属于用户隐私，日志里出现原文等于把它写到了另一个介质上。
      */
-    private boolean withinDeletedCooldown(Long userId, String key) {
+    private boolean withinDeletedCooldown(Long userId, String key, String itemHash) {
         int days = aiProperties.getMemory().getDeletedKeyCooldownDays();
         if (days <= 0) {
             return false;
         }
         LocalDateTime lastDeletedAt;
         try {
-            lastDeletedAt = memoryMapper.selectLastDeletedAt(userId, key);
+            lastDeletedAt = memoryMapper.selectLastDeletedAt(userId, key, itemHash);
         } catch (RuntimeException e) {
             log.warn("查询记忆删除时间失败（按不在冷却期处理）userId={} key={}", userId, key, e);
             return false;
@@ -392,9 +504,29 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             return false;
         }
         // 日志留痕是这套闸门可解释性的全部：用户问"为什么没记住"时，这行是唯一证据。
-        log.info("跳过处于删除冷却期的长期记忆 userId={} key={} 删除时间={} 冷却天数={}",
-                userId, key, lastDeletedAt, days);
+        log.info("跳过处于删除冷却期的长期记忆 userId={} key={} 条目={} 删除时间={} 冷却天数={}",
+                userId, key, itemHash.substring(0, 8), lastDeletedAt, days);
         return true;
+    }
+
+    /**
+     * 条目身份：规范化正文的 SHA-256（小写十六进制）。
+     * <p>
+     * 必须与 {@code V71__chat_user_memory_items.sql} 的回填口径一致（都是 SHA-256 十六进制小写），
+     * 否则存量行在新代码眼里会变成"另一个条目"，用户会看到同一句话出现两次。
+     * <p>
+     * 之所以是 {@code public}：它是"这条记忆的身份"的唯一权威实现，运维脚本、数据修复、
+     * 集成测试都需要用同一份口径计算，复制一份到别处必然漂移。
+     */
+    public static String itemHashOf(String normalizedText) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(normalizedText.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            // JDK 强制要求支持 SHA-256，走到这里说明运行环境被裁剪过，属于部署故障而非输入问题
+            throw new IllegalStateException("当前运行环境不支持 SHA-256，无法计算记忆条目标识", e);
+        }
     }
 
     /** 账号注销：物理删除该用户全部长期记忆。 */

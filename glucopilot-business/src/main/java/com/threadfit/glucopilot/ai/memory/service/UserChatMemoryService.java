@@ -2,7 +2,6 @@ package com.threadfit.glucopilot.ai.memory.service;
 
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
 import com.threadfit.glucopilot.common.api.PageQuery;
-import com.threadfit.glucopilot.common.api.PageResult;
 
 import java.util.List;
 import java.util.Set;
@@ -95,8 +94,14 @@ public interface UserChatMemoryService {
      * 也会让"系统到底记了我什么"这个问题变成一屏滚不到底的列表。
      * <p>
      * 读失败<b>照常抛出</b>——"系统到底记住了我什么"这个问题不能用空列表糊弄过去。
+     *
+     * @param memoryKey 只看某一类（记忆页点开某个分类入口时传）；空白表示不限类。
+     *                  不在五类白名单里抛 400——静默当成"不限"会让页面看起来正常、
+     *                  实际显示的是全部记忆，用户以为这一类是空的或乱的。
+     * @return 当前页 + 全局的每类条数（{@code counts} 不受 {@code memoryKey} 影响，
+     *         供顶部分类入口一直显示真实条数）
      */
-    PageResult<UserChatMemoryDtos.MemoryRow> listOwnForUser(Long userId, PageQuery query);
+    UserChatMemoryDtos.MemoryPage listOwnForUser(Long userId, String memoryKey, PageQuery query);
 
     /** 用户自助删除全部长期记忆（合规：用户有权清掉系统对他的记忆）。返回删除条数。 */
     int deleteAllForUser(Long userId);

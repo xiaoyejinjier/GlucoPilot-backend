@@ -111,7 +111,7 @@ class UserChatMemorySelfServiceTest {
         stubPage(row("diet_taboo", "对花生过敏", 95, LocalDateTime.of(2026, 10, 2, 9, 30)),
                 row("habit", "晚饭后散步30分钟", 80, LocalDateTime.of(2026, 10, 1, 20, 0)));
 
-        List<UserChatMemoryDtos.MemoryRow> rows = service.listOwnForUser(USER_ID, new PageQuery()).getRecords();
+        List<UserChatMemoryDtos.MemoryRow> rows = service.listOwnForUser(USER_ID, null, new PageQuery()).getRecords();
 
         assertEquals(2, rows.size());
         assertEquals("diet_taboo", rows.get(0).getMemoryKey());
@@ -134,7 +134,7 @@ class UserChatMemorySelfServiceTest {
                 row("habit", "晚饭后散步30分钟", 80, LocalDateTime.now()));
 
         PageQuery query = new PageQuery();
-        var page = service.listOwnForUser(USER_ID, query);
+        var page = service.listOwnForUser(USER_ID, null, query);
 
         assertEquals(2, page.getRecords().size(), "合规页面不按注入上限截断");
         assertEquals(2, page.getTotal(), "总数是真实值，不是本页条数");
@@ -148,14 +148,14 @@ class UserChatMemorySelfServiceTest {
         doThrow(new IllegalStateException("db down")).when(memoryMapper).selectPage(any(), any());
 
         assertThrows(IllegalStateException.class,
-                () -> service.listOwnForUser(USER_ID, new PageQuery()));
+                () -> service.listOwnForUser(USER_ID, null, new PageQuery()));
     }
 
     @Test
     void 没有记忆时返回空列表() {
         stubPage();
 
-        assertTrue(service.listOwnForUser(USER_ID, new PageQuery()).getRecords().isEmpty());
+        assertTrue(service.listOwnForUser(USER_ID, null, new PageQuery()).getRecords().isEmpty());
     }
 
     // ---------------------------------------------------------------- 删除
@@ -258,7 +258,7 @@ class UserChatMemorySelfServiceTest {
     /** 服务层自己也守住 null：不查库、不删库，返回空结果/0。 */
     @Test
     void 服务层对空userId不做任何数据库操作() {
-        assertTrue(service.listOwnForUser(null, new PageQuery()).getRecords().isEmpty());
+        assertTrue(service.listOwnForUser(null, null, new PageQuery()).getRecords().isEmpty());
         assertEquals(0, service.deleteAllForUser(null));
 
         verifyNoInteractions(memoryMapper);
@@ -293,16 +293,16 @@ class UserChatMemorySelfServiceTest {
             ChatUserMemoryMapper realMapper = session.getMapper(ChatUserMemoryMapper.class);
             UserChatMemoryService realService = realServiceWith(realMapper);
 
-            List<UserChatMemoryDtos.MemoryRow> rows = realService.listOwnForUser(USER_ID, new PageQuery()).getRecords();
+            List<UserChatMemoryDtos.MemoryRow> rows = realService.listOwnForUser(USER_ID, null, new PageQuery()).getRecords();
             assertEquals(2, rows.size(), "已删除的行与他人的记忆都不算");
             assertEquals(List.of("diet_taboo", "habit"), rows.stream()
                     .map(UserChatMemoryDtos.MemoryRow::getMemoryKey).toList(),
                     "按置信度降序：更确定的排前面");
 
             assertEquals(2, realService.deleteAllForUser(USER_ID));
-            assertTrue(realService.listOwnForUser(USER_ID, new PageQuery()).getRecords().isEmpty(), "删完之后自己查不到");
+            assertTrue(realService.listOwnForUser(USER_ID, null, new PageQuery()).getRecords().isEmpty(), "删完之后自己查不到");
 
-            List<UserChatMemoryDtos.MemoryRow> others = realService.listOwnForUser(OTHER_USER_ID, new PageQuery()).getRecords();
+            List<UserChatMemoryDtos.MemoryRow> others = realService.listOwnForUser(OTHER_USER_ID, null, new PageQuery()).getRecords();
             assertEquals(1, others.size(), "别人的记忆一条都不能动");
 
             try (var statement = session.getConnection().createStatement();
@@ -377,10 +377,10 @@ class UserChatMemorySelfServiceTest {
 
             assertEquals(1, realService.deleteByKeyForUser(USER_ID, "habit"), "只删 habit 这一个键");
 
-            List<UserChatMemoryDtos.MemoryRow> mine = realService.listOwnForUser(USER_ID, new PageQuery()).getRecords();
+            List<UserChatMemoryDtos.MemoryRow> mine = realService.listOwnForUser(USER_ID, null, new PageQuery()).getRecords();
             assertEquals(1, mine.size(), "另一个键还在");
             assertEquals("diet_taboo", mine.get(0).getMemoryKey());
-            assertEquals(1, realService.listOwnForUser(OTHER_USER_ID, new PageQuery()).getRecords().size(), "别人的同名键不受影响");
+            assertEquals(1, realService.listOwnForUser(OTHER_USER_ID, null, new PageQuery()).getRecords().size(), "别人的同名键不受影响");
 
             assertEquals(0, realService.deleteByKeyForUser(USER_ID, "habit"), "重复删除是幂等的 0");
 
@@ -397,8 +397,56 @@ class UserChatMemorySelfServiceTest {
         }
     }
 
-    // ---------------------------------------------------------------- 辅助
+    /**
+     * 真库：按类筛选只回这一类，{@code counts} 仍然给出全部五类（含 0），未知类直接 400。
+     *
+     * <p>这三条覆盖记忆页顶部分类入口的全部数据依赖：
+     * <ul>
+     *   <li>点开某一类时列表不能混进别类（用户点"饮食忌口"却看到"生活习惯"会以为筛选坏了）；</li>
+     *   <li>入口上的数字与筛选无关——否则点进去之后别类的数字就清零了；</li>
+     *   <li>未知类要报错而不是静默返回全部（静默降级会让页面看起来正常、内容却是混的）。</li>
+     * </ul>
+     */
+    @Test
+    void 真实库上按类筛选只回该类且counts覆盖五类() throws Exception {
+        UnpooledDataSource datasource = memoryDatasource();
+        createMemoryTable(datasource);
+        try (var connection = datasource.getConnection(); var sql = connection.createStatement()) {
+            sql.execute("INSERT INTO chat_user_memory "
+                    + "(id,user_id,memory_key,memory_text,item_hash,confidence,created_by,is_deleted,gmt_modified) VALUES "
+                    + "(11,7,'diet_taboo','对花生过敏','" + UserChatMemoryServiceImpl.itemHashOf("对花生过敏")
+                    + "',95,0,0,TIMESTAMP '2026-10-01 10:00:00'),"
+                    + "(12,7,'diet_taboo','不吃香菜','" + UserChatMemoryServiceImpl.itemHashOf("不吃香菜")
+                    + "',85,0,0,TIMESTAMP '2026-10-02 10:00:00'),"
+                    + "(13,7,'habit','晚饭后散步30分钟','" + UserChatMemoryServiceImpl.itemHashOf("晚饭后散步30分钟")
+                    + "',80,0,0,TIMESTAMP '2026-10-03 10:00:00')");
+        }
+        SqlSessionFactory sessionFactory = memorySqlSessionFactory(datasource);
+        sessionFactory.getConfiguration().addMapper(ChatUserMemoryMapper.class);
+        try (SqlSession session = sessionFactory.openSession(true)) {
+            ChatUserMemoryMapper realMapper = session.getMapper(ChatUserMemoryMapper.class);
+            UserChatMemoryService realService = realServiceWith(realMapper);
 
+            UserChatMemoryDtos.MemoryPage page = realService.listOwnForUser(USER_ID, " diet_taboo ", new PageQuery());
+            assertEquals(2, page.getTotal(), "只统计这一类");
+            assertEquals(2, page.getRecords().size());
+            for (UserChatMemoryDtos.MemoryRow row : page.getRecords()) {
+                assertEquals("diet_taboo", row.getMemoryKey(), "筛选之外的行不许混进来");
+            }
+
+            assertEquals(2, page.getCounts().get("diet_taboo"));
+            assertEquals(1, page.getCounts().get("habit"));
+            assertEquals(0, page.getCounts().get("preference"), "没有记忆的类也要出现，值为 0");
+            assertEquals(5, page.getCounts().size(), "五类键都要在，前端不必自己补");
+
+            // 未知类：报错而不是"当成不限类"
+            var error = assertThrows(com.threadfit.glucopilot.common.exception.BizException.class,
+                    () -> realService.listOwnForUser(USER_ID, "image", new PageQuery()));
+            assertTrue(error.getMessage().contains("image"), "错误信息要带上用户传进来的键");
+        }
+    }
+
+    // ---------------------------------------------------------------- 辅助
     private UserChatMemoryService realServiceWith(ChatUserMemoryMapper realMapper) {
         return new UserChatMemoryServiceImpl(
                 registryWith(mock(ChatClient.class)),

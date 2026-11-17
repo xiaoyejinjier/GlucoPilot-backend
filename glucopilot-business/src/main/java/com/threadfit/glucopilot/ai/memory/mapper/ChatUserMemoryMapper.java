@@ -130,6 +130,21 @@ public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
     int countActiveByKey(@Param("userId") Long userId, @Param("memoryKey") String memoryKey);
 
     /**
+     * 按类统计当前用户的生效条数（记忆页顶部「几类、各几条」的数据来源）。
+     *
+     * <p>为什么一条 {@code GROUP BY} 而不是循环调 {@link #countActiveByKey}：
+     * 记忆页每次加载都要带上这份统计，五类就是五次往返；一条聚合查询把它压成一次。
+     * 这里也<b>刻意不</b>接受筛选条件——入口上的数字要告诉用户"这一类里一共有几条"，
+     * 若跟着筛选走，点进去之后就再也看不到别类的条数了。
+     *
+     * <p>别名写成驼峰，由 {@link ChatUserMemoryKeyCount} 承接：MySQL 原样返回列名、
+     * H2 会转大写，直接按 Map 取键会在单测与生产之间错位。
+     */
+    @Select("SELECT memory_key AS memoryKey, COUNT(*) AS total FROM chat_user_memory "
+            + "WHERE user_id = #{userId} AND is_deleted = 0 GROUP BY memory_key")
+    List<ChatUserMemoryKeyCount> countActiveGroupByKey(@Param("userId") Long userId);
+
+    /**
      * 账号注销：物理删除该用户的全部长期记忆（含墓碑）。
      * <p>
      * 与逻辑删除刻意不同——注销后"系统记过什么"不能以任何形式留存。

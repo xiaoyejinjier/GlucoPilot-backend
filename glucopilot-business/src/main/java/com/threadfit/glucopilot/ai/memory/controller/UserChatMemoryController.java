@@ -2,7 +2,6 @@ package com.threadfit.glucopilot.ai.memory.controller;
 
 import com.threadfit.glucopilot.common.api.ApiResponse;
 import com.threadfit.glucopilot.common.api.PageQuery;
-import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +9,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
@@ -53,15 +53,19 @@ public class UserChatMemoryController {
     private final UserChatMemoryService userChatMemoryService;
 
     /**
-     * 分页查我自己的长期记忆。
+     * 分页查我自己的长期记忆，可按类筛选。
      * <p>
-     * 返回 {@code PageResult}（含 {@code records} / {@code total} / {@code pages}）而不是裸列表：
-     * 条目数不再有界，前端要能"上拉加载更多"，也要能显示"共 N 条"。
+     * 返回的对象带 {@code records} / {@code total} / {@code pages} 与五类的 {@code counts}：
+     * 条目数不再有界，前端要能"上拉加载更多"；而记忆页顶部的分类入口要显示「各几条」，
+     * 这份统计与"翻到第几页、正在筛哪一类"无关，所以随每次加载一起返回，页面不必多开一次请求。
+     *
+     * @param memoryKey 只看某一类（点开某个分类入口时传）；不传/空白表示全部
      */
     @GetMapping
-    public ApiResponse<PageResult<UserChatMemoryDtos.MemoryRow>> list(PageQuery query) {
+    public ApiResponse<UserChatMemoryDtos.MemoryPage> list(@RequestParam(required = false) String memoryKey,
+                                                           PageQuery query) {
         Long userId = RequestContext.requireUserId();
-        return ApiResponse.ok(userChatMemoryService.listOwnForUser(userId, query));
+        return ApiResponse.ok(userChatMemoryService.listOwnForUser(userId, memoryKey, query));
     }
 
     /**

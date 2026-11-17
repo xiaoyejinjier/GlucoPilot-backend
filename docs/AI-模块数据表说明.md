@@ -365,7 +365,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 **用途**：`UserChatMemoryServiceImpl` 抽取/更新，`forInjection` 读出来注入系统提示词。
 
-**索引**：`PRIMARY(id)`、`uk_user_key_item(user_id,memory_key,item_hash,is_deleted)`（V70 起；原来是不含 item_hash 的 `uk_user_key_active`）、`idx_user(user_id)`
+**索引**：`PRIMARY(id)`、`uk_user_key_item(user_id,memory_key,item_hash,is_deleted)`（V71 起；原来是不含 item_hash 的 `uk_user_key_active`）、`idx_user(user_id)`
 
 | # | 列 | 类型 | 空 | 默认 | 含义 |
 | --- | --- | --- | --- | --- | --- |

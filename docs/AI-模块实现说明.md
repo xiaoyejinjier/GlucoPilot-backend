@@ -975,14 +975,16 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 
 **关键词兜底（默认关闭）**：`ai.memory.keyword-trigger-fallback=false`。没有 tool calling 的部署可以打开它，用「记住 / 记一下 / 帮我记 / 要记得 / 别忘了」猜意图；打开后窗口收窄到 `ai.memory.keyword-fallback-window-messages`（默认 6）条、只跑 1 窗，因为它是聊天主链路顺带触发的，不能像终局复盘那样一次回看 80 条。开关判定放在 `extractAsync` 里（属于「这条抽取要不要做」的策略），而不是调用点。
 
-**用户删除与「删了又回来」（`deleted-key-cooldown-days`）**：删除是逻辑删除（`is_deleted=1` + `deleted_at`，`chk_cum_del_consistent` 要求两者同时非空），所以库里能查到「这条被删过」。问题在于**自动抽取读的是会话原文**：同一段对话里那个事实还在，下一次 `session-ended` / `session-archived` 就会把它重新抽出来、又 insert 一条生效行（`uk_user_key_active` 带 `is_deleted`，不与已删行撞键），用户会看到「我明明删了」。
+**用户删除与「删了又回来」（`deleted-key-cooldown-days`）**：删除是逻辑删除（`is_deleted=1` + `deleted_at`，`chk_cum_del_consistent` 要求两者同时非空），所以库里能查到「这条被删过」。问题在于**自动抽取读的是会话原文**：同一段对话里那个事实还在，下一次 `session-ended` / `session-archived` 就会把它重新抽出来、又 insert 一条生效行（`uk_user_key_item` 带 `is_deleted`，不与已删行撞键），用户会看到「我明明删了」。
 
 因此 `write(...)` 的 insert 分支加了第五道闸：`WriteSource.BATCH && 最近 deleted_at 在 ai.memory.deleted-key-cooldown-days（默认 30，0=关闭）之内` → 拒绝重建，日志留痕。
 
 - **只挡 BATCH**：`EXPLICIT`（工具 `save_long_term_memory`）不受限——用户主动说「记住…」时，他自己就是最新意图，被冷却挡住反而像坏了。
-- **按键不按文本**：`selectLastDeletedAt` 是键级墓碑，命中率高、逻辑简单；代价是拦不住「同一个事实换了键」的分类抖动（同一句话这次记成 `habit`、下次记成 `preference`），这点已在代码注释里声明，不做文本相似度匹配。
-- **为什么不用新表**：`deleted_at` 本来就在，冷却判定一次单键查询即可；建墓碑表要多一张表、多一处一致性问题，收益不匹配。
-- **页面**：小程序 `pages/ai-memory/ai-memory` 展示五类记忆（不显示置信度百分比，只显示「最近更新」时间），支持单条删除与「清空全部记忆」，两个动作都要二次确认；接口见接口文档 2.40 / 2.41。
+- **按条目不按类**：V71 之后冷却查的是 `(user, key, item_hash)`，删掉「不吃香菜」不会连累「海鲜过敏」在 30 天内记不进来。代价是拦不住「同一个事实换了说法」的近似重复（同一句话换成同义词），这点已在代码注释里声明，不做文本相似度匹配。
+- **为什么不用新表**：`deleted_at` 本来就在，冷却判定一次单行查询即可；建墓碑表要多一张表、多一处一致性问题，收益不匹配。
+- **页面**：小程序 `pages/ai-memory/ai-memory` 最上方是「全部 + 五类」的分类入口（数字来自列表接口的 `counts`，点某一类带 `memoryKey` 重取），下面按当前筛选平铺条目（不显示置信度百分比，只显示「最近更新」时间）；删除有三级粒度——单条、清空本类、清空全部，都要二次确认。接口见接口文档 2.40 / 2.41。
+
+**分类入口的数字为什么放在列表接口里**：`GET /api/v1/users/me/ai-memories` 每次加载都顺带返回 `counts`（五类各自的有效条数，零值也出现）。一次聚合查询（`countActiveGroupByKey`）胜过页面为五个入口各发一次请求；换类时也只发一次列表请求，`counts` 随之刷新。统计失败只 WARN 并按 0 返回，不让"入口数字拿不到"把整个列表拖成失败态。
 
 **观测：日志里的「记忆=N」**。`ChatMemoryReadAdvisor` 的装配日志现在长这样：
 

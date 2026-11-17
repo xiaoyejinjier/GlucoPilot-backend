@@ -4,6 +4,8 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
 /**
  * C 端"系统记住了我什么"（③ 期合规自助）：查询与删除自己的跨会话长期记忆。
@@ -64,5 +66,40 @@ public final class UserChatMemoryDtos {
     public static class DeleteResult {
 
         private int deleted;
+    }
+
+    /**
+     * 记忆页的一次加载结果：当前页 + 全局的每类条数。
+     *
+     * <h2>为什么不直接用通用 {@code PageResult}</h2>
+     * 记忆页顶部是五个分类入口，它们要显示「各几条」——这个数字必须与当前页翻到第几页、
+     * 当前在筛哪一类<b>无关</b>。若只给分页对象，页面要么为统计再开一个接口（每次加载多一次往返），
+     * 要么把"总数"当成分类型的数字（筛过之后就不对了）。这个视图对象把两者合成一次响应。
+     *
+     * <h2>counts 的形状</h2>
+     * 键是 memoryKey，值是该类生效条数；<b>没有记忆的类也会出现（值 0）</b>，
+     * 前端渲染入口时就不必区分"这一类为零"与"这一类没出现在结果里"——
+     * 否则用户会看到入口数量忽隐忽现。后端新增的未知类同样会出现在这里，
+     * 前端可以据此保留它，而不是静默丢掉。
+     */
+    @Data
+    @Builder
+    public static class MemoryPage {
+
+        /** 当前页的条目。 */
+        private List<MemoryRow> records;
+
+        /** 符合当前筛选条件的总条数（不带筛选时为全部条数）。 */
+        private long total;
+
+        /** 总页数（按当前 pageSize 计算）。 */
+        private long pages;
+
+        private long pageNum;
+
+        private long pageSize;
+
+        /** 每类生效条数，不受当前筛选影响。 */
+        private Map<String, Integer> counts;
     }
 }

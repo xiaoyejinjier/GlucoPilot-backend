@@ -12,7 +12,6 @@ import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.api.PageQuery;
-import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -39,6 +38,7 @@ import com.threadfit.glucopilot.ai.memory.controller.UserChatMemoryController;
 import com.threadfit.glucopilot.ai.memory.dto.MemoryExtractionDtos;
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
 import com.threadfit.glucopilot.ai.memory.entity.ChatUserMemoryEntity;
+import com.threadfit.glucopilot.ai.memory.mapper.ChatUserMemoryKeyCount;
 import com.threadfit.glucopilot.ai.memory.mapper.ChatUserMemoryMapper;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 
@@ -232,18 +232,33 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * 条目不再有界（一类可以有很多条），全量返回会让"我到底被记了什么"变成滚不到底的列表。
      * 排序把同一类放在一起：用户想"把忌口都清掉"时能一眼看完一类；类内按最近更新排序，
      * 因为用户最可能想删的是刚被记错的那条。
+     *
+     * <h2>为什么还要带 counts</h2>
+     * 记忆页顶部是五个分类入口，各自要显示条数；这些数字与"正在第几页、正在筛哪一类"无关，
+     * 所以每次加载都顺手带一份全量分类型统计（一条 GROUP BY，见
+     * {@code ChatUserMemoryMapper#countActiveGroupByKey}），页面不必为它多开一次请求。
      */
     @Override
-    public PageResult<UserChatMemoryDtos.MemoryRow> listOwnForUser(Long userId, PageQuery query) {
+    public UserChatMemoryDtos.MemoryPage listOwnForUser(Long userId, String memoryKey, PageQuery query) {
         long pageNum = query == null ? 1 : Math.max(1, query.getPageNum());
         long pageSize = query == null ? 20 : Math.max(1, Math.min(100, query.getPageSize()));
+        String key = normalizeKeyFilter(memoryKey);
         if (userId == null) {
-            return PageResult.empty(pageNum, pageSize);
+            return UserChatMemoryDtos.MemoryPage.builder()
+                    .records(List.of())
+                    .total(0)
+                    .pages(0)
+                    .pageNum(pageNum)
+                    .pageSize(pageSize)
+                    .counts(emptyCounts())
+                    .build();
         }
         Page<ChatUserMemoryEntity> page = new Page<>(pageNum, pageSize);
         IPage<ChatUserMemoryEntity> result = memoryMapper.selectPage(page,
                 new LambdaQueryWrapper<ChatUserMemoryEntity>()
                         .eq(ChatUserMemoryEntity::getUserId, userId)
+                        // 只在真的筛某一类时拼条件：传空串等于「不限类」，不能让 wrapper 生成 memory_key = ''
+                        .eq(key != null, ChatUserMemoryEntity::getMemoryKey, key)
                         .orderByAsc(ChatUserMemoryEntity::getMemoryKey)
                         .orderByDesc(ChatUserMemoryEntity::getGmtModified)
                         .orderByDesc(ChatUserMemoryEntity::getId));
@@ -257,7 +272,65 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                     .updatedAt(row.getGmtModified())
                     .build());
         }
-        return PageResult.of(pageNum, pageSize, result.getTotal(), items);
+        long total = result.getTotal();
+        long pages = pageSize == 0 ? 0 : (total + pageSize - 1) / pageSize;
+        return UserChatMemoryDtos.MemoryPage.builder()
+                .records(items)
+                .total(total)
+                .pages(pages)
+                .pageNum(pageNum)
+                .pageSize(pageSize)
+                .counts(countsOf(userId))
+                .build();
+    }
+
+    /**
+     * 规范化「只看某一类」的参数。
+     *
+     * <p>空白 → {@code null}（不筛）；不在白名单 → 抛 400。
+     * 不做"未知就忽略"的降级：那样页面会显示全部记忆，用户看着是自己点的那一类、
+     * 内容却是混的，比直接报错更难查。
+     */
+    private String normalizeKeyFilter(String memoryKey) {
+        String key = memoryKey == null ? null : memoryKey.trim();
+        if (key == null || key.isEmpty()) {
+            return null;
+        }
+        if (!ALLOWED_KEYS.contains(key)) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "未知的记忆类型：" + key + "（只能是 " + String.join(" / ", ALLOWED_KEYS) + "）");
+        }
+        return key;
+    }
+
+    /**
+     * 每类生效条数；五类全部出现（没有记忆的类给 0），未知类按实际数量附在后面。
+     *
+     * <p>统计失败<b>不</b>让整个列表失败：条数只是入口上的装饰，
+     * 列表本身能出来更重要（这里与"读失败照常抛"不冲突——那个说的是条目内容）。
+     */
+    private Map<String, Integer> countsOf(Long userId) {
+        Map<String, Integer> counts = emptyCounts();
+        try {
+            for (ChatUserMemoryKeyCount row : memoryMapper.countActiveGroupByKey(userId)) {
+                if (row == null || row.getMemoryKey() == null) {
+                    continue;
+                }
+                counts.put(row.getMemoryKey(), row.getTotal() == null ? 0 : row.getTotal());
+            }
+        } catch (RuntimeException e) {
+            log.warn("统计长期记忆条数失败（入口数字按 0 显示）userId={}", userId, e);
+        }
+        return counts;
+    }
+
+    /** 五类键按固定顺序零值填满，前端渲染入口时不必自己补。 */
+    private static Map<String, Integer> emptyCounts() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (String key : ALLOWED_KEYS) {
+            counts.put(key, 0);
+        }
+        return counts;
     }
 
     /** 用户自助删除全部长期记忆（合规：用户有权清掉系统对他的记忆）。返回删除条数。 */

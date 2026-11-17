@@ -58,7 +58,7 @@ class TextAiDisabledServicesTest {
                 UserChatMemoryServiceImpl memory = context.getBean(UserChatMemoryServiceImpl.class);
                 memory.extractAsync(42L, 7L, "session-end");
                 verifyNoInteractions(executor, guard);
-                assertThat(memory.listOwnForUser(42L, new PageQuery()).getRecords()).isEmpty();
+                assertThat(memory.listOwnForUser(42L, null, new PageQuery()).getRecords()).isEmpty();
                 assertThat(memory.deleteAllForUser(42L)).isEqualTo(2);
                 verify(mapper).logicDeleteAllByUser(42L, null);
             });

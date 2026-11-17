@@ -381,7 +381,9 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 10 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
 | 11 | `deleted_by` | bigint unsigned | YES | — | 删除人（用户自助删除时写 NULL） |
 | 12 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 13 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 13 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除；与 `deleted_at` 成对写入（`chk_cum_del_consistent`） |
+
+**删除与冷却**：用户在小程序记忆页删除时走 `logicDeleteByKey`（单条）或 `logicDeleteAllByUser`（全部），都只写删除三列。`deleted_at` 还被写入侧当墓碑用：`write(...)` 的 insert 分支查 `selectLastDeletedAt`，若 30 天内（`ai.memory.deleted-key-cooldown-days`）删过同一 `memory_key`，则**拒绝自动重建**（只拦 `WriteSource.BATCH`，工具路径不受限）。所以「已删行」是这个表里有业务含义的数据，物理删除只发生在注销（`purgeByUserId`）。
 
 ---
 

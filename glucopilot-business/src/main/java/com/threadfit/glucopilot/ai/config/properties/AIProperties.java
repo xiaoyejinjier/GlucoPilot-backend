@@ -243,6 +243,19 @@ public class AIProperties {
         /** 抽取输入的字符上限（超长只取最近的部分）。 */
         private int memoryExtractInputMaxChars = 3000;
 
+        /**
+         * 删除后的冷却天数（默认 30）：用户删掉某个键的记忆后，<b>自动抽取</b>在这段时间内不许把它重新插回来。
+         * <p>
+         * 要解决的问题是"删了又回来"：删除是逻辑删除，而会话结束时的抽取读的是会话原文——
+         * 同一段对话还在，那个事实就还会被读出来、再 insert 一条生效行（唯一键带 {@code is_deleted}，
+         * 不会撞键），用户看到的就是删除没生效。
+         * <p>
+         * 只作用于 {@code WriteSource.BATCH}（会话结束 / 归档补齐）；用户当轮亲口说的
+         * （{@code save_long_term_memory} 工具路径，{@code WriteSource.EXPLICIT}）不受限——
+         * 他真改主意时不该被冷却挡住。{@code 0} 表示关闭该闸门。
+         */
+        private int deletedKeyCooldownDays = 30;
+
         /** 抽取输出的 token 上限（只输出 JSON）。 */
         private int memoryExtractMaxTokens = 500;
 

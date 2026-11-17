@@ -10,6 +10,8 @@ import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
+import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.exception.BizException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.extern.slf4j.Slf4j;
@@ -226,6 +228,33 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         return deleted;
     }
 
+    /**
+     * 用户自助删除某一个键的记忆（记忆页每张卡片的「删除」）。
+     *
+     * <p>键先过白名单：{@code DELETE /users/me/ai-memories/{memoryKey}} 的路径参数是客户端传的，
+     * 不校验就会把"随便什么字符串"变成一次 UPDATE（虽然删不到东西，但日志里会留下噪声，
+     * 而且用户拼错键时应当看到明确的 400，而不是"删除成功 0 条"的错觉）。
+     *
+     * <p>删除之后由写入侧的冷却闸门负责"别再自动记回来"，见
+     * {@link #write(Long, String, String, Integer, Long, WriteSource)}。
+     */
+    @Override
+    public int deleteByKeyForUser(Long userId, String memoryKey) {
+        if (userId == null) {
+            return 0;
+        }
+        String normalizedKey = memoryKey == null ? "" : memoryKey.trim();
+        if (!UserChatMemoryService.ALLOWED_KEYS.contains(normalizedKey)) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "未知的记忆类型：" + normalizedKey + "，只能是 diet_taboo / glucose_goal / "
+                            + "health_context / habit / preference");
+        }
+        // 与删除全部同样：显式 UPDATE 三列，绕开 MP 逻辑删除只写 is_deleted 的坑。
+        int deleted = memoryMapper.logicDeleteByKey(userId, normalizedKey, null);
+        log.info("用户自助删除单条长期记忆 userId={} key={} 条数={}", userId, normalizedKey, deleted);
+        return deleted;
+    }
+
     // ------------------------------------------------------------------ 写入
 
     /**
@@ -288,6 +317,11 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                 .eq(ChatUserMemoryEntity::getMemoryKey, normalizedKey)
                 .last("LIMIT 1"));
         if (existing == null) {
+            // 第五道闸（防复活）：用户刚刚删过这个键，自动抽取不许把它重新插回来。
+            // 只拦 BATCH（会话结束/归档补齐）；EXPLICIT 是用户当轮亲口说的，照记。
+            if (source == WriteSource.BATCH && withinDeletedCooldown(userId, normalizedKey)) {
+                return SaveOutcome.rejected("该记忆刚被用户删除，冷却期内不自动重建");
+            }
             ChatUserMemoryEntity row = new ChatUserMemoryEntity();
             row.setUserId(userId);
             row.setMemoryKey(normalizedKey);
@@ -329,6 +363,38 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      */
     boolean upsert(Long userId, String key, String text, Integer confidence, Long sourceSessionId) {
         return write(userId, key, text, confidence, sourceSessionId, WriteSource.BATCH).saved();
+    }
+
+    /**
+     * 这个键是否处在"用户刚删过"的冷却期里（只用来阻止自动抽取把删掉的记忆重新插回来）。
+     *
+     * <p>为什么需要它：删除是逻辑删除，而会话结束时的抽取读的是<b>会话原文</b>——
+     * 用户删掉"不吃香菜"之后，只要那段对话还在，下一轮抽取就会把这个事实重新读出来并 insert
+     * 一条新的生效行（{@code uk_user_key_active} 带 {@code is_deleted}，所以不撞唯一键）。
+     * 用户看到的就是"删了又回来"。
+     *
+     * <p>判断只看 {@code deleted_at}，因此不需要新表、不需要清理，冷却到期自动恢复。
+     * 查询失败按"不在冷却期"处理：宁可让它复活（用户还能再删一次），也不要因为一次读失败把记忆饿死。
+     */
+    private boolean withinDeletedCooldown(Long userId, String key) {
+        int days = aiProperties.getMemory().getDeletedKeyCooldownDays();
+        if (days <= 0) {
+            return false;
+        }
+        LocalDateTime lastDeletedAt;
+        try {
+            lastDeletedAt = memoryMapper.selectLastDeletedAt(userId, key);
+        } catch (RuntimeException e) {
+            log.warn("查询记忆删除时间失败（按不在冷却期处理）userId={} key={}", userId, key, e);
+            return false;
+        }
+        if (lastDeletedAt == null || lastDeletedAt.isBefore(LocalDateTime.now().minusDays(days))) {
+            return false;
+        }
+        // 日志留痕是这套闸门可解释性的全部：用户问"为什么没记住"时，这行是唯一证据。
+        log.info("跳过处于删除冷却期的长期记忆 userId={} key={} 删除时间={} 冷却天数={}",
+                userId, key, lastDeletedAt, days);
+        return true;
     }
 
     /** 账号注销：物理删除该用户全部长期记忆。 */

@@ -171,6 +171,10 @@ ai:
     # 不能像终局复盘那样一次回看 80 条。
     keyword-trigger-fallback: false
     keyword-fallback-window-messages: 6
+    # 删除后的冷却天数：用户在记忆页删掉某个键之后，自动抽取（会话结束/归档补齐）
+    # 在这段时间内不许把这个键重新插回来，否则就是"删了又回来"。
+    # 只拦自动抽取；用户当轮亲口说的（save_long_term_memory 工具）不受影响。0 = 关闭。
+    deleted-key-cooldown-days: 30
 
   # 医疗安全硬拦截：命中敏感词的请求不会发给模型，直接返回固定话术。
   # 提示词里的合规约束是软约束（模型可能不遵守），这里是硬约束。

@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
@@ -31,10 +32,16 @@ import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
  *       两者语义不同，混用会让审计字段落到错误的人身上。</li>
  * </ul>
  *
- * <h2>为什么删除是"全部"而不是按条删</h2>
- * 与管理端 4.15 同一理由：用户说"把你们记的关于我的东西删掉"时，他要的是"清空"，
- * 而不是在几条记忆里逐条挑；只删一部分还会让用户以为已经清空（见 {@code AdminChatMemoryController} 注释）。
+ * <h2>删除的两级粒度：清空 + 单条</h2>
+ * <ul>
+ *   <li>{@code DELETE /} 清空：用户说"把你们记的关于我的东西删掉"时，他要的是这个（同管理端 4.15 的理由）；</li>
+ *   <li>{@code DELETE /{memoryKey}} 单条：往往只有一条记错了（"我不吃香菜"其实是不吃葱），
+ *       清空会连带删掉四条正确的记忆，用户还得重新讲一遍。粒度用键而不是内部主键——
+ *       键受白名单约束、同一时间至多一条生效行，{@code (user_id, memory_key)} 就是用户眼里的"这一条"，
+ *       而把 {@code id} 露给客户端等于提供一个越权删别人记忆的入口。</li>
+ * </ul>
  * 删除是<b>逻辑删除</b>：留痕是为了能解释"系统曾经记过什么"，但用户侧的读取路径已经查不到它们。
+ * 删除之后由写入侧的冷却（{@code ai.memory.deleted-key-cooldown-days}）挡住"自动抽取把它记回来"。
  */
 @Slf4j
 @RestController
@@ -64,6 +71,21 @@ public class UserChatMemoryController {
         Long userId = RequestContext.requireUserId();
         int deleted = userChatMemoryService.deleteAllForUser(userId);
         log.info("用户自助删除长期记忆 userId={} 条数={}", userId, deleted);
+        return ApiResponse.ok(UserChatMemoryDtos.DeleteResult.builder().deleted(deleted).build());
+    }
+
+    /**
+     * 删掉某一个键的记忆（记忆页每张卡片的「删除」）。
+     * <p>
+     * 幂等：本来就没有这条也返回 {@code deleted = 0} 的成功响应，重复点击不会弹错。
+     * 键不合法（不在五类白名单里）由服务层抛 400——让用户看到"键不存在"，
+     * 而不是一个"删除成功 0 条"的错觉。
+     */
+    @DeleteMapping("/{memoryKey}")
+    public ApiResponse<UserChatMemoryDtos.DeleteResult> deleteOne(@PathVariable String memoryKey) {
+        Long userId = RequestContext.requireUserId();
+        int deleted = userChatMemoryService.deleteByKeyForUser(userId, memoryKey);
+        log.info("用户自助删除单条长期记忆 userId={} key={} 条数={}", userId, memoryKey, deleted);
         return ApiResponse.ok(UserChatMemoryDtos.DeleteResult.builder().deleted(deleted).build());
     }
 }

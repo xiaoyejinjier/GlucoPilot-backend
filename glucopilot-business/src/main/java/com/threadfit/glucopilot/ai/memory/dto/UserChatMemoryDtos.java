@@ -15,7 +15,8 @@ import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
  * 那是给运营做"这条记忆是哪次对话抽出来的、要不要人工干预"的判断用的。
  * 用户自己不需要这些内部标识，也<b>不应该</b>看到：
  * <ul>
- *   <li>{@code id} 是内部主键，露出去只会诱导前端拿它做单条删除，而删除的正确粒度是"全部"；</li>
+ *   <li>{@code id} 是内部主键，露出去只会诱导前端拿它做单条删除——而单条删除的正确粒度是
+ *       {@code memoryKey}（见 {@code UserChatMemoryController} 的两级删除），所以这里只给键、不给 id；</li>
  *   <li>{@code sourceSessionId} 指向一段可能已被用户删除的对话——把它的存在告诉用户，
  *       等于变相说明"那段对话还在系统里留有痕迹"；</li>
  *   <li>{@code isAuto} 是运营侧的启发式判据（见 {@code AdminChatMemoryDtos}），

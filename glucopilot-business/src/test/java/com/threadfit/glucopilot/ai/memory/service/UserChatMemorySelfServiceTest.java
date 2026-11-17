@@ -39,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -300,6 +301,86 @@ class UserChatMemorySelfServiceTest {
                 assertEquals(1, result.getInt("is_deleted"));
                 assertTrue(result.getTimestamp("deleted_at") != null,
                         "deleted_at 必须与 is_deleted 成对写入，否则 CHECK 会拒绝");
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 单条删除（记忆页每张卡片的「删除」）
+
+    /**
+     * 契约：{@code DELETE /{memoryKey}} 返回真的删了几条。
+     * <p>
+     * 之所以要有这一级粒度：往往只有一条记错了（"我不吃香菜"其实是不吃葱），
+     * 清空会连带删掉另外几条正确的记忆，用户还得重新讲一遍。
+     */
+    @Test
+    void 契约单条删除返回deleted条数() throws Exception {
+        doReturn(1).when(memoryMapper).logicDeleteByKey(USER_ID, "habit", null);
+
+        MockMvcBuilders.standaloneSetup(new UserChatMemoryController(service)).build()
+                .perform(delete("/api/v1/users/me/ai-memories/habit"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.deleted").value(1));
+    }
+
+    /**
+     * 键不在白名单里要 400，而且一次库都不写。
+     * <p>
+     * 路径参数是客户端拼的：不校验就等于让"任意字符串"变成一次 UPDATE，
+     * 用户拼错键时还会得到"删除成功 0 条"的错觉。
+     */
+    @Test
+    void 单条删除未知记忆类型返回400且不写库() throws Exception {
+        MockMvcBuilders.standaloneSetup(new UserChatMemoryController(service))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build()
+                .perform(delete("/api/v1/users/me/ai-memories/not-a-memory-key"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40000));
+
+        verify(memoryMapper, never()).logicDeleteByKey(any(), any(), any());
+    }
+
+    /**
+     * 真库：单条删除只影响那一个键，别人的同名键一条不动，且 {@code is_deleted}/{@code deleted_at}
+     * 成对写入（{@code chk_cum_del_consistent}）；重复删除是幂等的 0。
+     */
+    @Test
+    void 真实库上单条删除只删指定键且成对写删除列() throws Exception {
+        UnpooledDataSource datasource = memoryDatasource();
+        createMemoryTable(datasource);
+        try (var connection = datasource.getConnection(); var sql = connection.createStatement()) {
+            sql.execute("INSERT INTO chat_user_memory "
+                    + "(id,user_id,memory_key,memory_text,confidence,created_by,is_deleted,gmt_modified) VALUES "
+                    + "(1,7,'diet_taboo','对花生过敏',95,0,0,TIMESTAMP '2026-10-01 10:00:00'),"
+                    + "(2,7,'habit','晚饭后散步30分钟',80,5,0,TIMESTAMP '2026-10-03 10:00:00'),"
+                    + "(4,8,'habit','别人的记忆',80,0,0,TIMESTAMP '2026-10-04 10:00:00')");
+        }
+        SqlSessionFactory sessionFactory = memorySqlSessionFactory(datasource);
+        sessionFactory.getConfiguration().addMapper(ChatUserMemoryMapper.class);
+        try (SqlSession session = sessionFactory.openSession(true)) {
+            ChatUserMemoryMapper realMapper = session.getMapper(ChatUserMemoryMapper.class);
+            UserChatMemoryService realService = realServiceWith(realMapper);
+
+            assertEquals(1, realService.deleteByKeyForUser(USER_ID, "habit"), "只删 habit 这一个键");
+
+            List<UserChatMemoryDtos.MemoryRow> mine = realService.listOwnForUser(USER_ID);
+            assertEquals(1, mine.size(), "另一个键还在");
+            assertEquals("diet_taboo", mine.get(0).getMemoryKey());
+            assertEquals(1, realService.listOwnForUser(OTHER_USER_ID).size(), "别人的同名键不受影响");
+
+            assertEquals(0, realService.deleteByKeyForUser(USER_ID, "habit"), "重复删除是幂等的 0");
+
+            try (var statement = session.getConnection().createStatement();
+                 var result = statement.executeQuery(
+                         "SELECT is_deleted, deleted_at, deleted_by FROM chat_user_memory WHERE id = 2")) {
+                assertTrue(result.next());
+                assertEquals(1, result.getInt("is_deleted"));
+                assertTrue(result.getTimestamp("deleted_at") != null,
+                        "deleted_at 必须与 is_deleted 成对写入，否则 CHECK 会拒绝");
+                assertTrue(result.getObject("deleted_by") == null,
+                        "用户行使删除权，不写运营 ID");
             }
         }
     }

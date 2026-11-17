@@ -96,6 +96,21 @@ public interface UserChatMemoryService {
     int deleteAllForUser(Long userId);
 
     /**
+     * 用户自助删除<b>某一个键</b>的记忆（记忆页每张卡片的「删除」）。
+     *
+     * <p>为什么在"全部清空"之外还要有单条删除：用户往往只错记了其中一条（"我不吃香菜"其实是不吃葱），
+     * 而清空会连带删掉四条正确的记忆，他反而要重新讲一遍。粒度按 {@code memoryKey} 而不是内部主键，
+     * 见 {@code UserChatMemoryDtos} 的字段取舍。
+     *
+     * <p>删除是逻辑删除 + 写入侧冷却（{@code ai.memory.deleted-key-cooldown-days}）：
+     * 否则会话结束时的自动抽取会把同一个事实从原文里再读出来、再插回去。
+     *
+     * @return 1 = 删掉了；0 = 本来就没有这条（幂等）
+     * @throws com.threadfit.glucopilot.common.exception.BizException 键不在白名单里时抛 400
+     */
+    int deleteByKeyForUser(Long userId, String memoryKey);
+
+    /**
      * 账号注销：物理删除该用户全部长期记忆。
      * <p>
      * 与 {@link #deleteAllForUser} 的区别是"逻辑删除 vs 物理删除"：注销后不能留行，

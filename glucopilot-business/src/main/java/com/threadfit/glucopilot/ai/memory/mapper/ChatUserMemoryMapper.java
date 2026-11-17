@@ -8,6 +8,8 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import com.threadfit.glucopilot.ai.memory.entity.ChatUserMemoryEntity;
 
+import java.time.LocalDateTime;
+
 /**
  * 长期记忆读写（chat_user_memory）。
  *
@@ -38,6 +40,40 @@ public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
     @Update("UPDATE chat_user_memory SET is_deleted = 1, deleted_at = NOW(3), deleted_by = #{deletedBy} "
             + "WHERE user_id = #{userId} AND is_deleted = 0")
     int logicDeleteAllByUser(@Param("userId") Long userId, @Param("deletedBy") Long deletedBy);
+
+    /**
+     * 逻辑删除某个键的长期记忆（C 端记忆页「删除这一条」）。
+     *
+     * <p>为什么按 {@code memory_key} 而不是按 {@code id}：用户面对的是"系统记下的这条忌口"，
+     * 不是数据库里的某一行；键受 {@code ALLOWED_KEYS} 白名单约束、同一时间至多一条生效行，
+     * 所以 {@code (user_id, memory_key)} 就是用户眼里的"这一条"。用 id 反而要求 DTO 把内部主键
+     * 暴露给客户端——那是越权删别人记忆的入口。
+     *
+     * <p>与 {@link #logicDeleteAllByUser} 同样三个列一起改：DDL 的 {@code chk_cum_del_consistent}
+     * 要求删除态必须同时写 {@code deleted_at}，只置 {@code is_deleted} 会被 MySQL 拒绝。
+     *
+     * @param deletedBy 恒为 {@code null}：用户行使删除权，不是运营代删（运营留痕走 ops_audit_log）
+     * @return 1 = 删掉了；0 = 本来就没有这条（幂等，不算错误）
+     */
+    @Update("UPDATE chat_user_memory SET is_deleted = 1, deleted_at = NOW(3), deleted_by = #{deletedBy} "
+            + "WHERE user_id = #{userId} AND memory_key = #{memoryKey} AND is_deleted = 0")
+    int logicDeleteByKey(@Param("userId") Long userId,
+                         @Param("memoryKey") String memoryKey,
+                         @Param("deletedBy") Long deletedBy);
+
+    /**
+     * 该用户这个键<b>最近一次被删除</b>的时间（没删过则为 null）。
+     *
+     * <p>用途只有一个：写入侧的"防复活"闸门——用户删掉一条记忆后，会话结束时的自动抽取
+     * 会从会话原文里把同一个事实再读出来、再插回去，用户看到的就是"删除没生效"。
+     * 判断依据只能是 {@code deleted_at}（DDL 保证删除态一定有值），所以这里<b>刻意绕开</b>
+     * {@code @TableLogic}：要查的正是被它隐藏掉的已删行。
+     *
+     * <p>走 {@code uk_user_key_active(user_id, memory_key, is_deleted)} 的键前缀，成本可忽略。
+     */
+    @Select("SELECT MAX(deleted_at) FROM chat_user_memory "
+            + "WHERE user_id = #{userId} AND memory_key = #{memoryKey} AND is_deleted = 1")
+    LocalDateTime selectLastDeletedAt(@Param("userId") Long userId, @Param("memoryKey") String memoryKey);
 
     /**
      * 账号注销：物理删除该用户的全部长期记忆。

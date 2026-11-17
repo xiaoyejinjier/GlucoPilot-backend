@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -27,6 +29,7 @@ import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
 import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -37,7 +40,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/** 注销状态机与 CAS 的关键分支（其余分支由接口层校验覆盖）。 */
+/** 注销提交与验证码分支（恢复逻辑已迁至 AccountCancellationRecovery，见其单测）。 */
 @ExtendWith(MockitoExtension.class)
 class AccountCancellationServiceTest {
 
@@ -45,8 +48,14 @@ class AccountCancellationServiceTest {
     @Mock private UserAccountCancellationMapper cancellationMapper;
     @Mock private AuthService authService;
     @Mock private CaptchaService captchaService;
+    @Mock private WalletCheckService walletCheckService;
 
     @InjectMocks private AccountCancellationServiceImpl service;
+
+    @BeforeEach
+    void stubWalletCheck() {
+        lenient().when(walletCheckService.check(anyLong())).thenReturn(WalletCheckService.WalletCheckResult.ok());
+    }
 
     @org.junit.jupiter.api.BeforeAll
     static void initTableInfo() {
@@ -58,6 +67,17 @@ class AccountCancellationServiceTest {
     }
 
     @Test
+    void submitRejectsImmediateMode() {
+        SubmitRequest request = submit(CancellationMode.IMMEDIATE.getCode());
+
+        BizException error = assertThrows(BizException.class, () -> service.submit(1L, request));
+
+        assertEquals(ErrorCode.BAD_REQUEST, error.getErrorCode());
+        verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
+        verify(authService, never()).revokeAllSessions(any());
+    }
+
+    @Test
     void submitIsRejectedForAlreadyCancelledAccount() {
         when(userAccountMapper.selectById(1L))
                 .thenReturn(account(1L, AccountStatus.CANCELLED.getCode()));
@@ -66,14 +86,14 @@ class AccountCancellationServiceTest {
         BizException error =
                 assertThrows(
                         BizException.class,
-                        () -> service.submit(1L, submit(CancellationMode.IMMEDIATE.getCode())));
+                        () -> service.submit(1L, submit(CancellationMode.ISOLATE_7D.getCode())));
 
         assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
         verify(authService, never()).revokeAllSessions(any());
     }
 
     @Test
-    void submitWithIsolateModeImmediatelyBlocksLoginAndWritesSevenDayDeadline() {
+    void submitWritesSevenDayDeadlineAndBlocksLogin() {
         UserAccount account = account(1L, AccountStatus.NORMAL.getCode());
         account.setPhone("13812345678");
         when(userAccountMapper.selectById(1L)).thenReturn(account);
@@ -98,8 +118,10 @@ class AccountCancellationServiceTest {
                         && inserted.getValue().getIsolateUntil().isBefore(after));
         // scene 精确匹配：注销只能消费 cancel 场景验证码
         verify(authService).consumeSmsCode("13812345678", "123456", "cancel");
+        // 钱包校验占位被调用
+        verify(walletCheckService).check(1L);
 
-        // 提交即置可恢复态：登录仍可用，但会被门禁限制在白名单
+        // 提交即置可恢复态：登录仍可用（窗口内），但受门禁限制
         assertEquals(AccountStatus.CANCELLED_RECOVERABLE.getCode(), account.getAccountStatus());
         verify(authService).revokeAllSessions(1L);
     }
@@ -111,7 +133,7 @@ class AccountCancellationServiceTest {
         account.setOpenid("wx-openid-1");
         when(userAccountMapper.selectById(1L)).thenReturn(account);
         when(cancellationMapper.selectList(any())).thenReturn(List.of());
-        SubmitRequest request = submit(CancellationMode.IMMEDIATE.getCode());
+        SubmitRequest request = submit(CancellationMode.ISOLATE_7D.getCode());
         request.setVerifyType(CancellationVerifyChannel.WECHAT.getCode());
         request.setVerifyCode(null);
         request.setWechatCode("wx-code-1");
@@ -148,7 +170,7 @@ class AccountCancellationServiceTest {
         BizException error =
                 assertThrows(
                         BizException.class,
-                        () -> service.submit(1L, submit(CancellationMode.IMMEDIATE.getCode())));
+                        () -> service.submit(1L, submit(CancellationMode.ISOLATE_7D.getCode())));
 
         assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
         verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
@@ -157,97 +179,32 @@ class AccountCancellationServiceTest {
 
     @Test
     void submitIsIdempotentWhenAnActiveRecordAlreadyExists() {
-        UserAccount account = account(1L, AccountStatus.CANCELLING.getCode());
+        UserAccount account = account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode());
         UserAccountCancellation active = new UserAccountCancellation();
         active.setId(7L);
-        active.setMode(CancellationMode.IMMEDIATE.getCode());
+        active.setMode(CancellationMode.ISOLATE_7D.getCode());
         active.setStatus(CancellationStatus.PENDING.getCode());
         when(userAccountMapper.selectById(1L)).thenReturn(account);
         when(cancellationMapper.selectList(any())).thenReturn(List.of(active));
 
-        var view = service.submit(1L, submit(CancellationMode.IMMEDIATE.getCode()));
+        var view = service.submit(1L, submit(CancellationMode.ISOLATE_7D.getCode()));
 
-        assertEquals(AccountStatus.CANCELLING.getCode(), view.getAccountStatus());
-        // 幂等：不重复写凭据、不重复发验证码
+        assertEquals(AccountStatus.CANCELLED_RECOVERABLE.getCode(), view.getAccountStatus());
+        // 幂等：不重复写凭据、不重复校验
         verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
         verify(authService, never()).consumeSmsCode(any(), any(), any());
     }
 
     @Test
-    void recoverFailsWhenWorkerAlreadyClaimedTheRecord() {
-        UserAccount account = account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode());
+    void submitIsIdempotentForLegacyCancellingAccount() {
+        UserAccount account = account(1L, AccountStatus.CANCELLING.getCode());
         when(userAccountMapper.selectById(1L)).thenReturn(account);
-        when(cancellationMapper.selectList(any()))
-                .thenReturn(
-                        List.of(
-                                recoverableRecord(
-                                        LocalDateTime.now().plusDays(3),
-                                        AccountStatus.NORMAL.getCode())));
-        when(cancellationMapper.markRecovered(7L)).thenReturn(0);
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
 
-        BizException error = assertThrows(BizException.class, () -> service.recover(1L));
+        var view = service.submit(1L, submit(CancellationMode.ISOLATE_7D.getCode()));
 
-        assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
-        verify(userAccountMapper, never()).updateById(any(UserAccount.class));
-        // 账号状态必须保持可恢复态：不能"用户以为恢复了、数据却在被删"
-        assertEquals(AccountStatus.CANCELLED_RECOVERABLE.getCode(), account.getAccountStatus());
-    }
-
-    @Test
-    void recoverRestoresNormalOnlyWhenCasWins() {
-        UserAccount account = account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode());
-        when(userAccountMapper.selectById(1L)).thenReturn(account);
-        when(cancellationMapper.selectList(any()))
-                .thenReturn(
-                        List.of(
-                                recoverableRecord(
-                                        LocalDateTime.now().plusDays(3),
-                                        AccountStatus.NORMAL.getCode())));
-        when(cancellationMapper.markRecovered(7L)).thenReturn(1);
-
-        var view = service.recover(1L);
-
-        assertEquals(AccountStatus.NORMAL.getCode(), view.getAccountStatus());
-        verify(userAccountMapper).updateById(account);
-        verify(authService, never()).consumeSmsCode(any(), any(), any());
-        verify(authService, never()).consumeEmailCode(any(), any(), any());
-    }
-
-    @Test
-    void recoverRestoresDisabledPreStatusInsteadOfWashingItClean() {
-        // DISABLED 账号注销再恢复：仍还原为 DISABLED，不允许借注销洗白
-        UserAccount account = account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode());
-        when(userAccountMapper.selectById(1L)).thenReturn(account);
-        when(cancellationMapper.selectList(any()))
-                .thenReturn(
-                        List.of(
-                                recoverableRecord(
-                                        LocalDateTime.now().plusDays(3),
-                                        AccountStatus.DISABLED.getCode())));
-        when(cancellationMapper.markRecovered(7L)).thenReturn(1);
-
-        var view = service.recover(1L);
-
-        assertEquals(AccountStatus.DISABLED.getCode(), view.getAccountStatus());
-        assertEquals(AccountStatus.DISABLED.getCode(), account.getAccountStatus());
-        verify(userAccountMapper).updateById(account);
-    }
-
-    @Test
-    void recoverIsRejectedAfterTheIsolateWindowCloses() {
-        UserAccount account = account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode());
-        when(userAccountMapper.selectById(1L)).thenReturn(account);
-        when(cancellationMapper.selectList(any()))
-                .thenReturn(
-                        List.of(
-                                recoverableRecord(
-                                        LocalDateTime.now().minusMinutes(1),
-                                        AccountStatus.NORMAL.getCode())));
-
-        BizException error = assertThrows(BizException.class, () -> service.recover(1L));
-
-        assertEquals(ErrorCode.CONFLICT, error.getErrorCode());
-        verify(cancellationMapper, never()).markRecovered(any());
+        assertEquals(AccountStatus.CANCELLING.getCode(), view.getAccountStatus());
+        verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
     }
 
     @Test
@@ -294,7 +251,7 @@ class AccountCancellationServiceTest {
         account.setPhone("13812345678");
         when(userAccountMapper.selectById(1L)).thenReturn(account);
         when(cancellationMapper.selectList(any())).thenReturn(List.of());
-        SubmitRequest request = submit(CancellationMode.IMMEDIATE.getCode());
+        SubmitRequest request = submit(CancellationMode.ISOLATE_7D.getCode());
         request.setVerifyType(CancellationVerifyChannel.EMAIL.getCode());
 
         BizException error = assertThrows(BizException.class, () -> service.submit(1L, request));
@@ -325,7 +282,7 @@ class AccountCancellationServiceTest {
         account.setPhone("13812345678");
         when(userAccountMapper.selectById(1L)).thenReturn(account);
         when(cancellationMapper.selectList(any())).thenReturn(List.of());
-        SubmitRequest request = submit(CancellationMode.IMMEDIATE.getCode());
+        SubmitRequest request = submit(CancellationMode.ISOLATE_7D.getCode());
         request.setVerifyType(CancellationVerifyChannel.WECHAT.getCode());
         request.setWechatCode("wx-code-1");
 
@@ -336,24 +293,161 @@ class AccountCancellationServiceTest {
         verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
     }
 
+    @Test
+    void precheckAllowsNormalAccount() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.NORMAL.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+
+        var view = service.precheck(1L);
+
+        assertTrue(view.getCanCancel());
+        assertEquals(null, view.getBlockCode());
+        assertEquals(4, view.getChecks().size());
+        assertTrue(view.getChecks().stream().allMatch(check -> Boolean.TRUE.equals(check.getPassed())));
+    }
+
+    @Test
+    void precheckBlocksDisabledAccount() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.DISABLED.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("ACCOUNT_DISABLED", view.getBlockCode());
+        assertEquals(
+                Boolean.FALSE,
+                view.getChecks().stream()
+                        .filter(check -> "ACCOUNT_SAFE".equals(check.getCode()))
+                        .findFirst()
+                        .orElseThrow()
+                        .getPassed());
+    }
+
+    @Test
+    void precheckReportsActiveApplicationWithDeadline() {
+        UserAccountCancellation active = pending(7L, LocalDateTime.now().plusDays(7));
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of(active));
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("ALREADY_APPLIED", view.getBlockCode());
+        assertNotNull(view.getIsolateUntil());
+    }
+
+    @Test
+    void precheckTreatsRecoverableStatusWithoutRecordAsAlreadyApplied() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.CANCELLED_RECOVERABLE.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+
+        var view = service.precheck(1L);
+
+        assertEquals("ALREADY_APPLIED", view.getBlockCode());
+        assertEquals(null, view.getIsolateUntil());
+    }
+
+    @Test
+    void precheckReportsCancellingAndCancelledAccounts() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.CANCELLING.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+        assertEquals("CANCELLING", service.precheck(1L).getBlockCode());
+
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.CANCELLED.getCode()));
+        assertEquals("ACCOUNT_CANCELLED", service.precheck(1L).getBlockCode());
+    }
+
+    @Test
+    void precheckBlocksWithin24HoursAfterRecovery() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.NORMAL.getCode()));
+        UserAccountCancellation recovered = new UserAccountCancellation();
+        recovered.setId(9L);
+        recovered.setStatus(CancellationStatus.RECOVERED.getCode());
+        recovered.setRecoveredAt(LocalDateTime.now().minusHours(23));
+        // 第一次 = findActive（无）；第二次 = latestRecoveredAt（23 小时前）
+        when(cancellationMapper.selectList(any()))
+                .thenReturn(List.of())
+                .thenReturn(List.of(recovered));
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("RECENTLY_RECOVERED", view.getBlockCode());
+        assertFalse(
+                view.getChecks().stream()
+                        .filter(check -> "RECENTLY_RECOVERED".equals(check.getCode()))
+                        .findFirst()
+                        .orElseThrow()
+                        .getPassed());
+    }
+
+    @Test
+    void precheckBlocksWhenWalletCheckFails() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.NORMAL.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+        when(walletCheckService.check(1L))
+                .thenReturn(new WalletCheckService.WalletCheckResult(false, "BALANCE"));
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("ASSET_PENDING", view.getBlockCode());
+    }
+
+    @Test
+    void submitIsRejectedForDisabledAccount() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.DISABLED.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+
+        BizException error =
+                assertThrows(
+                        BizException.class,
+                        () -> service.submit(1L, submit(CancellationMode.ISOLATE_7D.getCode())));
+
+        assertEquals(ErrorCode.FORBIDDEN, error.getErrorCode());
+        assertTrue(error.getMessage().contains("封禁"));
+        verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
+        verify(authService, never()).revokeAllSessions(any());
+    }
+
+    @Test
+    void submitIsIdempotentWhenDisabledButApplicationExists() {
+        UserAccountCancellation active = pending(7L, LocalDateTime.now().plusDays(7));
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.DISABLED.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of(active));
+
+        var view = service.submit(1L, submit(CancellationMode.ISOLATE_7D.getCode()));
+
+        assertEquals(AccountStatus.DISABLED.getCode(), view.getAccountStatus());
+        verify(cancellationMapper, never()).insert(any(UserAccountCancellation.class));
+    }
+
+    private static UserAccountCancellation pending(long id, LocalDateTime isolateUntil) {
+        UserAccountCancellation record = new UserAccountCancellation();
+        record.setId(id);
+        record.setUserId(1L);
+        record.setMode(CancellationMode.ISOLATE_7D.getCode());
+        record.setStatus(CancellationStatus.PENDING.getCode());
+        record.setIsolateUntil(isolateUntil);
+        return record;
+    }
+
     private static UserAccount account(long id, int status) {
         UserAccount account = new UserAccount();
         account.setId(id);
         account.setAccountStatus(status);
         return account;
-    }
-
-    private static UserAccountCancellation recoverableRecord(
-            LocalDateTime isolateUntil, int preStatus) {
-        UserAccountCancellation record = new UserAccountCancellation();
-        record.setId(7L);
-        record.setUserId(1L);
-        record.setMode(CancellationMode.ISOLATE_7D.getCode());
-        record.setStatus(CancellationStatus.PENDING.getCode());
-        record.setVerifyChannel(CancellationVerifyChannel.SMS.getCode());
-        record.setPreStatus(preStatus);
-        record.setIsolateUntil(isolateUntil);
-        return record;
     }
 
     private static SubmitRequest submit(int mode) {

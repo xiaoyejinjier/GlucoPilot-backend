@@ -58,8 +58,23 @@ public class PredictionProperties {
     private BigDecimal riceCarbRatio = new BigDecimal("0.26");
 
     /** 主食类（categoryCode=1）建议克重下限（g）；默认值，最终需营养师确认。 */
-    private BigDecimal stapleFloor = new BigDecimal("30");
+    private BigDecimal stapleFloor = new BigDecimal("50");
 
-    /** 高血糖警示阈值（mmol/L）；与 sys_config.glucose.danger.high 默认一致。 */
-    private BigDecimal dangerHigh = new BigDecimal("10");
+    /** 高血糖警示阈值（mmol/L）；P3 起为 13.9，与 sys_config.glucose.danger.high 互不联动。 */
+    private BigDecimal dangerHigh = new BigDecimal("13.9");
+
+    /** 高血糖提示阈值（mmol/L）；cur≥该值且非 DANGER 时叠加 CAUTION 提示位。 */
+    private BigDecimal cautionHigh = new BigDecimal("10");
+
+    /** 离散搜索最低份量档（ABOVE 向下搜索的下限，50%）。 */
+    private BigDecimal minPortionRatio = new BigDecimal("0.5");
+
+    /** 安全裕度（mmol/L）：一般/年轻/老年档；GDM 用 safetyMarginGdm。 */
+    private BigDecimal safetyMargin = new BigDecimal("1.0");
+
+    /** 妊娠期（GDM）安全裕度（mmol/L）；6.7 本身已严格，裕度过大会导致大面积 INFEASIBLE。 */
+    private BigDecimal safetyMarginGdm = new BigDecimal("0.3");
+
+    /** 整餐碳水下限（g）；GDM/老年不允许 0 碳水时作为 floor。 */
+    private BigDecimal minMealCarbs = new BigDecimal("30");
 }

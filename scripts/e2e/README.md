@@ -50,6 +50,7 @@ default-character-set=utf8mb4
 | `mock-data.ps1` | 生成近一个月的血糖/饮食/健康档案模拟数据（标记 `【模拟数据】`，便于清理） | `E2E_MYSQL_CNF` |
 | `ai-audit-e2e.ps1` | 后台「AI 审计」六个新页签：工具调用（按成败/工具名过滤、失败带 `errorType`、只给 `resultDigest`）→ 长期记忆（默认不含已删除、`includeDeleted=true` 才带上、内容给全文、关键词 >50 字 400）→ 滚动摘要（给全文、`summaryChars` 与正文一致）→ 多模态（成功/失败行、结果只给 200 字预览、耗时由 `finished_at - gmt_create` 近似）→ 内容审核命中（只给位置与 64 位片段哈希、**不返回原文**）→ 翻译缓存（类型+状态过滤、200 字预览）→ **六个读接口都不写 `ops_audit_log`**（共 21 条） | 后端在跑、`E2E_MYSQL_CNF`（会往 `chat_tool_call`/`chat_user_memory`/`ocr_task`/`community_moderation_hit`/`content_localization` 造带 `【E2E审计】` 标记的夹具，结束时按标记物理删；**不需 `E2E_DEEPSEEK_KEY`**，全程不调模型） |
 | `translation-e2e.ps1` | 中英翻译（V54 收束到 `ai.business.translation`）：中文文章摘要首次 PENDING/READY 且带 `sourceHash` → 轮询到 READY、标题/摘要无汉字、`content_localization.prompt_ver='translation@v1'` → 重复请求直接命中缓存（`sourceHash` 不变）→ 纯英文昵称与 `用户_xxx` 本地直判 READY（不请求模型）→ 不可读文章 200 + `UNAVAILABLE` | 后端在跑、`E2E_MYSQL_CNF`、**会真实调用模型 1~2 次**；会造一篇临时文章（结束时删文章与译文缓存）并临时改 mock 用户昵称后还原 |
+| `memory-tool-e2e.ps1` | 长期记忆工具（`save_long_term_memory`，需真实模型）：用户说「我不吃辣」→ 恰好一次工具调用且 `ok=1`、回执是短确认（不重复正文）→ `chat_user_memory` 落 `diet_taboo` 且置信度固定 85 → 下一轮日志出现「记忆=N」注入 → 追问同一件事仍是 1 条（同键覆盖）→ 「今晚想吃火锅」不落库 → 用户自助清空后无有效行。**断言的是模型行为**，单测覆盖不了。 |
 
 示例：
 

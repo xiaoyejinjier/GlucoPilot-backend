@@ -18,6 +18,7 @@ public interface MealPredictionStatisticsMapper {
             WHERE user_id=#{userId} AND record_date BETWEEN #{from} AND #{to} AND is_deleted=0
               AND node_code IN ('breakfast','lunch','dinner')
               AND predict_suggest>0 AND predict_suggest<40
+              AND algorithm_version='v2.1'
             GROUP BY record_date ORDER BY record_date
             """)
     List<DailyMealPredictionRow> selectDailySeries(

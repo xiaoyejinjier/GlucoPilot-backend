@@ -95,6 +95,42 @@
 - `PUT /admin/v1/work-reminders/read`，请求 `{revisions:{REPORT:"…",FEEDBACK:"…",FOOD_REVIEW:"…",GLUCOSE_UPDATE:"…"}}`；可传一个类别或页面展示的全部类别。revision 是已展示来源快照集合的SHA-256，仅保存该管理员的已读回执，不更改待办状态；集合已变化返回409，未授权类别返回403，整体事务回滚。
 - 管理员异常详情允许查看已有处理历史、当前已正常的记录；当前正常时只读。管理端信封可携带 `recordId` 定位对应详情。原异常处理接口继续检查血糖快照和事件版本。
 - 新增V63已读回执迁移。所有新增查询/写入使用MyBatis XML，响应保持ApiResponse。
+## 2026-11-09 健康档案血糖控制目标人群字段（glucoseGoalProfile）
+
+`user_health` 新增 `glucose_goal_profile`（TINYINT UNSIGNED，0=一般/1=较严格/2=较宽松/3=妊娠期，默认 0），独立于 `diabetes_type`，作为预测模块的目标分层兜底来源；本批仅落字段与档案读写链路，不改变预测算法行为。V56 迁移新增该列并默认 0，存量数据回落为「一般」。
+
+- 读：`GET /users/me` 的 `health.glucoseGoalProfile` 全量返回该字段（0~3 数字）。
+- 写：健康档案保存接口 `PUT /users/me/health-profile` 请求体新增可选 `glucoseGoalProfile`，取值 0~3；**缺省（字段不存在或为 null）= 不修改**（R7 例外，区别于全量保存「null=清空」），不清空、不回写 0。旧版本客户端不携带该字段时保留历史选择，不被静默重置。
+- 校验：取值须为 0~3 的整数，越界返回参数校验错误 400。
+- 前端建档页新增「血糖控制目标」picker，选项文案：一般（默认）/较严格（年轻、无并发症）/较宽松（65 岁以上或容易低血糖）/妊娠期（含妊娠糖尿病）；选择「妊娠期」时附提示「如不确定请咨询产科医生」。旧版本客户端不展示该字段。
+
+## 2026-11-09 餐后预测响应增补分层目标与状态字段（P2）
+
+`POST /api/v1/predictions/meal-glucose` 响应**增补**（只增不改，前端暂不消费）：
+
+- `recommendationStatus:string`：IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE（INFEASIBLE 由后续离散搜索阶段产生，本批不返回）。
+- `targetLower:number` / `targetUpper:number`：生效目标区间（餐后 2h），由分层目标解析得到。
+- `targetSource:string`：PROFILE|GENERAL|GLOBAL。
+- `effectiveProfile:string`：GENERAL|YOUNG_NO_COMPLICATION|OLDER_HYPOGLYCEMIA|GDM（diabetesType=3 强制取严为 GDM）。
+- `caution:boolean`：cur≥10 且非 DANGER 时为 true。
+- `statusHints:string[]`：状态提示词 key 数组（前端映射 i18n 渲染，key 与文案见方案 §4.3）。
+
+分层目标来源：`glucoseGoalProfile`（0一般/1较严格/2较宽松/3妊娠期）+ diabetesType 取严（R6）→ 四档 targetUpper 10.0/7.8/10.5/6.7。目标分层仅用于状态判定与推荐约束，**不进收缩模型**（收缩锚点仍固定 7.8）。
+
+本批为双路并行：既有 `predictNow/predictSuggest/suggestCarbs/suggestText` 语义、目标反解路径与 `dangerHigh=10` 均保持不变；新增字段只增不改，前端与统计在下阶段接入。
+
+## 2026-11-10 餐后预测建议语义切换（P3）
+
+`POST /api/v1/predictions/meal-glucose` 建议语义自 v2.1 起变更（`algorithmVersion` 升级为 `v2.1`）：
+
+- 收缩锚点恒为 7.8（`defaultTarget`），与用户 `targetPostprandial/targetFasting` 及分层目标解耦；删除目标反解路径（消除 `predictSuggest ≡ target` 恒等式）。
+- 建议份量由离散搜索 + `planCarbs` 复算得到（候选档 100%/90%/…/50%，ABOVE 向下、BELOW 向上 110%~150%）。
+- `dangerHigh` 由 10 调整为 **13.9**（`cur≥13.9 → DANGER`）；`cur∈[10,13.9)` 且非 DANGER 叠加 `caution=true`。
+- `predictSuggest` 语义：`IN_RANGE/LOW` = `predictNow`；`ABOVE/BELOW` = 复算后预测值；`DANGER/INFEASIBLE` = `null`。
+- `suggestCarbs`：`IN_RANGE/LOW` = 当前碳水；`ABOVE/BELOW` = 复算 `planCarbs`；`DANGER` = 0；`INFEASIBLE` = null。
+- `statusHints` 新增 `infeasible_normal` / `gdm_infeasible`（搜索无解时按人群区分）。
+
+新增算法参数（`PredictionProperties`）：`minPortionRatio=0.5`、`safetyMargin=1.0`、`safetyMarginGdm=0.3`、`minMealCarbs=30`；GDM/老年不允许 0 碳水（`planCarbs` 下限 30g）。
 
 ## 2026-11-09 社区热度排行榜（热榜专用公式 + Redis ZSET）
 
@@ -164,29 +200,32 @@ C端微信、手机号和邮箱登录统一采用后登录替换旧会话：同�
 
 ## 账号注销（2026-10-27）
 
-**规则**：验证通过即生效，不设强制冷静期；可选 7 天可恢复，默认不勾选。本人发起，管理端不代发起、不代撤销；无资产/权益/订单/会员/券/积分模块，确认页不展示、不拦截、不建空卡片。
+**规则**：仅保留七天可恢复注销（立即注销已下线）。本人发起，管理端不代发起、不代撤销；无资产/权益/订单/会员/券/积分模块，确认页不展示、不拦截、不建空卡片。冷静期内**正常登录即自动终止注销**，不提供手动恢复接口。
 
-**枚举**：accountStatus 为 3=已注销、4=已注销可恢复；mode 为 1=立即、2=七天可恢复；注销 status 为 0=待执行、1=执行中、2=已执行、3=已恢复、4=失败；verifyType/verifyChannel 为 1=短信、2=邮箱、3=微信（wx.login code 现场验证）；前端显式选择 verifyType，1/2 必须已绑定对应联系方式、3 必须是本账号微信，不再按绑定关系自动选择；凭据新增 pre_status（0=禁用、1=正常），登录取消注销时按此还原，DISABLED 账号不可洗白。
+**枚举**：accountStatus 为 3=已注销、4=已注销可恢复；mode 为 1=立即（历史值，提交接口不再接受）、2=七天可恢复；注销 status 为 0=待执行、1=执行中（历史值）、2=已执行、3=已恢复、4=失败；verifyType/verifyChannel 为 1=短信、2=邮箱、3=微信（wx.login code 现场验证）；前端显式选择 verifyType，1/2 必须已绑定对应联系方式、3 必须是本账号微信；凭据新增 pre_status（0=禁用、1=正常），登录取消注销时按此还原，DISABLED 账号不可洗白。
 
 **接口**（前缀 /api/v1/users/me）
 - GET /cancellation：无申请时 cancellation=null，否则含 status、mode、reasonCode、verifyChannel、requestedAt、isolateUntil、executedAt、recoveredAt；另返回 hasPhone/hasEmail/hasWechat 与 phoneMasked/emailMasked，前端据此决定展示哪些验证方式与“验证码将发送至 …”提示。
 - GET /cancellation/captcha：无请求体，返回 {ticket,expiresIn=180}；票据一次性、绑定 userId，取票频控用户 20 次/小时、IP 60 次/小时（超出 429）。
+- GET /cancellation/precheck：无请求体，只读无副作用，HTTP 恒 200。返回 {canCancel,blockCode,blockMessage,isolateUntil,checks[]}；`blockCode` 按顺序判定 CANCELLING(2)→ACCOUNT_CANCELLED(3)→ALREADY_APPLIED(存在 PENDING/RUNNING 凭据或 status=4 兜底)→ACCOUNT_DISABLED(0)→RECENTLY_RECOVERED(最近 recovered_at 在 24h 内)→ASSET_PENDING(钱包/资产校验未通过)→ACCOUNT_UNUSABLE(其余兜底)，全部通过时 canCancel=true、blockCode=null。`isolateUntil` 仅在 ALREADY_APPLIED/CANCELLING 且有凭据时返回（epoch 毫秒字符串）。已有进行中申请时**幂等优先于封禁**，即使账号已被禁用也返回 ALREADY_APPLIED。`checks` 固定 4 项：ACCOUNT_SAFE、ASSET_CLEARED、NO_ACTIVE_APPLICATION、RECENTLY_RECOVERED，供日志与后续 UI 使用，当前前端不展示。
 - POST /cancellation/code：{channel:1|2,captchaTicket}（均必填，不做旧客户端兼容），服务端先校验通道已绑定、再消费票据、再按用户/IP 日限额发码，返回 {channel,maskedTarget,expiresIn,cooldownSeconds}；手机/邮箱均未绑定返回 400，纯微信账号不应调用（前端不展示手机/邮箱验证）。
-- POST /cancellation：{mode,reasonCode?,verifyType:1|2|3,verifyCode?,wechatCode?}，verifyType 必填且必须与实际绑定一致；1/2 走 verifyCode、3 走 wechatCode（code 一次性、换取即消费防重放）；仅 NORMAL/DISABLED 可提交；已有 PENDING/RUNNING 幂等返回现状；成功后立即失效全部 user_session；mode=1 置 accountStatus=2 后异步清理，mode=2 置 4 并返回 isolateUntil=申请时间+7 天。
-- POST /cancellation/recovery：无请求体，登录即取消注销（会话已由 wx.login 或验证码登录核验，不再二次验证）；仅 accountStatus=4 且未到 isolateUntil 可恢复，成功后按 pre_status 还原（禁用账号仍为 DISABLED）；窗口过期或状态 2/3 返回 409。
+- POST /cancellation：{mode:2,reasonCode?,verifyType:1|2|3,verifyCode?,wechatCode?}，提交仅接受 mode=2（mode=1 返回 400「仅支持七天可恢复注销」）；verifyType 必填且必须与实际绑定一致；1/2 走 verifyCode、3 走 wechatCode（code 一次性、换取即消费防重放）；仅 NORMAL 可提交，DISABLED 返回 403「账号已被封禁，请联系客服申请解冻后再注销」；已有 PENDING 幂等返回现状（封禁账号同样幂等返回，不报 403）；成功后立即失效全部 user_session，accountStatus 置 4，返回 isolateUntil=申请时间+7 天。
+- **恢复（无独立接口）**：冷静期内用原手机号/邮箱/微信正常登录即自动终止注销——登录事务内完成恢复（凭据置 RECOVERED、accountStatus 按 pre_status 还原），响应新增 `recoveredFromCancellation:boolean`，为 true 时前端弹一次「账号已恢复」提示（仅告知，关掉不影响结果）。`now >= isolateUntil` 时登录直接拒绝（403「注销申请已过反悔期，账号正在清理中」），不建会话。
 - 验证码 scene=cancel（与登录 login、绑定 bind 隔离消费），60 秒冷却，连续 5 次失败锁定 24 小时（429）；发码日限额用户 10 次/IP 50 次；恢复后 24 小时内不可再次提交注销（不影响正常登录使用）。滑块只作 UX 门槛（拖到最右解锁），服务端不校验偏移、不下发答案，防刷依赖票据频控与失败锁定。
 
 **2026-10-27 变更**：身份验证卡片改为“手机/邮箱验证 | 微信身份验证”双模式，纯微信账号隐藏手机/邮箱 Tab；手机/邮箱模式发码前必须完成滑块解锁并携带 captchaTicket；提交必须带 verifyType；V47 给 auth_sms_code / auth_email_code 增加 scene 列与索引，登录、绑定、注销验证码按 scene 隔离消费。
 
 **2026-10-27 修复**：hasWechat 只认真实微信 openid，手机/邮箱注册写入的 `phone_` / `email_` 占位值不算绑定（GET /cancellation 同理）；前端在 hasPhone/hasEmail/hasWechat 非布尔（前后端版本不一致）时展示“服务版本不兼容”，不再兜底成“未绑定手机号、邮箱或微信”。
 
-**登录拦截**：登录响应含 accountStatus。4 允许登录，前端先提示“账号注销中，登录即取消注销”：继续则调 recovery，暂不使用则退出登录；0 允许登录但仅可办理注销或退出（登录后引导自助注销）；2/3 拒绝登录。0/4 会话除 /users/me、/users/me/cancellation 及子路径、退出登录、发码、/app-config 外一律 403。注销后 openid、phone、email 置空释放唯一键，同微信/手机/邮箱再登录为全新账号并重新确认免责声明。
+**登录拦截**：登录响应含 accountStatus 与 recoveredFromCancellation。4 在反悔期窗口内允许登录并**自动恢复**（返回 recoveredFromCancellation=true，前端弹「账号已恢复」提示；若 pre_status=0 则恢复后仍为禁用态）；窗口过期后 4 拒绝登录。0 允许登录但**不可自助注销**，仅可联系客服申请解冻或退出登录（前端弹「联系客服/退出登录」，选联系客服展示联系方式后自动退出）；2/3 拒绝登录。0 会话除 /users/me、/users/me/cancellation 及子路径、退出登录、发码、/app-config 外一律 403。注销后 openid、phone、email 置空释放唯一键，同微信/手机/邮箱再登录为全新账号并重新确认免责声明。验证码 scene 仅支持 login/bind/cancel（recover 随手动恢复接口一并删除）。24 小时内重复提交返回 409（起算点 recovered_at），该锁定已前置到 precheck 的 RECENTLY_RECOVERED，避免用户填完验证码才被拦截。
 
-**数据处置**：立即注销在会话失效后异步物理删除血糖、饮食、健康档案、AI 会话/消息/记忆/OCR、个人媒体（bizType 1–6）、设置/设备/反馈/导出文件；社区公开内容匿名保留（作者显示“已注销用户”，媒体 bizType 7/8 随内容保留）；点赞收藏保留并计数（沿用 V36 口径），关注/阅读/隐藏/草稿/通知/本人举报删除；私信保留但禁止回复。墓碑时 user_account 置空 openid/union_id/phone/email/last_login_ip、username=“已注销用户”、account_status=3，user_profile 昵称=“已注销用户”、清空头像与签名；is_deleted 必须保持 0，否则全局逻辑删除会使管理端与作者解析查不到。7 天模式窗口内数据保留但不可访问，期满执行同一清理。
+**数据处置**：七天冷静期在本会话失效后开始计时，期满（isolateUntil + 安全边际）由后台异步物理删除血糖、饮食、健康档案、AI 会话/消息/记忆/OCR、个人媒体（bizType 1–6）、设置/设备/反馈/导出文件；社区公开内容匿名保留（作者显示“已注销用户”，媒体 bizType 7/8 随内容保留）；点赞收藏保留并计数（沿用 V36 口径），关注/阅读/隐藏/草稿/通知/本人举报删除；私信保留但禁止回复。清理前会重读账号状态，非 CANCELLING/CANCELLED_RECOVERABLE 时跳过（防止双凭据误删已恢复账号）。墓碑时 user_account 置空 openid/union_id/phone/email/last_login_ip、username=“已注销用户”、account_status=3，user_profile 昵称=“已注销用户”、清空头像与签名；is_deleted 必须保持 0，否则全局逻辑删除会使管理端与作者解析查不到。
 
 **管理端**：P0 支持 accountStatus=0..4 筛选、详情返回注销摘要、状态 2/3/4 拒绝启用禁用，不提供代发起/代撤销；协助恢复（同通道核验+二级审批+留痕）排 P1；已注销用户健康档案返回空态并提示“健康数据已删除”。
 
-**迁移与前端清理**：V45 新建 user_account_cancellation、openid 放宽为 NULL、chk_ua_status 扩展至 0..4；V46 verify_channel 扩为 1=短信/2=邮箱/3=微信并新增 pre_status 列；V47 为 auth_sms_code / auth_email_code 增加 scene（login/bind/cancel/recover，默认 login）与（目标,scene,is_used）索引，存量按 login 处理。前端注销或“暂不使用”后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
+**迁移与前端清理**：V45 新建 user_account_cancellation、openid 放宽为 NULL、chk_ua_status 扩展至 0..4；V46 verify_channel 扩为 1=短信/2=邮箱/3=微信并新增 pre_status 列；V47 为 auth_sms_code / auth_email_code 增加 scene（login/bind/cancel，默认 login）与（目标,scene,is_used）索引，存量按 login 处理。前端提交注销或退出登录后清 isLoggedIn、accessToken、userInfo、glucoseRecords、dataBackup、lastBackupAt、displaySettings、disclaimerAgreed、disclaimerCurrentVersion，保留 apiBaseUrl；dataBackup 含血糖与资料副本，必须清除。
+
+**2026-11-13 变更（注销页改版）**：注销说明页删除“冷静期说明”块（法律信息改由《注销须知》独立页承载），底部改为“申请注销（白底黑字）+ 已阅读并同意《注销须知》”；身份验证从说明页后移为点击后的第二步；点击申请注销先调 GET /cancellation/precheck，按 blockCode 阻断（封禁/24h 锁定/资产/已有申请）；封禁账号禁止自助注销，submit 返回 403，登录拦截改为联系客服 + 退出。无数据库迁移。
 
 ## 导出持久化统一为MyBatis（2026-10-29，无HTTP契约变化）
 
@@ -689,17 +728,17 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | `GET /api/v1/meal-records?recordDate=yyyy-MM-dd` | C 端登录 | 按日查询当前用户的饮食记录（含明细与照片 URL） |
 | `DELETE /api/v1/meal-records/{id}` | C 端登录 | 逻辑删除饮食记录（含明细），仅限当前用户 |
 
-保存请求体字段：`recordDate`（必填）、`nodeCode`（必填，餐点）、`mediaId`（餐食照片 ID，可空，须为当前用户 `MEAL` 类型）、`foodsText`（可空，≤512，为空时按明细食物名拼接兜底）、`carbsG`（可空，≥0，为空时按明细求和兜底）、`hungerLevel`（可空，`1` 饱腹 / `2` 一般 / `3` 微饿）、`supplementText`（可空，≤512）、`predictNow` / `predictSuggest`（可空，`(0,40)`）、`suggestText`（可空，≤512）、`items`（可空，≤50，每项含 `foodId` 可空、`foodName` 必填 ≤64、`weightG` / `carbsG` / `caloriesKcal` 可空 ≥0，`foodId` 非空时须为上架食物）。
+保存请求体字段：`recordDate`（必填）、`nodeCode`（必填，餐点）、`mediaId`（餐食照片 ID，可空，须为当前用户 `MEAL` 类型）、`foodsText`（可空，≤512，为空时按明细食物名拼接兜底）、`carbsG`（可空，≥0，为空时按明细求和兜底）、`hungerLevel`（可空，`1` 饱腹 / `2` 一般 / `3` 微饿）、`supplementText`（可空，≤512）、`predictNow` / `predictSuggest`（可空，`(0,40)`）、`suggestText`（可空，≤512）、`algorithmVersion`（可空，≤8，算法版本号如 `v2.1`）、`recommendationStatus`（可空，≤16，`IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE`）、`items`（可空，≤50，每项含 `foodId` 可空、`foodName` 必填 ≤64、`weightG` / `carbsG` / `caloriesKcal` 可空 ≥0，`foodId` 非空时须为上架食物）。
 
-预测三列 `predictNow` / `predictSuggest` / `suggestText` 由 prediction 客户端串联在用户确认后携带，服务端只校验范围与长度、不重算；两个模块未上线期间传空即可。删除后同日同餐点可重新保存。
+预测三列 `predictNow` / `predictSuggest` / `suggestText` 由 prediction 客户端串联在用户确认后携带，服务端只校验范围与长度、不重算；两个模块未上线期间传空即可。`algorithmVersion` / `recommendationStatus` 由 prediction 客户端随预测结果一并携带并落库（`meal_record` 增列 `algorithm_version` / `recommendation_status`，均可空），供后续统计按算法版本 / 推荐状态过滤，`DANGER` / `INFEASIBLE` 状态同样落库。删除后同日同餐点可重新保存。
 
 ## 餐后血糖预测
 
-用户端通过 `POST /api/v1/predictions/meal-glucose` 获取餐后 1 小时血糖预测。服务端为纯计算：不落库、不查 `glucose_record` / `meal_record`，自身无持久化，可重复调用（重算 = 同接口携带补充信息重复调用）；唯一服务端读取是健康档案的分类参数（经 `profile.health` 服务接口自取，未建档时兜底建档 + 默认参数分档，正常返回）。食物数据由客户端从 ai 分析结果转发（ai 未上线时前端可手输联调），当前血糖由客户端传入，服务端不查血糖记录、不设默认值。
+用户端通过 `POST /api/v1/predictions/meal-glucose` 获取餐后 2 小时血糖预测。服务端为纯计算：不落库、不查 `glucose_record` / `meal_record`，自身无持久化，可重复调用（重算 = 同接口携带补充信息重复调用）；唯一服务端读取是健康档案的分类参数（经 `profile.health` 服务接口自取，未建档时兜底建档 + 默认参数分档，正常返回）。食物数据由客户端从 ai 分析结果转发（ai 未上线时前端可手输联调），当前血糖由客户端传入，服务端不查血糖记录、不设默认值。
 
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
-| `POST /api/v1/predictions/meal-glucose` | C 端登录 | 餐后 1h 血糖两段式预测（现状 / 建议文案 / 按建议量再预测），`nodeCode` 须为餐点节点（`breakfast` / `lunch` / `dinner`） |
+| `POST /api/v1/predictions/meal-glucose` | C 端登录 | 餐后 2h 血糖两段式预测（现状 / 建议文案 / 按建议量再预测），`nodeCode` 须为餐点节点（`breakfast` / `lunch` / `dinner`） |
 
 请求体字段：`nodeCode`（必填，餐点）、`currentGlucose`（必填，`(0,40)` mmol/L）、`carbsG`（必填，≥0）、`items`（可空，≤50，每项 `foodName` 必填 ≤64、`categoryCode` 必填 `1-9` 且**透传不落库**——前端从 food 库选食时详情自然带 `category_code` 填入、`weightG` / `carbsG` 可空 ≥0）、`portionRatio`（可空，`(0,2]`，默认 1.0）、`medicationTaken`（可空布尔，默认未服药；v2 起不改变预测结果，仅采集留档用于后续校准）、`exerciseDone`（可空布尔，默认未运动）、补充原文（可空，≤200）。
 

@@ -6,10 +6,14 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+
 import lombok.Builder;
 import lombok.Data;
+
 import tools.jackson.databind.annotation.JsonSerialize;
 import tools.jackson.databind.ser.std.ToStringSerializer;
+
+import java.util.List;
 
 /** 账号注销 C 端接口 DTO。时间戳统一为 epoch 毫秒，序列化为字符串（对齐全局 Long 契约）。 */
 public final class CancellationDtos {
@@ -122,9 +126,27 @@ public final class CancellationDtos {
         private Long isolateUntil;
     }
 
+    /** 预检单项：账号状态、资产、进行中申请、恢复后间隔。 */
     @Data
     @Builder
-    public static class RecoveryView {
-        private Integer accountStatus;
+    public static class PrecheckCheck {
+        private String code;
+        private Boolean passed;
+        private String title;
+        private String detail;
+    }
+
+    /** 提交前预检结果：canCancel=false 时前端按 blockCode 阻断并提示。 */
+    @Data
+    @Builder
+    public static class PrecheckView {
+        private Boolean canCancel;
+        /** 阻断码：CANCELLING/ACCOUNT_CANCELLED/ALREADY_APPLIED/ACCOUNT_DISABLED/RECENTLY_RECOVERED/ASSET_PENDING。 */
+        private String blockCode;
+        private String blockMessage;
+        /** 已有进行中申请时的注销生效时间（epoch 毫秒），无则为 null。 */
+        @JsonSerialize(using = ToStringSerializer.class)
+        private Long isolateUntil;
+        private List<PrecheckCheck> checks;
     }
 }

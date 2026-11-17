@@ -20,8 +20,10 @@ import com.threadfit.glucopilot.common.util.IdUtils;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.entity.UserAccount;
+import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
 import com.threadfit.glucopilot.user.entity.UserProfile;
 import com.threadfit.glucopilot.user.entity.UserSetting;
+import com.threadfit.glucopilot.user.cancellation.service.AccountCancellationRecovery;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
 import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
 import com.threadfit.glucopilot.user.mapper.UserSettingMapper;
@@ -55,6 +57,8 @@ public class AuthService {
     private final AuthSmsCodeMapper authSmsCodeMapper;
     private final AuthEmailCodeMapper authEmailCodeMapper;
     private final EmailCodeMailSender emailCodeMailSender;
+    private final VerificationCodeConsumer verificationCodeConsumer;
+    private final AccountCancellationRecovery cancellationRecovery;
 
     /** 短信发送冷却：phone -> 上次发送时间戳（进程内内存，重启清空） */
     private final ConcurrentHashMap<String, AtomicLong> smsCooldown = new ConcurrentHashMap<>();
@@ -78,18 +82,16 @@ public class AuthService {
             isNew = true;
         }
         assertAccountLoginable(account);
-        touchLogin(account);
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.WECHAT.getCode());
-        return toSessionResponse(session, account, isNew);
+        return finishLogin(account, session, isNew);
     }
 
     public AuthDtos.SmsCodeResponse sendSmsCode(AuthDtos.SmsCodeRequest request) {
         String scene = request.getScene().trim().toLowerCase();
         if (!"login".equals(scene)
                 && !"bind".equals(scene)
-                && !"cancel".equals(scene)
-                && !"recover".equals(scene)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind/cancel/recover");
+                && !"cancel".equals(scene)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind/cancel");
         }
         long now = System.currentTimeMillis();
         AtomicLong last = smsCooldown.computeIfAbsent(request.getPhone(), k -> new AtomicLong(0));
@@ -120,7 +122,8 @@ public class AuthService {
 
     @Transactional
     public AuthDtos.SessionResponse loginByPhone(AuthDtos.PhoneLoginRequest request) {
-        consumeSmsCode(request.getPhone(), request.getSmsCode(), "login");
+        // 独立事务消费：后续任何回滚都不会让这条验证码"复活"
+        verificationCodeConsumer.consumeForLoginBySms(request.getPhone(), request.getSmsCode());
         UserAccount account =
                 userAccountMapper.selectOne(
                         new LambdaQueryWrapper<UserAccount>()
@@ -136,18 +139,16 @@ public class AuthService {
         } else {
             assertAccountLoginable(account);
         }
-        touchLogin(account);
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.PHONE.getCode());
-        return toSessionResponse(session, account, isNew);
+        return finishLogin(account, session, isNew);
     }
 
     public AuthDtos.EmailCodeResponse sendEmailCode(AuthDtos.EmailCodeRequest request) {
         String scene = request.getScene().trim().toLowerCase();
         if (!"login".equals(scene)
                 && !"bind".equals(scene)
-                && !"cancel".equals(scene)
-                && !"recover".equals(scene)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind/cancel/recover");
+                && !"cancel".equals(scene)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "scene 仅支持 login/bind/cancel");
         }
         String email = EmailUtils.normalize(request.getEmail());
         long now = System.currentTimeMillis();
@@ -180,7 +181,8 @@ public class AuthService {
     @Transactional
     public AuthDtos.SessionResponse loginByEmail(AuthDtos.EmailLoginRequest request) {
         String email = EmailUtils.normalize(request.getEmail());
-        consumeEmailCode(email, request.getEmailCode(), "login");
+        // 独立事务消费：后续任何回滚都不会让这条验证码"复活"
+        verificationCodeConsumer.consumeForLoginByEmail(email, request.getEmailCode());
         UserAccount account =
                 userAccountMapper.selectOne(
                         new LambdaQueryWrapper<UserAccount>()
@@ -195,9 +197,8 @@ public class AuthService {
         } else {
             assertAccountLoginable(account);
         }
-        touchLogin(account);
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.EMAIL.getCode());
-        return toSessionResponse(session, account, isNew);
+        return finishLogin(account, session, isNew);
     }
 
     @Transactional
@@ -303,46 +304,24 @@ public class AuthService {
         }
     }
 
-    /** 登录、绑定与注销各自消费对应 scene 的验证码，互不串用。 */
+    /**
+     * 绑定与注销提交消费验证码：沿用调用方事务（失败可回滚后重试），但用条件更新保证一次性。
+     *
+     * <p>登录路径请用 {@link VerificationCodeConsumer}：那里需要独立事务"失败即烧码"。
+     */
     public void consumeSmsCode(String phone, String smsCode, String scene) {
-        AuthSmsCode row =
-                authSmsCodeMapper.selectOne(
-                        new LambdaQueryWrapper<AuthSmsCode>()
-                                .eq(AuthSmsCode::getPhone, phone)
-                                .eq(AuthSmsCode::getScene, scene)
-                                .eq(AuthSmsCode::getIsUsed, 0)
-                                .orderByDesc(AuthSmsCode::getId)
-                                .last("LIMIT 1"));
-        // 统一 40001，防枚举
-        if (row == null
-                || row.getExpireAt() == null
-                || row.getExpireAt().isBefore(LocalDateTime.now())
-                || !smsCode.equals(row.getVerifyCode())) {
+        // 统一 40001，防枚举；截止时间用应用侧时间，避免 DB 会话时区差异
+        if (authSmsCodeMapper.consume(phone, scene, smsCode, LocalDateTime.now()) != 1) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "验证码错误或已失效");
         }
-        row.setIsUsed(1);
-        authSmsCodeMapper.updateById(row);
     }
 
-    /** 登录、绑定与注销各自消费对应 scene 的验证码，互不串用。 */
+    /** 绑定与注销提交消费邮箱验证码，语义同 {@link #consumeSmsCode}。 */
     public void consumeEmailCode(String email, String emailCode, String scene) {
         String normalized = EmailUtils.normalize(email);
-        AuthEmailCode row =
-                authEmailCodeMapper.selectOne(
-                        new LambdaQueryWrapper<AuthEmailCode>()
-                                .eq(AuthEmailCode::getEmail, normalized)
-                                .eq(AuthEmailCode::getScene, scene)
-                                .eq(AuthEmailCode::getIsUsed, 0)
-                                .orderByDesc(AuthEmailCode::getId)
-                                .last("LIMIT 1"));
-        if (row == null
-                || row.getExpireAt() == null
-                || row.getExpireAt().isBefore(LocalDateTime.now())
-                || !emailCode.equals(row.getVerifyCode())) {
+        if (authEmailCodeMapper.consume(normalized, scene, emailCode, LocalDateTime.now()) != 1) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "验证码错误或已失效");
         }
-        row.setIsUsed(1);
-        authEmailCodeMapper.updateById(row);
     }
 
     /** 注销等敏感操作的微信身份复核：现场用 wx.login code 换取 openid， 必须与账号 openid 一致。code 一次性有效，换取即消费，天然防重放。 */
@@ -425,7 +404,12 @@ public class AuthService {
         }
     }
 
-    /** 登录放行：NORMAL / DISABLED / CANCELLED_RECOVERABLE 可登录（门禁另做限制），注销中/已注销拒绝。 */
+    /**
+     * 登录放行：NORMAL / DISABLED / CANCELLED_RECOVERABLE（仅在反悔期窗口内）可登录，注销中/已注销拒绝。
+     *
+     * <p>窗口判定是"能否恢复"的权威依据：{@code now >= isolateUntil} 时即便 worker 还没开始清理，
+     * 也一律拒绝，提示已过反悔期。此处位于验证码消费之后，差异化文案只对被要求持码者可见。
+     */
     private void assertAccountLoginable(UserAccount account) {
         if (account == null) {
             throw new BizException(ErrorCode.UNAUTHORIZED);
@@ -440,10 +424,38 @@ public class AuthService {
         if (status == CodeEnum.AccountStatus.CANCELLED.getCode()) {
             throw new BizException(ErrorCode.FORBIDDEN, "账号已注销，无法登录");
         }
+        if (status == CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
+            UserAccountCancellation active = cancellationRecovery.findActive(account.getId());
+            if (active == null
+                    || active.getIsolateUntil() == null
+                    || !active.getIsolateUntil().isAfter(LocalDateTime.now())) {
+                throw new BizException(ErrorCode.FORBIDDEN, "注销申请已过反悔期，账号正在清理中");
+            }
+        }
+    }
+
+    /**
+     * 建会话后的收尾：窗口内登录即恢复，然后刷新登录信息并组装响应。
+     *
+     * <p>恢复必须在 {@link #createSession} 之后调用——那里已对账号行加锁，
+     * 本方法里的锁内重读才能正确判定并发第二台设备"已被先到者恢复"。
+     */
+    private AuthDtos.SessionResponse finishLogin(
+            UserAccount account, UserSession session, boolean isNew) {
+        boolean recovered = false;
+        if (account.getAccountStatus() != null
+                && account.getAccountStatus() == CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
+            AccountCancellationRecovery.RecoverOutcome outcome =
+                    cancellationRecovery.recoverOnLogin(account.getId());
+            account = outcome.account();
+            recovered = outcome.recovered();
+        }
+        touchLogin(account);
+        return toSessionResponse(session, account, isNew, recovered);
     }
 
     private AuthDtos.SessionResponse toSessionResponse(
-            UserSession session, UserAccount account, boolean isNew) {
+            UserSession session, UserAccount account, boolean isNew, boolean recoveredFromCancellation) {
         UserSetting setting =
                 userSettingMapper.selectOne(
                         new LambdaQueryWrapper<UserSetting>()
@@ -459,6 +471,7 @@ public class AuthService {
                 .isNewUser(isNew)
                 .accountStatus(account.getAccountStatus())
                 .needDisclaimer(needDisclaimer)
+                .recoveredFromCancellation(recoveredFromCancellation)
                 .build();
     }
 }

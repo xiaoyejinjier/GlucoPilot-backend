@@ -26,4 +26,8 @@ public final class ProfileHealthConstant {
     /** 目标血糖区间（mmol/L）。 */
     public static final String TARGET_MIN = "1.0";
     public static final String TARGET_MAX = "33.3";
+
+    /** 血糖控制目标人群值域（0一般/1较严格/2较宽松/3妊娠期），与预测模块口径一致。 */
+    public static final int GOAL_PROFILE_MIN = 0;
+    public static final int GOAL_PROFILE_MAX = 3;
 }

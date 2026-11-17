@@ -25,17 +25,13 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-/**
- * 开发环境自带的本地对象存储。
- *
- * <p>仍保持“凭证 → PUT → 登记”协议，只是 PUT 地址由当前后端提供，免去安装 MinIO。
- * 一次性 token 只保存在内存中且 5 分钟过期，生产环境不会创建此 Bean。
- */
+/** 本地磁盘存储（仅开发）：仍走“凭证 → PUT → 登记”，PUT 请求由当前后端接收。 */
 @Service
 @ConditionalOnProperty(prefix = "glucopilot.storage", name = "provider", havingValue = "local")
 public class LocalObjectStorageService implements ObjectStorageService {
 
     private final Path root;
+    // token → 待上传信息：一次性、5 分钟过期；只存内存，生产不会创建这个 Bean
     private final ConcurrentMap<String, PendingUpload> pendingUploads = new ConcurrentHashMap<>();
 
     public LocalObjectStorageService(StorageProperties properties) {
@@ -50,11 +46,13 @@ public class LocalObjectStorageService implements ObjectStorageService {
     @Override
     public UploadCredential createUploadCredential(MediaBizType bizType, String ext, long sizeBytes, Long userId) {
         Instant now = Instant.now();
+        // 先清理过期凭证，防止长期运行后 Map 无限增长
         pendingUploads.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
         String storageKey = buildStorageKey(bizType, ext, userId);
         String token = UUID.randomUUID().toString().replace("-", "");
         pendingUploads.put(token, new PendingUpload(
                 storageKey, sizeBytes, now.plusSeconds(EXPIRE_SECONDS)));
+        // 上传地址指向当前后端，免去开发环境安装 MinIO
         String uploadUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
                 .path("/api/v1/media-files/local-uploads/{token}")
                 .buildAndExpand(token)
@@ -68,16 +66,15 @@ public class LocalObjectStorageService implements ObjectStorageService {
 
     /**
      * 消费一次性凭证并落盘；成功或失败后 token 均不能再次使用。
-     * <p>凭证校验放在读取请求体之前，避免 100MB 视频传完才被告知凭证已过期。
-     * <p>先写同目录临时文件、完整拷贝成功后再原子 move 到目标 key：拷贝中途断连、磁盘写失败
-     * 或字节数不符都不会在目标 key 留下半截文件——{@code objectExists} 与后续登记只会看到
-     * 「不存在」或「完整对象」两种状态。
+     * <p>先校验凭证再读请求体；先写临时文件再原子移动，目标 key 不会出现半截文件。
      */
     public void acceptUpload(String token, InputStream body, long contentLength) {
+        // remove 即消费：无论本次成功与否，token 都不能再次使用
         PendingUpload pending = pendingUploads.remove(token);
         if (pending == null || pending.expiresAt().isBefore(Instant.now())) {
             throw new IllegalArgumentException("上传凭证不存在或已过期");
         }
+        // 长度先校验，避免把超大请求体完整写入磁盘
         if (contentLength >= 0 && contentLength != pending.sizeBytes()) {
             throw new IllegalArgumentException("上传文件大小与凭证不一致");
         }
@@ -85,6 +82,7 @@ public class LocalObjectStorageService implements ObjectStorageService {
         Path temp = null;
         try {
             Files.createDirectories(target.getParent());
+            // 先写同目录临时文件，成功后原子移动：目标 key 不会出现半截文件
             temp = Files.createTempFile(target.getParent(), "upload-", ".tmp");
             long written = Files.copy(body, temp, StandardCopyOption.REPLACE_EXISTING);
             if (written != pending.sizeBytes()) {
@@ -107,6 +105,7 @@ public class LocalObjectStorageService implements ObjectStorageService {
 
     @Override
     public String resolvePublicUrl(String storageKey) {
+        // 开发环境没有公网对象地址，改由本后端代理读取，前端可直接预览
         return ServletUriComponentsBuilder.fromCurrentContextPath()
                 .path("/api/v1/media-files/local-objects")
                 .queryParam("key", storageKey)
@@ -169,6 +168,7 @@ public class LocalObjectStorageService implements ObjectStorageService {
     /** Newly introduced article drafts must never bypass article visibility via the local preview route. */
     public byte[] getPublicObject(String storageKey) {
         Path relative=root.relativize(resolvePath(storageKey));
+        // 7/8 是待审核/未发布稿件目录，禁止借公开预览路由绕过审核
         if(relative.getNameCount()==0 || java.util.Set.of("7","8").contains(relative.getName(0).toString())) {
             throw new BizException(ErrorCode.NOT_FOUND,"图片不存在或不可公开查看");
         }
@@ -192,6 +192,7 @@ public class LocalObjectStorageService implements ObjectStorageService {
             throw new IllegalArgumentException("storageKey 不能为空");
         }
         Path target = root.resolve(storageKey).normalize();
+        // normalize 之后仍必须以 root 开头，否则 ../ 可以跳出上传目录
         if (!target.startsWith(root)) {
             throw new IllegalArgumentException("非法 storageKey");
         }

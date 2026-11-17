@@ -123,10 +123,15 @@ public class MediaFileServiceImpl implements MediaFileService {
     @Override
     public MediaFile findOwnedMedia(Long mediaId, Long userId, MediaBizType bizType) {
         return mediaFileMapper.selectOne(new LambdaQueryWrapper<MediaFile>()
+                // 主键定位目标行；单凭 id 不够，下面是必须叠加的归属约束
                 .eq(MediaFile::getId, mediaId)
+                // 归属校验：防止拿别人的 mediaId 读取或引用其文件
                 .eq(MediaFile::getUserId, userId)
+                // 类型校验：血糖照不能当餐食照用，避免跨业务复用绕过各自规则
                 .eq(MediaFile::getBizType, bizType.getCode())
+                // 只认可用状态：已失效/逻辑删除的文件对业务不可见
                 .eq(MediaFile::getFileStatus, FILE_STATUS_AVAILABLE)
+                // 防御性 LIMIT 1：id 本应唯一，避免脏数据让 selectOne 抛“结果过多”
                 .last("LIMIT 1"));
     }
 

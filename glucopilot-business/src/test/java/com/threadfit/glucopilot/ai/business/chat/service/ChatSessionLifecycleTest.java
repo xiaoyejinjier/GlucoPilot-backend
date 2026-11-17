@@ -153,6 +153,31 @@ class ChatSessionLifecycleTest {
     }
 
     @Test
+    void 归档时会为待补抽记忆的会话提交一次抽取() {
+        when(chatSessionMapper.selectIdleSessionNeedingMemory(eq(USER_ID), any())).thenReturn(47L);
+        when(chatSessionMapper.archiveIdleSessions(anyLong(), any())).thenReturn(1);
+        when(chatSessionMapper.selectPage(any(), any())).thenReturn(page(1, 20, List.of()));
+
+        service.list(USER_ID, null, 1, 20);
+
+        // 补抽是归档的副作用，每次列表请求最多 1 个：既能补上历史欠账，又不会把列表拖慢
+        verify(userChatMemoryService).extractAsync(USER_ID, 47L, "session-archived");
+    }
+
+    @Test
+    void 归档失败时不提交补抽() {
+        when(chatSessionMapper.selectIdleSessionNeedingMemory(eq(USER_ID), any())).thenReturn(47L);
+        when(chatSessionMapper.archiveIdleSessions(anyLong(), any()))
+                .thenThrow(new IllegalStateException("deadlock"));
+        when(chatSessionMapper.selectPage(any(), any())).thenReturn(page(1, 20, List.of()));
+
+        service.list(USER_ID, null, 1, 20);
+
+        // 会话没被归档就补抽，等于在归档语义失败的情况下多烧一次模型调用
+        verify(userChatMemoryService, never()).extractAsync(anyLong(), anyLong(), any());
+    }
+
+    @Test
     void 归档关闭时不发归档语句() {
         properties.getChat().setArchiveIdleDays(0);
         when(chatSessionMapper.selectPage(any(), any())).thenReturn(page(1, 20, List.of()));

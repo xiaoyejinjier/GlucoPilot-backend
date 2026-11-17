@@ -24,12 +24,16 @@ import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
  *
  * <h2>装配顺序（与最终消息顺序一致）</h2>
  * <ol>
- *   <li>调用方已经把系统提示词放在最前（{@code DynamicPromptAdvisor}），本类不动它；</li>
- *   <li>附加上下文（更早对话摘要 + 最近工具结果摘要）：作为<b>一条</b> {@link SystemMessage} 插在最前，
- *       并显式标注"不是本轮原话"，避免模型把摘要当成用户刚说的话去回应；</li>
+ *   <li>本轮消息里的 {@link SystemMessage}（调用点请求级 {@code .system(...)} 注入的场景提示词）：
+ *       提到<b>最前</b>，人设与医疗约束因此永远在第一条。调用方已经把它放进了 {@code current}，
+ *       本类负责把它从"本轮新增消息"里拆出来，否则它会落在历史之后；</li>
+ *   <li>附加上下文（长期记忆 + 更早对话摘要 + 最近工具结果摘要）：作为<b>一条</b> {@link SystemMessage}
+ *       接在场景提示词之后，并显式标注"不是本轮原话"，避免模型把摘要当成用户刚说的话去回应；</li>
  *   <li>历史（从老到新，可能被预算裁掉最老的部分）；</li>
- *   <li>本轮消息（调用方传入的 {@code current}，<b>永不裁剪</b>）。</li>
+ *   <li>本轮的非系统消息（用户提问、图片等，<b>永不裁剪</b>）。</li>
  * </ol>
+ * 这三段附加上下文的分片顺序（系统提示 → 记忆 → 摘要 → 工具结果 → 历史）与上面的消息顺序一致，
+ * 所以 {@code chat_context} 账本记录的位置就是实际发出去的位置。
  *
  * <h2>保底与超预算</h2>
  * 无论预算多紧，都至少保留 {@code ai.memory.keep-recent-messages} 条最近历史：
@@ -57,9 +61,11 @@ public class ChatHistoryAssembler {
      * @param budgetTokens     预算上限
      * @param summaryUsed      是否用了滚动摘要
      * @param toolDigestUsed   是否注入了工具结果摘要
+     * @param memoryItems      实际注入的长期记忆条数（不是"查到几条"：空白与超长的会被丢掉，
+     *                         所以排查"用户说记不住"时要看这个数而不是库里有没有行）
      */
     public record Stats(int keptHistory, int droppedHistory, int estimatedTokens, int budgetTokens,
-                        boolean summaryUsed, boolean toolDigestUsed) {
+                        boolean summaryUsed, boolean toolDigestUsed, int memoryItems) {
 
         public boolean budgetExceeded() {
             return estimatedTokens > budgetTokens;
@@ -108,7 +114,8 @@ public class ChatHistoryAssembler {
         StringBuilder memorySection = new StringBuilder();
         StringBuilder summarySection = new StringBuilder();
         StringBuilder toolSection = new StringBuilder();
-        boolean memoryUsed = appendMemories(memorySection, memories);
+        int memoryItems = appendMemories(memorySection, memories);
+        boolean memoryUsed = memoryItems > 0;
         boolean summaryUsed = appendSummary(summarySection, summary, config.getSummaryMaxChars());
         boolean toolDigestUsed = appendToolDigests(toolSection, toolDigests, config.getToolReplayMaxItems());
 
@@ -158,13 +165,27 @@ public class ChatHistoryAssembler {
         }
         java.util.Collections.reverse(kept);
 
+        // 本轮消息里的 SystemMessage（场景提示词）必须留在最前：调用点用请求级 .system(...)
+        // 注入，ChatClient 组装 Prompt 时会把它放在第一条，但 current 是"本轮新增消息"，
+        // 直接接在历史后面会让人设与医疗约束落到历史之后、紧贴用户提问——多轮对话里
+        // 这条约束的位置就变了。所以先把它拆出来，再按 [提示词, 记忆/摘要, 历史, 本轮] 重排。
+        List<Message> leadingSystems = new ArrayList<>();
+        List<Message> currentBody = new ArrayList<>(safeCurrent.size());
+        for (Message message : safeCurrent) {
+            if (message instanceof SystemMessage) {
+                leadingSystems.add(message);
+            } else {
+                currentBody.add(message);
+            }
+        }
+
         // 去掉"历史末尾与本轮重复"的那条用户消息。
         // 背景：接口 2.24 先把用户消息落库、2.25 再开流，而记忆是从库里读的——于是本轮这条
         // 既在历史末尾、又在 current 里。不去重就会把同一句话送两遍（白花 token，还容易让模型
         // 以为用户重复问了一次）。这条规则从旧版 Advisor 的 merge(...) 原样搬过来。
         // 被去掉的那条不再进 prompt，分片里的历史 token 也要跟着扣掉，
         // 否则"分片之和"会比实际发出的 prompt 多出整整一条消息
-        Message removedDuplicate = dropTrailingDuplicate(kept, safeCurrent);
+        Message removedDuplicate = dropTrailingDuplicate(kept, currentBody);
         int droppedDuplicate = removedDuplicate == null ? 0 : 1;
         if (removedDuplicate != null) {
             historyTokens -= tokenEstimator.estimateMessage(textOf(removedDuplicate));
@@ -173,15 +194,16 @@ public class ChatHistoryAssembler {
         List<ChatContextShard> shards = buildShards(fixedOverhead, memorySection, summarySection, toolSection,
                 memoryUsed, summaryUsed, toolDigestUsed, historyTokens);
 
-        List<Message> messages = new ArrayList<>(keptCount + safeCurrent.size() + 1);
+        List<Message> messages = new ArrayList<>(leadingSystems.size() + keptCount + currentBody.size() + 1);
+        messages.addAll(leadingSystems);
         if (contextMessage != null) {
             messages.add(contextMessage);
         }
         messages.addAll(kept);
-        messages.addAll(safeCurrent);
+        messages.addAll(currentBody);
         return new Assembled(List.copyOf(messages),
                 new Stats(keptCount, safeHistory.size() - keptCount - droppedDuplicate, used, budget,
-                        summaryUsed, toolDigestUsed),
+                        summaryUsed, toolDigestUsed, memoryItems),
                 shards);
     }
 
@@ -253,12 +275,15 @@ public class ChatHistoryAssembler {
      * 长期记忆作为附加上下文的第一段（比摘要更靠前：它是"你是谁"，比"聊过什么"更基础）。
      * <p>
      * 条数由调用方（读取侧）限制；这里再限一次长度，避免一条超长记忆把预算吃光。
+     *
+     * @return 实际写进上下文的条数（空白条目会被跳过，因此可能小于 {@code memories.size()}）
      */
-    private static boolean appendMemories(StringBuilder context, List<UserChatMemoryService.MemoryItem> memories) {
+    private static int appendMemories(StringBuilder context, List<UserChatMemoryService.MemoryItem> memories) {
         if (memories == null || memories.isEmpty()) {
-            return false;
+            return 0;
         }
-        context.append("【关于这位用户的长期记忆（系统记住的事实，供你参考）】\n");
+        StringBuilder body = new StringBuilder();
+        int count = 0;
         for (UserChatMemoryService.MemoryItem item : memories) {
             if (item == null || item.text() == null || item.text().isBlank()) {
                 continue;
@@ -267,10 +292,17 @@ public class ChatHistoryAssembler {
             if (text.length() > 120) {
                 text = text.substring(0, 120);
             }
-            context.append("- ").append(item.key()).append('：').append(text).append('\n');
+            body.append("- ").append(item.key()).append('：').append(text).append('\n');
+            count++;
         }
-        context.append("（这些是长期背景，不要复述给用户、不要据此下诊断或用药建议；与用户本轮说法冲突时以本轮为准）");
-        return true;
+        if (count == 0) {
+            // 一条都没进来就不要留一个空标题：那会让"注入了什么"更难读
+            return 0;
+        }
+        context.append("【关于这位用户的长期记忆（系统记住的事实，供你参考）】\n")
+                .append(body)
+                .append("（这些是长期背景，不要复述给用户、不要据此下诊断或用药建议；与用户本轮说法冲突时以本轮为准）");
+        return count;
     }
     /** 摘要作为附加上下文的第一段；显式标注"不是本轮原话"。 */
     private static boolean appendSummary(StringBuilder context, String summary, int maxChars) {

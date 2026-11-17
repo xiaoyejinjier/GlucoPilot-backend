@@ -27,6 +27,14 @@ public class ChatSession extends BaseEntity {
     private String systemPromptVer;
     private String contextSummary;
     private Long summaryUptoMsgId;
+    /**
+     * 长期记忆已抽取到哪一条消息（V61）。
+     * <p>
+     * 语义是「输入窗口的上界」，不是「这个会话的记忆都抽全了」：抽取只看最近若干窗口。
+     * NULL = 从未抽取过。工具写入（{@code save_long_term_memory}）<b>不更新</b>本列——
+     * 它抽的是当轮一句话，不能代表更早的消息已经被覆盖。
+     */
+    private Long memoryExtractedUptoMsgId;
     /** 送入模型的最近原文条数 */
     private Integer windowMsgCount;
     /** 消息条数冗余 */

@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.memory.service.impl;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
@@ -13,6 +14,7 @@ import com.threadfit.glucopilot.ai.memory.service.impl.UserChatMemoryServiceImpl
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.util.JsonUtils;
+import java.util.concurrent.Executor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,11 +24,11 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -44,6 +46,8 @@ class UserChatMemoryExtractionTest {
     private AiChatClientRegistry clients;
     private ChatUserMemoryMapper memoryMapper;
     private ChatMessageMapper chatMessageMapper;
+    private ChatSessionMapper chatSessionMapper;
+    private Executor executor;
     private ChatClient chatClient;
     private ChatClient.ChatClientRequestSpec requestSpec;
     private ChatClient.CallResponseSpec callSpec;
@@ -55,6 +59,8 @@ class UserChatMemoryExtractionTest {
         clients = mock(AiChatClientRegistry.class);
         memoryMapper = mock(ChatUserMemoryMapper.class);
         chatMessageMapper = mock(ChatMessageMapper.class);
+        chatSessionMapper = mock(ChatSessionMapper.class);
+        executor = mock(Executor.class);
         chatClient = mock(ChatClient.class);
         requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
         callSpec = mock(ChatClient.CallResponseSpec.class);
@@ -83,9 +89,9 @@ class UserChatMemoryExtractionTest {
         when(chatMessageMapper.selectRecentBySession(any(), any())).thenReturn(List.of(message));
         when(memoryMapper.selectOne(any())).thenReturn(null);
 
-        service = new UserChatMemoryServiceImpl(clients, memoryMapper, chatMessageMapper, promptService,
+        service = new UserChatMemoryServiceImpl(clients, memoryMapper, chatMessageMapper, chatSessionMapper, promptService,
                 resolver, aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), new ChatRoundGuard(),
-                mock(Executor.class));
+                executor);
     }
 
     @Test
@@ -138,5 +144,87 @@ class UserChatMemoryExtractionTest {
         ArgumentCaptor<ChatUserMemoryEntity> captor = ArgumentCaptor.forClass(ChatUserMemoryEntity.class);
         verify(memoryMapper).insert(captor.capture());
         assertThat(captor.getValue().getMemoryText()).isEqualTo("餐后控制在 8 以下");
+    }
+
+    @Test
+    @DisplayName("拆窗：新→旧的列表要切成若干「时间正序」的窗口，且老窗排在前面")
+    void splitOldestFirstKeepsChronologicalWindows() {
+        List<ChatMessage> recentDesc = List.of(message(105L, "第5句"), message(104L, "第4句"),
+                message(103L, "第3句"), message(102L, "第2句"), message(101L, "第1句"));
+
+        List<List<ChatMessage>> windows = UserChatMemoryServiceImpl.splitOldestFirst(recentDesc, 2);
+
+        assertThat(windows).hasSize(3);
+        assertThat(windows.get(0)).extracting(ChatMessage::getId).containsExactly(101L, 102L);
+        assertThat(windows.get(1)).extracting(ChatMessage::getId).containsExactly(103L, 104L);
+        assertThat(windows.get(2)).extracting(ChatMessage::getId).containsExactly(105L);
+    }
+
+    @Test
+    @DisplayName("长会话按窗口抽取：老窗先送模型，新窗后送（后写的新说法才留得下来）")
+    void longSessionIsExtractedWindowByWindowOldestFirst() {
+        aiProperties.getMemory().setStructuredOutput(false);
+        aiProperties.getMemory().setMemoryExtractWindowMessages(1);
+        aiProperties.getMemory().setMemoryExtractMaxWindows(2);
+        // 入参是新→旧：id 大的是最近说的
+        when(chatMessageMapper.selectRecentBySession(any(), any())).thenReturn(
+                List.of(message(100L, "我最近不能吃辣了"), message(99L, "医生让我少油少盐")));
+        when(callSpec.content()).thenReturn("{\"memories\":[]}");
+
+        service.runExtract(7L, 8L, "session-ended");
+
+        // 回看上限 = 1 条/窗 × 2 窗
+        verify(chatMessageMapper).selectRecentBySession(8L, 2);
+        ArgumentCaptor<String> inputs = ArgumentCaptor.forClass(String.class);
+        verify(requestSpec, org.mockito.Mockito.times(2)).user(inputs.capture());
+        assertThat(inputs.getAllValues().get(0)).contains("少油少盐").doesNotContain("不能吃辣");
+        assertThat(inputs.getAllValues().get(1)).contains("不能吃辣").doesNotContain("少油少盐");
+        // 上界 = 这次真正取到的第一条（最近一条），只用于归档补齐判断，不代表「抽全了」
+        verify(chatSessionMapper).markMemoryExtracted(8L, 100L);
+    }
+
+    @Test
+    @DisplayName("进度标记写失败不影响抽取结果：记忆已经写进去了就不该因为标记失败回滚")
+    void failedProgressMarkDoesNotBreakExtraction() {
+        aiProperties.getMemory().setStructuredOutput(false);
+        when(callSpec.content()).thenReturn("{\"memories\":[]}");
+        when(chatSessionMapper.markMemoryExtracted(any(), any())).thenThrow(new RuntimeException("db down"));
+
+        int written = service.runExtract(7L, 8L, "session-ended");
+
+        assertThat(written).isZero();
+        verify(chatSessionMapper).markMemoryExtracted(8L, 1L);
+    }
+
+    @Test
+    @DisplayName("关键词兜底默认关闭：没有 tool calling 的部署不打开它，就不该因为「记住」两个字烧模型")
+    void keywordFallbackIsOffByDefault() {
+        service.extractAsync(7L, 8L, "explicit");
+
+        verify(executor, org.mockito.Mockito.never()).execute(any());
+        verify(chatMessageMapper, org.mockito.Mockito.never()).selectRecentBySession(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("关键词兜底打开后只回看最近 6 条：它由聊天主链路顺带触发，不能像终局复盘那样回看 80 条")
+    void keywordFallbackUsesNarrowWindow() {
+        aiProperties.getMemory().setKeywordTriggerFallback(true);
+        aiProperties.getMemory().setStructuredOutput(false);
+        when(chatMessageMapper.selectRecentBySession(any(), any())).thenReturn(List.of(message(100L, "记住我不吃辣")));
+        when(callSpec.content()).thenReturn("{\"memories\":[]}");
+
+        service.runExtract(7L, 8L, "explicit");
+
+        verify(chatMessageMapper).selectRecentBySession(8L, 6);
+        verify(requestSpec, org.mockito.Mockito.times(1)).user(anyString());
+    }
+
+    private static ChatMessage message(Long id, String text) {
+        ChatMessage message = new ChatMessage();
+        message.setId(id);
+        message.setMsgRole(1);
+        message.setContentText(text);
+        message.setGmtCreate(LocalDateTime.now());
+        return message;
     }
 }

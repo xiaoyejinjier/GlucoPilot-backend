@@ -64,6 +64,18 @@ class AiToolOutputContractTest {
         return new JsonUtils(new ObjectMapper());
     }
 
+    /** 月度统计工具现在还要算血糖达标率，所以需要血糖与档案三件套（本组用例只关心打卡/边界）。 */
+    private static StatisticsTools statisticsTools(
+            DailyStatisticsService daily, MonthlyStatisticsService monthly) {
+        return new StatisticsTools(
+                daily,
+                monthly,
+                mock(GlucoseRecordService.class),
+                mock(GlucosePeriodService.class),
+                mock(HealthProfileService.class),
+                json());
+    }
+
     // ---------- get_health_profile：合规裁剪 ----------
 
     @Test
@@ -117,7 +129,7 @@ class AiToolOutputContractTest {
         when(service.checkIn(eq(USER_ID), any(LocalDate.class))).thenReturn(checkIn);
 
         String json =
-                new StatisticsTools(service, mock(MonthlyStatisticsService.class), json())
+                statisticsTools(service, mock(MonthlyStatisticsService.class))
                         .getDailyCheckin(CONTEXT);
 
         assertThat(json)
@@ -137,7 +149,7 @@ class AiToolOutputContractTest {
         when(service.monthStats(USER_ID, today.getYear(), today.getMonthValue())).thenReturn(stats);
 
         String json =
-                new StatisticsTools(mock(DailyStatisticsService.class), service, json())
+                statisticsTools(mock(DailyStatisticsService.class), service)
                         .getMonthStats(null, null, CONTEXT);
 
         assertThat(json)
@@ -149,10 +161,9 @@ class AiToolOutputContractTest {
     @Test
     void 月度统计的月份越界应给出可读错误() {
         String json =
-                new StatisticsTools(
+                statisticsTools(
                                 mock(DailyStatisticsService.class),
-                                mock(MonthlyStatisticsService.class),
-                                json())
+                                mock(MonthlyStatisticsService.class))
                         .getMonthStats(2026, 13, CONTEXT);
 
         assertThat(json).contains("error").contains("1-12");
@@ -225,9 +236,10 @@ class AiToolOutputContractTest {
                         .giValue(new BigDecimal("83.2"))
                         .build();
         when(foodService.pageFoods(any(), any(), eq("米饭"), any()))
-                .thenReturn(PageResult.of(1, 5, 12, List.of(food)));
+                .thenReturn(PageResult.of(1, 2, 12, List.of(food)));
 
-        String json = new FoodNutritionTools(foodService, json()).lookupFoodNutrition("米饭");
+        String json =
+                new FoodNutritionTools(foodService, json()).lookupFoodNutrition(List.of("米饭"), null);
 
         assertThat(json).contains("米饭").contains("25.9").contains("\"total\":12");
         assertThat(json).doesNotContain("imageUrl").doesNotContain("cdn/x.jpg");
@@ -235,10 +247,56 @@ class AiToolOutputContractTest {
     }
 
     @Test
+    void 食物工具应一次查多个名字并为每个名字收窄候选() {
+        FoodService foodService = mock(FoodService.class);
+        when(foodService.pageFoods(any(), any(), eq("米饭"), any()))
+                .thenReturn(PageResult.of(1, 2, 8, List.of(food("米饭", "25.9"))));
+        // 模型经常把多个名字塞进一个字符串：拆开后照样能查
+        when(foodService.pageFoods(any(), any(), eq("红烧肉"), any()))
+                .thenReturn(PageResult.of(1, 2, 3, List.of(food("红烧肉", "6.0"))));
+        when(foodService.pageFoods(any(), any(), eq("青菜"), any())).thenReturn(PageResult.empty(1, 2));
+
+        String json =
+                new FoodNutritionTools(foodService, json())
+                        .lookupFoodNutrition(List.of("米饭、红烧肉", "  ", "青菜"), 2);
+
+        assertThat(json).contains("\"requested\":3").contains("\"found\":2");
+        assertThat(json).contains("米饭").contains("红烧肉").contains("25.9").contains("6.0");
+        // 没查到的逐条说明原因，而不是整次失败
+        assertThat(json).contains("notFound").contains("青菜").contains("没有匹配项");
+    }
+
+    @Test
+    void 食物工具超过上限应截断并说明而不是报错() {
+        FoodService foodService = mock(FoodService.class);
+        when(foodService.pageFoods(any(), any(), any(), any()))
+                .thenReturn(PageResult.of(1, 2, 1, List.of(food("占位", "1.0"))));
+
+        String json =
+                new FoodNutritionTools(foodService, json())
+                        .lookupFoodNutrition(
+                                List.of("a", "b", "c", "d", "e", "f", "g"), null);
+
+        assertThat(json).contains("\"requested\":7").contains("\"queried\":5").contains("ignored");
+        assertThat(json).contains("\"f\"").contains("\"g\"");
+    }
+
+    @Test
     void 食物工具关键词为空应给出可读错误() {
         String json =
-                new FoodNutritionTools(mock(FoodService.class), json()).lookupFoodNutrition("  ");
-        assertThat(json).contains("error").contains("关键词");
+                new FoodNutritionTools(mock(FoodService.class), json())
+                        .lookupFoodNutrition(List.of("  "), null);
+        assertThat(json).contains("error").contains("食物名称");
+    }
+
+    private static FoodDtos.FoodItem food(String name, String carbs) {
+        return FoodDtos.FoodItem.builder()
+                .foodName(name)
+                .categoryName("测试类")
+                .carbsPer100g(new BigDecimal(carbs))
+                .caloriesPer100g(new BigDecimal("100"))
+                .giValue(new BigDecimal("50"))
+                .build();
     }
 
     // ---------- query_glucose_range：聚合摘要与易误解字段 ----------

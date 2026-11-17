@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.memory.service.impl;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
@@ -66,11 +67,27 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     /** 单条记忆文本上限（列是 varchar(512)，但记忆本身就该短，太长说明抽错了）。 */
     static final int MAX_TEXT_CHARS = 200;
 
+    /**
+     * 显式写入（{@code save_long_term_memory} 工具路径）的固定置信度。
+     * <p>
+     * 85 而不是 100：它不是"模型多确定"，只是"用户亲口说的"这一档先验——留出余量，
+     * 以后若要做多来源加权（例如用户手改的记忆给 100），这一档才有区分度。
+     */
+    static final int EXPLICIT_CONFIDENCE = 85;
+
     /** 命中这些词的内容不许进长期记忆（诊断/用药类内容只该留在对话里）。 */
     private static final List<String> FORBIDDEN_MARKERS =
             List.of("剂量", "加量", "减量", "停药", "换药", "开药", "处方", "确诊", "诊断为", "胰岛素用量");
 
     private static final String EXTRACT_KEY_PREFIX = "chat-memory-extract:";
+
+    /**
+     * 关键词兜底触发的抽取原因（{@link #looksExplicit} 命中，见 {@code ChatCompletionServiceImpl}）。
+     * <p>
+     * 它和工具路径的区别：工具是模型主动调用、只记当轮一句；这里是「没有 tool calling 的部署」下
+     * 用关键词猜意图，所以窗口收窄到最近几条，避免每轮闲聊都触发一次整段复盘。
+     */
+    static final String REASON_KEYWORD_FALLBACK = "explicit";
 
     /**
      * 结构化输出校验器（复用同一个实例：它只持有 schema 与重试次数，无状态）。
@@ -89,6 +106,8 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     private final AiChatClientRegistry clients;
     private final ChatUserMemoryMapper memoryMapper;
     private final ChatMessageMapper chatMessageMapper;
+    /** 只用于记录「抽到哪一条」（V61），不参与抽取本身。 */
+    private final ChatSessionMapper chatSessionMapper;
     private final AiPromptTemplateService promptTemplateService;
     private final SceneModelResolver sceneModelResolver;
     private final AIProperties aiProperties;
@@ -99,6 +118,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     public UserChatMemoryServiceImpl(AiChatClientRegistry clients,
                                  ChatUserMemoryMapper memoryMapper,
                                  ChatMessageMapper chatMessageMapper,
+                                 ChatSessionMapper chatSessionMapper,
                                  AiPromptTemplateService promptTemplateService,
                                  SceneModelResolver sceneModelResolver,
                                  AIProperties aiProperties,
@@ -108,6 +128,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         this.clients = clients;
         this.memoryMapper = memoryMapper;
         this.chatMessageMapper = chatMessageMapper;
+        this.chatSessionMapper = chatSessionMapper;
         this.promptTemplateService = promptTemplateService;
         this.sceneModelResolver = sceneModelResolver;
         this.aiProperties = aiProperties;
@@ -208,32 +229,57 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     // ------------------------------------------------------------------ 写入
 
     /**
+     * 显式写入（工具 {@code save_long_term_memory} 的落地）。
+     * <p>
+     * 置信度固定 {@link #EXPLICIT_CONFIDENCE}：这句话是用户当轮亲口说的，让模型自评"我有多确定"
+     * 只会引入噪声（它可能给出 40 分导致一条真事实被丢掉）。真正的把关是四道闸，不是模型的自评。
+     */
+    @Override
+    public SaveOutcome saveExplicit(Long userId, Long sourceSessionId, String key, String text) {
+        if (userId == null) {
+            // 正常路径不会走到：工具调用前 AiToolContext.requireUserId 已经拦过
+            return SaveOutcome.rejected("缺少用户上下文，未记录");
+        }
+        return write(userId, key, text, EXPLICIT_CONFIDENCE, sourceSessionId, WriteSource.EXPLICIT);
+    }
+
+    /**
      * 写入/覆盖一条记忆（同 key 覆盖）。
      * <p>
-     * 返回是否写入。四道闸（键、置信度、长度、危险词）在这里统一施加——
-     * 调用方（抽取路径）不需要自己重复判断，也就不可能漏掉某一道。
+     * 四道闸（键、长度、置信度、危险词）在<b>这里统一施加</b>——三条写入入口（工具、会话结束、
+     * 归档补齐）都从这里过，调用方不需要自己重复判断，也就不可能漏掉某一道。
+     * <p>
+     * 冲突策略由 {@code source} 决定：
+     * <ul>
+     *   <li>{@link WriteSource#EXPLICIT}：无条件覆盖（用户刚说的算数）；</li>
+     *   <li>{@link WriteSource#BATCH}：只有新置信度 ≥ 既有置信度时才覆盖——否则一段老会话的
+     *       迟到抽取会把用户今天刚说的事实盖回旧版本。</li>
+     * </ul>
+     * 返回的是给模型/日志看的回执，拒绝原因是可执行的具体说明，不是一个笼统的"失败"。
      */
-    boolean upsert(Long userId, String key, String text, Integer confidence, Long sourceSessionId) {
+    SaveOutcome write(Long userId, String key, String text, Integer confidence, Long sourceSessionId,
+                      WriteSource source) {
         String normalizedKey = StringUtils.hasText(key) ? key.trim() : "";
         if (!ALLOWED_KEYS.contains(normalizedKey)) {
             log.debug("丢弃不在允许清单里的记忆键：key={} userId={}", key, userId);
-            return false;
+            return SaveOutcome.rejected("键不合法，只能是 diet_taboo（忌口）/ glucose_goal（控糖目标）"
+                    + "/ health_context（健康状况）/ habit（习惯）/ preference（偏好）");
         }
         String normalizedText = text == null ? "" : text.trim().replaceAll("\\s+", " ");
         if (!StringUtils.hasText(normalizedText) || normalizedText.length() > MAX_TEXT_CHARS) {
             log.debug("丢弃长度不合适的记忆：key={} len={}", normalizedKey, normalizedText.length());
-            return false;
+            return SaveOutcome.rejected("内容为空或超过 " + MAX_TEXT_CHARS + " 字，未记录");
         }
         int score = confidence == null ? 0 : confidence;
         if (score < MIN_CONFIDENCE) {
             log.debug("丢弃置信度不足的记忆：key={} confidence={}", normalizedKey, score);
-            return false;
+            return SaveOutcome.rejected("置信度不足（" + score + " < " + MIN_CONFIDENCE + "），未记录");
         }
         for (String marker : FORBIDDEN_MARKERS) {
             if (normalizedText.contains(marker)) {
                 // 诊断/用药类内容不许进长期记忆：它会在此后每一轮里被当作"用户的事实"复述
                 log.info("丢弃含诊断/用药内容的记忆：key={} userId={}（内容不入库，仅记键名）", normalizedKey, userId);
-                return false;
+                return SaveOutcome.rejected("内容涉及诊断或用药，长期记忆不保存这类信息，未记录");
             }
         }
 
@@ -249,9 +295,20 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             row.setConfidence(Math.min(score, 100));
             row.setSourceSessionId(sourceSessionId);
             memoryMapper.insert(row);
-            log.info("新增长期记忆 userId={} key={} confidence={} 来源会话={}",
-                    userId, normalizedKey, score, sourceSessionId);
-            return true;
+            log.info("新增长期记忆 userId={} key={} confidence={} 来源会话={} 来源={}",
+                    userId, normalizedKey, score, sourceSessionId, source);
+            return SaveOutcome.ok();
+        }
+        int existingConfidence = existing.getConfidence() == null ? 0 : existing.getConfidence();
+        if (source == WriteSource.BATCH && score < existingConfidence) {
+            log.info("跳过覆盖长期记忆 userId={} key={}（批量抽取置信度 {} < 既有 {}）",
+                    userId, normalizedKey, score, existingConfidence);
+            return SaveOutcome.rejected("已有更可信的记忆（置信度 " + existingConfidence + "），本次不覆盖");
+        }
+        if (normalizedText.equals(existing.getMemoryText())) {
+            // 内容没变化就不写库：避免每次会话结束都刷新 gmt_modified，把"最近更新"变成噪声
+            log.debug("记忆内容未变化，跳过写入 userId={} key={}", userId, normalizedKey);
+            return SaveOutcome.ok();
         }
         ChatUserMemoryEntity update = new ChatUserMemoryEntity();
         update.setId(existing.getId());
@@ -259,10 +316,19 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         update.setConfidence(Math.min(score, 100));
         update.setSourceSessionId(sourceSessionId);
         memoryMapper.updateById(update);
-        log.info("覆盖长期记忆 userId={} key={} confidence={}（旧值长度 {} → 新值长度 {}）",
-                userId, normalizedKey, score,
+        log.info("覆盖长期记忆 userId={} key={} confidence={} 来源={}（旧值长度 {} → 新值长度 {}）",
+                userId, normalizedKey, score, source,
                 existing.getMemoryText() == null ? 0 : existing.getMemoryText().length(), normalizedText.length());
-        return true;
+        return SaveOutcome.ok();
+    }
+
+    /**
+     * 批量抽取用的布尔壳：保留旧签名让抽取循环不必关心回执文案。
+     * <p>
+     * 走 {@link WriteSource#BATCH}——旧会话的迟到抽取不许盖掉更新的事实。
+     */
+    boolean upsert(Long userId, String key, String text, Integer confidence, Long sourceSessionId) {
+        return write(userId, key, text, confidence, sourceSessionId, WriteSource.BATCH).saved();
     }
 
     /** 账号注销：物理删除该用户全部长期记忆。 */
@@ -277,6 +343,13 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     @Override
     public void extractAsync(Long userId, Long sessionId, String reason) {
         if (!clients.utilityAvailable() || userId == null || sessionId == null) {
+            return;
+        }
+        // 关键词兜底默认关闭：有 tool calling 时由模型调 save_long_term_memory 决定记不记，
+        // 关键词只会误判（"我记住了"、"记住这个数明天再看"）。开关放在这里而不是调用点，
+        // 是因为它属于"这条抽取要不要做"的策略，和窗口宽度、冲突规则是同一层的事。
+        if (REASON_KEYWORD_FALLBACK.equals(reason) && !aiProperties.getMemory().isKeywordTriggerFallback()) {
+            log.debug("关键词兜底未开启，跳过抽取 sessionId={}", sessionId);
             return;
         }
         String key = EXTRACT_KEY_PREFIX + sessionId;
@@ -309,27 +382,86 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             return 0;
         }
         try {
-            List<ChatMessage> messages = chatMessageMapper.selectRecentBySession(sessionId,
-                    aiProperties.getMemory().getMemoryExtractMaxMessages());
-            if (messages == null || messages.isEmpty()) {
+            // 关键词兜底（没有 tool calling 的部署）只处理「用户刚刚说的那几句」：
+            // 它由聊天主链路顺带触发、每轮都可能命中，窗口必须比终局复盘小得多，否则一次闲聊
+            // 就烧掉两窗 × 40 条的模型输入。真正的整段复盘只发生在会话结束/归档。
+            boolean fallback = REASON_KEYWORD_FALLBACK.equals(reason);
+            int windowSize = fallback
+                    ? Math.max(aiProperties.getMemory().getKeywordFallbackWindowMessages(), 1)
+                    : Math.max(aiProperties.getMemory().getMemoryExtractWindowMessages(), 1);
+            int maxWindows = fallback
+                    ? 1
+                    : Math.max(aiProperties.getMemory().getMemoryExtractMaxWindows(), 1);
+            List<ChatMessage> recent = chatMessageMapper.selectRecentBySession(sessionId, windowSize * maxWindows);
+            if (recent == null || recent.isEmpty()) {
                 return 0;
             }
-            String input = buildInput(userId, messages);
-            List<MemoryCandidate> candidates = extractCandidates(input);
             int written = 0;
-            for (MemoryCandidate candidate : candidates) {
-                if (upsert(userId, candidate.key(), candidate.text(), candidate.confidence(), sessionId)) {
-                    written++;
+            int windows = 0;
+            // 老窗先、新窗后：两个窗口提到同一个键时，后写的新说法才留得下来
+            for (List<ChatMessage> window : splitOldestFirst(recent, windowSize)) {
+                windows++;
+                List<MemoryCandidate> candidates = extractCandidates(buildInput(userId, window));
+                for (MemoryCandidate candidate : candidates) {
+                    if (upsert(userId, candidate.key(), candidate.text(), candidate.confidence(), sessionId)) {
+                        written++;
+                    }
                 }
             }
-            log.info("长期记忆抽取完成 userId={} sessionId={} 原因={} 候选={} 写入={}",
-                    userId, sessionId, reason, candidates.size(), written);
+            // recent 是「新→旧」，第 0 条就是这次覆盖到的上界；工具路径不写这一列，见 markExtracted 注释
+            markExtracted(sessionId, recent.get(0).getId());
+            log.info("长期记忆抽取完成 userId={} sessionId={} 原因={} 窗口={} 覆盖消息={} 写入={}",
+                    userId, sessionId, reason, windows, recent.size(), written);
             return written;
         } catch (RuntimeException e) {
             // 记忆是增强项：抽取失败绝不能影响已经成功的回复
             log.warn("长期记忆抽取失败（忽略，下次再试）userId={} sessionId={}", userId, sessionId, e);
             return 0;
         }
+    }
+
+    /**
+     * 记录「长期记忆抽到哪一条」（V61 列 {@code chat_session.memory_extracted_upto_msg_id}）。
+     * <p>
+     * 用途只有一个：惰性归档时判断这个会话值不值得再补抽一次。它是<b>进度标记</b>，不是"抽全了"的证明——
+     * 窗口只覆盖最近若干条，更早的消息可能从未进过模型。
+     * <p>
+     * 失败只告警：进度标记写不进去，最坏是下次归档重抽一遍（浪费一次模型调用），
+     * 不能因此把已经写入成功的记忆回滚或让调用方以为抽取失败。
+     */
+    private void markExtracted(Long sessionId, Long uptoMsgId) {
+        if (sessionId == null || uptoMsgId == null) {
+            return;
+        }
+        try {
+            chatSessionMapper.markMemoryExtracted(sessionId, uptoMsgId);
+        } catch (RuntimeException e) {
+            log.warn("记录长期记忆抽取位置失败（忽略，下次归档会重抽）sessionId={} upto={}",
+                    sessionId, uptoMsgId, e);
+        }
+    }
+
+    /**
+     * 把「最近 N 条，新→旧」切成若干窗口，按<b>旧→新</b>返回。
+     *
+     * <p>入参是 {@code selectRecentBySession} 的结果（{@code ORDER BY seq_no DESC}），
+     * 所以从尾部往前切片，切出来的第一段就是最老的一段；调用方按返回顺序依次送模型，
+     * 后处理的窗口天然覆盖先处理的结论。
+     *
+     * @param recentDesc 新→旧的消息列表
+     * @param windowSize 每个窗口的条数（≥1，调用方已兜底）
+     */
+    static List<List<ChatMessage>> splitOldestFirst(List<ChatMessage> recentDesc, int windowSize) {
+        List<List<ChatMessage>> windows = new ArrayList<>();
+        for (int end = recentDesc.size(); end > 0; end -= windowSize) {
+            int start = Math.max(0, end - windowSize);
+            // subList 仍是「新→旧」，翻正后才是模型看到的时间顺序
+            List<ChatMessage> slice = new ArrayList<>(recentDesc.subList(start, end));
+            // 从尾部往前切：第一刀切出来的就是最老的一段，所以循环顺序天然是「老→新」
+            java.util.Collections.reverse(slice);
+            windows.add(slice);
+        }
+        return windows;
     }
 
     /** 抽取输入：已知记忆（供模型判断"要不要更正"）+ 对话原文（时间正序，超长只取最近部分）。 */

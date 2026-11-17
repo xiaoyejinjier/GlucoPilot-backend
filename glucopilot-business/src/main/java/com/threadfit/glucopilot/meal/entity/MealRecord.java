@@ -38,6 +38,10 @@ public class MealRecord extends BaseEntity {
     private BigDecimal predictSuggest;
     /** 预测建议文案，可空 */
     private String suggestText;
+    /** 算法版本号（v2.1 等），可空 */
+    private String algorithmVersion;
+    /** 推荐状态：IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE，可空 */
+    private String recommendationStatus;
     /** 记录时刻（服务端写入，防伪） */
     private LocalDateTime recordedAt;
 }

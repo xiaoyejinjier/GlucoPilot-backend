@@ -23,7 +23,7 @@ public final class AuthDtos {
         @NotBlank
         @Pattern(regexp = "^1\\d{10}$", message = "手机号格式不正确")
         private String phone;
-        /** login | bind */
+        /** login | bind | cancel（注销提交用 cancel；手动恢复已下线，不再有 recover）。 */
         @NotBlank
         private String scene;
     }
@@ -43,7 +43,7 @@ public final class AuthDtos {
         @Email(message = "邮箱格式不正确")
         @Size(max = 128)
         private String email;
-        /** login | bind */
+        /** login | bind | cancel（注销提交用 cancel；手动恢复已下线，不再有 recover）。 */
         @NotBlank
         private String scene;
     }
@@ -67,6 +67,8 @@ public final class AuthDtos {
         private Boolean isNewUser;
         private Integer accountStatus;
         private Boolean needDisclaimer;
+        /** 本次登录是否顺带撤销了注销申请（true 时前端需提示"账号已恢复"）。 */
+        private Boolean recoveredFromCancellation;
     }
 
     @Data

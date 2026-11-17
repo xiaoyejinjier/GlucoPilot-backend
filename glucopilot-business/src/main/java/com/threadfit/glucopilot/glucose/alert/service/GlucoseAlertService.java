@@ -62,7 +62,9 @@ public class GlucoseAlertService {
 
     @Transactional(readOnly = true)
     public GlucoseAlertDtos.Detail detail(long id) {
-        return new GlucoseAlertDtos.Detail(require(id), repository.history(id));
+        var event = repository.findDetail(id);
+        if (event == null) throw new BizException(ErrorCode.NOT_FOUND, "记录不存在或不可查看");
+        return new GlucoseAlertDtos.Detail(event, repository.history(id));
     }
 
     @Transactional

@@ -26,7 +26,7 @@ public final class OpsAuthDtos {
         private Long expiresIn;
         private String username;
         private String nickname;
-        /** admin | editor（来自 sys_ops_role：super_admin→admin，其余→editor） */
+        /** admin | editor | doctor，由若依角色及医生固定绑定共同确定。 */
         private String role;
         private Long opsId;
         /** RuoYi 后端角色编码。 */

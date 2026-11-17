@@ -44,9 +44,31 @@ public class CommunityPublicationController {
             @RequestParam(defaultValue = "false") boolean following,
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "RECOMMEND") String sort,
+            @RequestParam(required = false) String refreshSeed,
+            @RequestParam(required = false) String excludeIds,
             @Valid PageQuery q) {
         return ApiResponse.ok(
-                service.feed(RequestContext.requireUserId(), tag, following, keyword, sort, q));
+                refreshSeed == null && excludeIds == null
+                        ? service.feed(
+                                RequestContext.requireUserId(), tag, following, keyword, sort, q)
+                        : service.feed(
+                                RequestContext.requireUserId(),
+                                tag,
+                                following,
+                                keyword,
+                                sort,
+                                q,
+                                refreshSeed,
+                                excludeIds));
+    }
+
+    @PostMapping("/recommendation/exposures")
+    public ApiResponse<Void> exposures(
+            @Valid @RequestBody
+                    com.threadfit.glucopilot.community.recommendation.dto.RecommendationExposure
+                            request) {
+        service.recommendationExposures(RequestContext.requireUserId(), request.newsIds());
+        return ApiResponse.ok();
     }
 
     @GetMapping("/articles/mine")

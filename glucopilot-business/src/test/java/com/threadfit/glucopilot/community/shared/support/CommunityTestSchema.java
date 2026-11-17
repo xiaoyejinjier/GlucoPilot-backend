@@ -26,8 +26,7 @@ public final class CommunityTestSchema {
                     "ALTER TABLE community_blogger ADD COLUMN IF NOT EXISTS enabled INT DEFAULT 1");
             s.execute("ALTER TABLE cms_news ADD COLUMN IF NOT EXISTS blogger_id BIGINT DEFAULT 1");
             // V58 标题拼音列：社区测试从 V1 抽表，不跑完整 Flyway，需在此补列，否则 MyBatis 读写 cms_news 会报列不存在
-            s.execute(
-                    "ALTER TABLE cms_news ADD COLUMN IF NOT EXISTS title_pinyin VARCHAR(512)");
+            s.execute("ALTER TABLE cms_news ADD COLUMN IF NOT EXISTS title_pinyin VARCHAR(512)");
             s.execute(
                     "ALTER TABLE cms_news ADD COLUMN IF NOT EXISTS title_pinyin_initials"
                             + " VARCHAR(128)");
@@ -63,6 +62,25 @@ public final class CommunityTestSchema {
                                 "db/migration/V38__community_visibility_views_preferences.sql"));
         access.setSqlScriptEncoding("UTF-8");
         access.populate(connection);
+        try (var s = connection.createStatement()) {
+            // 纯评论测试不建互动表；仅给实际存在的表补V69列。
+            if (tableExists(connection, "news_user_action")) {
+                s.execute(
+                        "ALTER TABLE news_user_action ADD COLUMN IF NOT EXISTS liked_at"
+                            + " TIMESTAMP(3)");
+                s.execute(
+                        "ALTER TABLE news_user_action ADD COLUMN IF NOT EXISTS collected_at"
+                            + " TIMESTAMP(3)");
+            }
+            s.execute(
+                    "CREATE TABLE IF NOT EXISTS community_recommendation_exposure(user_id"
+                        + " BIGINT,news_id BIGINT,last_shown_at TIMESTAMP(3),PRIMARY"
+                        + " KEY(user_id,news_id))");
+            if ("H2".equals(connection.getMetaData().getDatabaseProductName()))
+                s.execute(
+                        "CREATE ALIAS IF NOT EXISTS CRC32 FOR"
+                            + " 'com.threadfit.glucopilot.community.shared.support.CommunityTestSchema.crc32'");
+        }
         try (var tables = connection.getMetaData().getTables(null, null, "media_file", null)) {
             if (tables.next())
                 try (var s = connection.createStatement()) {
@@ -139,6 +157,12 @@ public final class CommunityTestSchema {
                             + "created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),"
                             + "CONSTRAINT chk_cmh_severity CHECK (severity BETWEEN 1 AND 3))");
         }
+    }
+
+    public static long crc32(String value) {
+        var crc = new java.util.zip.CRC32();
+        crc.update(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return crc.getValue();
     }
 
     /** 表是否存在（H2/MySQL 通用，用 JDBC 元数据而不是查 information_schema）。 */

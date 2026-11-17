@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.content.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -18,6 +19,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.LocalDateTime;
 
 @ExtendWith(MockitoExtension.class)
 class ContentServiceActionTest {
@@ -57,6 +60,37 @@ class ContentServiceActionTest {
 
         assertTrue(result.getLiked());
         assertEquals(1, result.getLikeCount());
+    }
+
+    @Test
+    void collectionAndRepeatedLikePreserveOriginalLikeTime() {
+        CmsNews news = new CmsNews();
+        news.setId(1L);
+        news.setPublishStatus(1);
+        news.setLikeCount(1);
+        news.setCollectCount(0);
+        var originalLike = LocalDateTime.of(2026, 11, 15, 10, 0);
+        NewsUserAction action = new NewsUserAction();
+        action.setId(10L);
+        action.setIsLiked(1);
+        action.setIsCollected(0);
+        action.setLikedAt(originalLike);
+        when(newsMapper.selectForAction(1L)).thenReturn(news);
+        when(newsUserActionMapper.selectOne(any())).thenReturn(action);
+
+        var request =
+                new com.threadfit.glucopilot.community.reaction.dto.ReactionDtos
+                        .NewsActionRequest();
+        request.setLiked(true);
+        request.setCollected(true);
+        contentService.updateNewsAction(7L, 1L, request);
+        assertEquals(originalLike, action.getLikedAt());
+        assertNotNull(action.getCollectedAt());
+        var originalCollect = action.getCollectedAt();
+        contentService.updateNewsAction(7L, 1L, request);
+        assertEquals(originalCollect, action.getCollectedAt());
+        assertEquals(1, news.getLikeCount());
+        assertEquals(1, news.getCollectCount());
     }
 
     @Test

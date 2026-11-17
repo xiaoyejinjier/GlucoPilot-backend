@@ -245,6 +245,52 @@ public class AdminCommunityHttpTest {
     }
 
     @Test
+    void recommendationExposureValidatesIdsAndUsesCurrentUser() throws Exception {
+        var service = mock(CommunityPublicationService.class);
+        var mvc =
+                MockMvcBuilders.standaloneSetup(new CommunityPublicationController(service))
+                        .setControllerAdvice(
+                                new com.threadfit.glucopilot.common.exception
+                                        .GlobalExceptionHandler())
+                        .build();
+        try {
+            RequestContext.setUserId(36L);
+            var response =
+                    mvc.perform(
+                                    post("/api/v1/community/recommendation/exposures")
+                                            .contentType("application/json")
+                                            .content("{\"newsIds\":[10,11]}"))
+                            .andReturn()
+                            .getResponse();
+            assertEquals(200, response.getStatus());
+            verify(service).recommendationExposures(36L, List.of(10L, 11L));
+            for (String invalid : List.of("[]", "[0]", "[null]")) {
+                assertEquals(
+                        400,
+                        mvc.perform(
+                                        post("/api/v1/community/recommendation/exposures")
+                                                .contentType("application/json")
+                                                .content("{\"newsIds\":" + invalid + "}"))
+                                .andReturn()
+                                .getResponse()
+                                .getStatus());
+            }
+            RequestContext.clear();
+            assertEquals(
+                    401,
+                    mvc.perform(
+                                    post("/api/v1/community/recommendation/exposures")
+                                            .contentType("application/json")
+                                            .content("{\"newsIds\":[10]}"))
+                            .andReturn()
+                            .getResponse()
+                            .getStatus());
+        } finally {
+            RequestContext.clear();
+        }
+    }
+
+    @Test
     void communityFeedDefaultsToRecommendationsAndUsesAuthenticatedViewer() throws Exception {
         var service = mock(CommunityPublicationService.class);
         when(service.feed(eq(36L), isNull(), eq(false), isNull(), eq("RECOMMEND"), any()))

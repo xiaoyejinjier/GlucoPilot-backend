@@ -63,6 +63,7 @@ public class OwnedMediaResolver {
             case CMS -> "内容图片";
             case ARTICLE_IMAGE -> "文章配图";
             case ARTICLE_VIDEO -> "文章视频";
+            case CONSULTATION_IMAGE -> "问诊图片";
         };
     }
 }

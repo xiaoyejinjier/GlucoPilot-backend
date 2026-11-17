@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface CommunityAccountCleanupMapper {
     int deleteReminderReads(@Param("userId") long userId);
+    int deleteRecommendationExposures(@Param("userId") long userId);
     @Delete("DELETE FROM community_follow WHERE follower_id=#{userId}")
     int deleteFollows(@Param("userId") long userId);
 

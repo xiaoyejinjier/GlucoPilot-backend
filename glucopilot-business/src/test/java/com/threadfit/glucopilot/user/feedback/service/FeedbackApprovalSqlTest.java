@@ -52,6 +52,10 @@ class FeedbackApprovalSqlTest {
                                 schema.substring(start, schema.indexOf(") ENGINE=", start) + 1)
                                         .replace("CONSTRAINT pk_id PRIMARY KEY", "PRIMARY KEY"));
             }
+            jdbc.execute(
+                    "CREATE TABLE admin_work_reminder_read(ops_id BIGINT,kind VARCHAR(32),source_id"
+                        + " BIGINT,revision VARCHAR(255),read_at TIMESTAMP(3),PRIMARY"
+                        + " KEY(ops_id,kind,source_id,revision))");
             var config = new MybatisConfiguration();
             config.setMapUnderscoreToCamelCase(true);
             GlobalConfigUtils.setGlobalConfig(
@@ -93,7 +97,7 @@ class FeedbackApprovalSqlTest {
                 assertEquals(
                         2, admin.page(null, 2, null, q).getRecords().getFirst().getReplyStatus());
                 assertEquals(1, admin.page(2, 0, "丙", q).getTotal());
-                assertEquals(2, reminders.summary(Set.of("feedback:manage")).total());
+                assertEquals(2, reminders.summary(7L, Set.of("feedback:manage")).total());
                 var request = new AdminFeedbackDtos.ReplyRequest();
                 request.setReplyStatus(1);
                 request.setOfficialReply(" 已审批回复 ");
@@ -105,7 +109,7 @@ class FeedbackApprovalSqlTest {
                 assertNotNull(stored.getRepliedAt());
                 assertEquals(1, admin.page(null, 0, null, q).getTotal());
                 assertEquals(3, admin.page(null, 2, null, q).getTotal());
-                assertEquals(1, reminders.summary(Set.of("feedback:manage")).total());
+                assertEquals(1, reminders.summary(7L, Set.of("feedback:manage")).total());
                 var all = new PageQuery();
                 all.setPageSize(20);
                 var mine = user.page(9L, all);
@@ -124,7 +128,7 @@ class FeedbackApprovalSqlTest {
                 request.setReplyStatus(null);
                 request.setOfficialReply("无需选择状态也可以回复");
                 admin.reply(7L, 3L, request);
-                assertEquals(0, reminders.summary(Set.of("feedback:manage")).total());
+                assertEquals(0, reminders.summary(7L, Set.of("feedback:manage")).total());
                 assertThrows(BizException.class, () -> admin.page(null, 1, null, all));
             } finally {
                 jdbc.execute("DROP ALL OBJECTS");

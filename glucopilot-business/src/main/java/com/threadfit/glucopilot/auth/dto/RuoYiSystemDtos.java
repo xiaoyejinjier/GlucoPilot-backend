@@ -17,7 +17,7 @@ public final class RuoYiSystemDtos {
         private Long opsId;
         private String username;
         private String nickname;
-        /** 管理端兼容角色：admin | editor。 */
+        /** 管理端角色：admin | editor | doctor。 */
         private String role;
         /** 后端权威角色编码，如 super_admin、operator。 */
         private List<String> roles;

@@ -28,6 +28,7 @@ class CommunityAccountCleanupServiceTest {
                     "community_follow", "follower_id",
                     "community_article_reader", "user_id",
                     "community_article_view", "user_id",
+                    "community_recommendation_exposure", "user_id",
                     "community_article_hidden", "user_id",
                     "community_article_draft", "user_id",
                     "community_notification", "recipient_id",

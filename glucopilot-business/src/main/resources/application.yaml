@@ -393,3 +393,14 @@ gen:
   autoRemovePre: false
   tablePrefix: gp_
   allowOverwrite: false
+
+# 独立的支付宝沙箱，默认关闭；全部取自环境变量，不填写真实密钥。
+payments:
+  alipay:
+    sandbox:
+      enabled: ${ALIPAY_SANDBOX_ENABLED:false}
+      app-id: ${ALIPAY_SANDBOX_APP_ID:}
+      private-key: ${ALIPAY_SANDBOX_PRIVATE_KEY:}
+      public-key: ${ALIPAY_SANDBOX_PUBLIC_KEY:}
+      seller-id: ${ALIPAY_SANDBOX_SELLER_ID:}
+      notify-url: ${ALIPAY_SANDBOX_NOTIFY_URL:}

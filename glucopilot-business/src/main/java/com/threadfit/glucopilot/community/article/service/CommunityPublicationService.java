@@ -17,6 +17,7 @@ import com.threadfit.glucopilot.community.article.mapper.CommunityArticleQuery;
 import com.threadfit.glucopilot.community.article.mapper.CommunityPublicationMapper;
 import com.threadfit.glucopilot.community.comment.dto.AdminCommentDtos.AdminComment;
 import com.threadfit.glucopilot.community.profile.dto.ProfileDtos;
+import com.threadfit.glucopilot.community.recommendation.dto.CommunityRecommendation;
 import com.threadfit.glucopilot.community.recommendation.service.CommunityRecommendationService;
 import com.threadfit.glucopilot.community.report.dto.ReportDtos.ReportRequest;
 import com.threadfit.glucopilot.community.report.dto.ReportDtos.Resolution;
@@ -375,6 +376,18 @@ public class CommunityPublicationService {
 
     public PageResult<Article> feed(
             long viewer, String tag, boolean following, String keyword, String sort, PageQuery q) {
+        return feed(viewer, tag, following, keyword, sort, q, null, null);
+    }
+
+    public PageResult<Article> feed(
+            long viewer,
+            String tag,
+            boolean following,
+            String keyword,
+            String sort,
+            PageQuery q,
+            String refreshSeed,
+            String excludeIds) {
         user(viewer, false);
         page(q);
         if (sort == null || !Set.of("RECOMMEND", "LATEST").contains(sort))
@@ -393,10 +406,53 @@ public class CommunityPublicationService {
         // - 当前不是只看关注作者的列表；
         // - 当前没有输入搜索关键词。
         // 满足这些条件，就为当前用户生成推荐上下文。
-        if ("RECOMMEND".equals(sort) && !following && query.getKeyword() == null)
-            query.setRecommendation(recommendation.prepare(viewer));
+        boolean ranked = "RECOMMEND".equals(sort) && !following && query.getKeyword() == null;
+        if (ranked) query.setRecommendation(recommendation.prepare(viewer));
+
+        if (refreshSeed != null && !refreshSeed.isEmpty()) {
+            if (!refreshSeed.matches("[A-Za-z0-9_-]{8,64}"))
+                throw new BizException(ErrorCode.BAD_REQUEST, "推荐刷新标识不合法");
+            var excluded = parseExclusions(excludeIds);
+            if (ranked) {
+                var base = query.getRecommendation();
+                query.setRecommendation(
+                        new CommunityRecommendation(base.asOf(), base.tags(), refreshSeed));
+                query.setExcludedIds(excluded);
+                // 每次从未加载的候选取前N篇，避免展示降权改变排序后用OFFSET漏项或重复。
+                long total = Math.min(200, mapper.countArticles(query));
+                int limit = Math.min(q.getPageSize(), 200 - excluded.size());
+                var records = limit <= 0
+                        ? List.<Article>of()
+                        : mapper.selectArticles(query, limit, 0).stream()
+                                .map(row -> map(row, viewer, false, false)).toList();
+                return PageResult.of(q.getPageNum(), q.getPageSize(), total, records);
+            }
+        } else if (excludeIds != null && !excludeIds.isBlank()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "加载更多需要推荐刷新标识");
+        }
 
         return list(viewer, false, query, q);
+    }
+
+    private List<Long> parseExclusions(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        if (raw.length() > 4000) throw new BizException(ErrorCode.BAD_REQUEST, "本批推荐最多200篇");
+        var ids = new LinkedHashSet<Long>();
+        try {
+            for (String id : raw.split(",", -1)) {
+                if (!id.matches("[1-9][0-9]{0,18}")) throw new NumberFormatException();
+                ids.add(Long.parseLong(id));
+            }
+        } catch (NumberFormatException e) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "文章ID格式不合法");
+        }
+        if (ids.size() > 200) throw new BizException(ErrorCode.BAD_REQUEST, "本批推荐最多200篇");
+        return List.copyOf(ids);
+    }
+
+    public void recommendationExposures(long viewer, List<Long> ids) {
+        user(viewer, false);
+        recommendation.expose(viewer, ids);
     }
 
     public List<Tag> myTags(long viewer) {

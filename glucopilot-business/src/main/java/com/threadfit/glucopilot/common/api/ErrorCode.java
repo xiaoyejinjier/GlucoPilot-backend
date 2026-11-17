@@ -20,7 +20,9 @@ public enum ErrorCode {
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, 40500, "接口不支持此请求方法，请确认后端版本与请求方式"),
     CONFLICT(HttpStatus.CONFLICT, 40900, "冲突（唯一键、乐观锁、账号占用）"),
     TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, 42901, "限流或登录锁定"),
-    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, 50000, "系统异常");
+    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, 50000, "系统异常"),
+    PAYMENT_UNAVAILABLE(HttpStatus.NOT_IMPLEMENTED, 50100, "支付宝沙箱尚未配置"),
+    PAYMENT_UPSTREAM_ERROR(HttpStatus.BAD_GATEWAY, 50200, "沙箱支付服务暂不可用，请稍后重试");
 
     private final HttpStatus httpStatus;
     private final int code;

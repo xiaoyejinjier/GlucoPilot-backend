@@ -51,6 +51,11 @@ public class GlucoseAlertRepository {
         return row == null ? null : event(row);
     }
 
+    public GlucoseAlertDtos.Event findDetail(long id) {
+        var row = mapper.selectDetail(id);
+        return row == null ? null : event(row);
+    }
+
     /** 同一Spring事务内锁定原血糖记录，更新/删除和处理事件使用相同行锁。 */
     public boolean lockSource(long id) {
         return !mapper.lockSource(id).isEmpty();
@@ -140,7 +145,9 @@ public class GlucoseAlertRepository {
                 row.getSourceType() == null ? 0 : row.getSourceType(),
                 row.getRemark(),
                 row.getRecordedAt(),
-                GlucoseAlertPolicy.classify(row.getNodeCode(), row.getGlucoseValue()),
+                java.util.Objects.toString(
+                        GlucoseAlertPolicy.classify(row.getNodeCode(), row.getGlucoseValue()),
+                        "NORMAL"),
                 row.getStatus(),
                 row.getNote(),
                 amount(row.getVersion()),

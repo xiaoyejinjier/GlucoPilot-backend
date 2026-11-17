@@ -4,4 +4,7 @@
     <delete id="deleteReminderReads">
         DELETE FROM user_reminder_read WHERE user_id = #{userId}
     </delete>
+    <delete id="deleteRecommendationExposures">
+        DELETE FROM community_recommendation_exposure WHERE user_id = #{userId}
+    </delete>
 </mapper>

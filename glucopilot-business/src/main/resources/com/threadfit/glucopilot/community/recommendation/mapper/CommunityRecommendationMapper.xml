@@ -9,49 +9,40 @@
         讲解顺序：signals → Service生成向量 → similarity/popularity/freshness/followed → score → orderBy。
     -->
 
-    <!--
-        【1. 行为权重】读取指定时间范围内本人的有效行为，按标签ID和行为日期汇总。
-        浏览记录权重1；当前点赞状态权重3；当前收藏状态权重5，同时点赞收藏则为8。
-        UNION ALL合并两类来源；JOIN将文章行为映射到每个启用标签。
-        返回的weight尚未衰减；signal_date交给Service计算距离今天的天数。
-        点赞/收藏使用互动行的gmt_modified作为时间，不是每次点击的历史事件。
-    -->
+    <!-- 【1. 今日标签兴趣】阅读1、点赞3、收藏5分别按真实发生时间取今日有效状态。
+         点赞与收藏独立计时，收藏变化不会使旧点赞变成今日行为。 -->
     <select id="signals" resultType="com.threadfit.glucopilot.community.recommendation.entity.ArticleTagSignal">
-        SELECT
-            t.id tag_id,
-            s.signal_date,
-            SUM(s.weight) weight
+        SELECT t.id tag_id,s.signal_date,SUM(s.weight) weight
         FROM (
-            SELECT
-                v.news_id,
-                v.view_date signal_date,
-                1.0 weight
-            FROM community_article_view v
-            WHERE v.user_id = #{viewer}
-              AND v.view_date &gt;= CAST(#{since} AS DATE)
-              AND v.view_date &lt;= CAST(#{asOf} AS DATE)
-              AND v.created_at &lt;= #{asOf}
+            SELECT v.news_id,v.view_date signal_date,1.0 weight
+            FROM community_article_view v WHERE v.user_id=#{viewer}
+                AND v.view_date=CAST(#{asOf} AS DATE) AND v.created_at&lt;=#{asOf}
             UNION ALL
-            SELECT
-                u.news_id,
-                CAST(u.gmt_modified AS DATE) signal_date,
-                3.0 * u.is_liked + 5.0 * u.is_collected weight
-            FROM news_user_action u
-            WHERE u.user_id = #{viewer}
-              AND u.is_deleted = 0
-              AND (u.is_liked = 1 OR u.is_collected = 1)
-              AND u.gmt_modified &gt;= #{since}
-              AND u.gmt_modified &lt;= #{asOf}
+            SELECT u.news_id,CAST(COALESCE(u.liked_at,u.gmt_modified) AS DATE) signal_date,3.0 weight
+            FROM news_user_action u WHERE u.user_id=#{viewer} AND u.is_deleted=0 AND u.is_liked=1
+                AND COALESCE(u.liked_at,u.gmt_modified)&gt;=#{since}
+                AND COALESCE(u.liked_at,u.gmt_modified)&lt;=#{asOf}
+            UNION ALL
+            SELECT u.news_id,CAST(COALESCE(u.collected_at,u.gmt_modified) AS DATE) signal_date,5.0 weight
+            FROM news_user_action u WHERE u.user_id=#{viewer} AND u.is_deleted=0 AND u.is_collected=1
+                AND COALESCE(u.collected_at,u.gmt_modified)&gt;=#{since}
+                AND COALESCE(u.collected_at,u.gmt_modified)&lt;=#{asOf}
         ) s
-        JOIN cms_news n ON n.id = s.news_id
-        JOIN community_article_tag atg ON atg.news_id = n.id
-        JOIN community_tag t ON t.id = atg.tag_id AND t.enabled = 1
-        WHERE
-        <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.publishedArticle"/>
-        AND
-        <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.readableArticle"/>
-        GROUP BY t.id, s.signal_date
+        JOIN cms_news n ON n.id=s.news_id
+        JOIN community_article_tag atg ON atg.news_id=n.id
+        JOIN community_tag t ON t.id=atg.tag_id AND t.enabled=1
+        WHERE <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.publishedArticle"/> AND <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.readableArticle"/>
+        GROUP BY t.id,s.signal_date
     </select>
+
+    <!-- 列表下发只记本人有权读取的已发布文章，不改变阅读量或兴趣向量。 -->
+    <insert id="expose">
+        INSERT INTO community_recommendation_exposure(user_id,news_id,last_shown_at)
+        SELECT #{viewer},n.id,CURRENT_TIMESTAMP(3) FROM cms_news n
+        WHERE n.id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+            AND <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.publishedArticle"/> AND <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.readableArticle"/>
+        ON DUPLICATE KEY UPDATE last_shown_at=CURRENT_TIMESTAMP(3)
+    </insert>
 
     <!-- 只统计已发布、到达发布时间且作者有效的文章；编辑部无绑定用户时沿用原有兼容规则。 -->
     <sql id="publishedArticle">
@@ -204,15 +195,45 @@
     <!-- 讲解配图：image/CommunityRecommendationMapper/1793863120502.png -->
 
     <!--
-        【6. 推荐总分，最高100】上面算的是匹配/热度/新鲜度/关注值，在此乘权重成为分数。
-        总分=60×相似度+15×热度+15×新鲜度+10×关注值。
+        【6. 基础分，最高100】上面算的是匹配/热度/新鲜度/关注值，在此乘权重成为分数。
+        基础分=60×相似度+15×热度+15×新鲜度+10×关注值。
         无兴趣向量的新用户兴趣分为0，仍可按其他三项获得排序。
     -->
-    <sql id="score">
+    <sql id="baseScore">
         60 * (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.similarity"/>)
         + 15 * (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.popularity"/>)
         + 15 * (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.freshness"/>)
         + 10 * (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.followed"/>)
+    </sql>
+
+    <!-- 【6B. 重复系数】已点赞/收藏48小时内0.12，之后120小时恢复到1。
+         阅读24小时、推荐下发6小时恢复；取最小系数，旧文章仍可逐步回到候选前列。 -->
+    <sql id="repeatFactor">
+        LEAST(
+            COALESCE((SELECT LEAST(1e0,0.12e0+0.88e0*GREATEST(TIMESTAMPDIFF(HOUR,
+                GREATEST(
+                    CASE WHEN ua.is_liked=1 THEN COALESCE(ua.liked_at,ua.gmt_modified) ELSE CAST('1000-01-01' AS DATETIME) END,
+                    CASE WHEN ua.is_collected=1 THEN COALESCE(ua.collected_at,ua.gmt_modified) ELSE CAST('1000-01-01' AS DATETIME) END
+                ),#{query.recommendation.asOf})-48,0)/120e0)
+                FROM news_user_action ua WHERE ua.user_id=#{query.viewer} AND ua.news_id=n.id AND ua.is_deleted=0
+                    AND (ua.is_liked=1 OR ua.is_collected=1)),1e0),
+            COALESCE((SELECT LEAST(1e0,0.35e0+0.65e0*GREATEST(TIMESTAMPDIFF(MINUTE,MAX(v.created_at),#{query.recommendation.asOf}),0)/1440e0)
+                FROM community_article_view v WHERE v.user_id=#{query.viewer} AND v.news_id=n.id AND v.created_at&lt;=#{query.recommendation.asOf}),1e0),
+            COALESCE((SELECT LEAST(1e0,0.2e0+0.8e0*GREATEST(TIMESTAMPDIFF(MINUTE,e.last_shown_at,#{query.recommendation.asOf}),0)/360e0)
+                FROM community_recommendation_exposure e WHERE e.user_id=#{query.viewer} AND e.news_id=n.id AND e.last_shown_at&lt;=#{query.recommendation.asOf}),1e0)
+        )
+    </sql>
+
+    <!-- 【6C. 探索分】同种子与文章ID得到相同0～5分，换批才改变，参数全部绑定。 -->
+    <sql id="rotation">
+        <choose><when test="query.recommendation.seed != ''">
+            5e0*CRC32(CONCAT(n.id,':',#{query.recommendation.seed}))/4294967295e0
+        </when><otherwise>0</otherwise></choose>
+    </sql>
+
+    <!-- 【6D. 最终分】95%基础分×重复系数+最多5分探索，最高100。 -->
+    <sql id="score">
+        0.95e0*(<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.baseScore"/>)*(<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.repeatFactor"/>)+(<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.rotation"/>)
     </sql>
 
     <!--
@@ -226,6 +247,9 @@
             , (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.popularity"/>) rec_popularity
             , (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.freshness"/>) rec_freshness
             , (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.followed"/>) rec_followed
+            , (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.baseScore"/>) rec_base
+            , (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.repeatFactor"/>) rec_repeat
+            , (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.rotation"/>) rec_rotation
             , (<include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.score"/>) rec_score
         </if>
     </sql>

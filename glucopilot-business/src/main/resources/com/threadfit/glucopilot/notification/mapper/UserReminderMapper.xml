@@ -37,12 +37,14 @@
         JOIN glucose_record g ON g.id = h.record_id AND g.is_deleted = 0
         LEFT JOIN user_reminder_read r ON r.user_id = g.user_id AND r.kind = 'REPLY'
             AND r.source_id = h.id AND r.replied_at = h.replied_at AND r.reply_hash = SHA2(h.user_reply, 256)
+            AND r.current_glucose_value = g.glucose_value AND r.current_recorded_at = g.recorded_at
         WHERE g.user_id = #{userId} AND h.user_reply IS NOT NULL
           AND TRIM(h.user_reply) &lt;&gt; '' AND h.replied_at IS NOT NULL
     </sql>
     <sql id="replyFields">
         h.id source_id, h.record_id, g.record_date, g.node_code, h.glucose_value,
-        h.recorded_at, h.user_reply, h.replied_at, r.read_at
+        h.recorded_at, h.user_reply, h.replied_at, r.read_at,
+        g.glucose_value current_glucose_value, g.recorded_at current_recorded_at
     </sql>
     <select id="countReplies" resultType="long">
         SELECT COUNT(*) <include refid="replyFrom"/> AND r.user_id IS NULL
@@ -57,10 +59,13 @@
     </select>
     <insert id="saveRead">
         INSERT INTO user_reminder_read
-            (user_id,kind,source_id,glucose_value,recorded_at,replied_at,reply_hash)
-        VALUES (#{userId},#{kind},#{row.sourceId},#{row.glucoseValue},#{row.recordedAt},#{row.repliedAt},#{replyHash})
+            (user_id,kind,source_id,glucose_value,recorded_at,replied_at,reply_hash,current_glucose_value,current_recorded_at)
+        VALUES (#{userId},#{kind},#{row.sourceId},#{row.glucoseValue},#{row.recordedAt},#{row.repliedAt},#{replyHash},
+                #{row.currentGlucoseValue},#{row.currentRecordedAt})
         ON DUPLICATE KEY UPDATE glucose_value = VALUES(glucose_value), recorded_at = VALUES(recorded_at),
-            replied_at = VALUES(replied_at), reply_hash = VALUES(reply_hash), read_at = CURRENT_TIMESTAMP(3)
+            replied_at = VALUES(replied_at), reply_hash = VALUES(reply_hash),
+            current_glucose_value = VALUES(current_glucose_value), current_recorded_at = VALUES(current_recorded_at),
+            read_at = CURRENT_TIMESTAMP(3)
     </insert>
 
     <!-- 类别“全部已读”：先查上界，再仅更新本人该上界以内的消息。 -->

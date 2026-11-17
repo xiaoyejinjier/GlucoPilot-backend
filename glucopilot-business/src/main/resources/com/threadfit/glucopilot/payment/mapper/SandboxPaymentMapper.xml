@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.payment.mapper.SandboxPaymentMapper">
+    <select id="lockActivatedUser" resultType="long" useCache="false" flushCache="true">
+        SELECT id FROM user_account
+        WHERE id=#{userId} AND is_deleted=0 AND account_status=1 AND wallet_activated_at IS NOT NULL
+        FOR UPDATE
+    </select>
+    <select id="byRequest" resultType="com.threadfit.glucopilot.payment.entity.SandboxRecharge">
+        SELECT * FROM wallet_recharge_order WHERE user_id=#{userId} AND client_request_id=#{requestId}
+    </select>
+    <select id="owned" resultType="com.threadfit.glucopilot.payment.entity.SandboxRecharge">
+        SELECT * FROM wallet_recharge_order WHERE user_id=#{userId} AND order_no=#{orderNo}
+    </select>
+    <select id="lockOrder" resultType="com.threadfit.glucopilot.payment.entity.SandboxRecharge" useCache="false" flushCache="true">
+        SELECT * FROM wallet_recharge_order WHERE order_no=#{orderNo} FOR UPDATE
+    </select>
+    <insert id="insert">
+        INSERT INTO wallet_recharge_order(order_no,user_id,amount_cents,client_request_id,sandbox_app_id,sandbox_seller_id,expires_at)
+        VALUES(#{order.orderNo},#{order.userId},#{order.amountCents},#{order.clientRequestId},#{order.sandboxAppId},#{order.sandboxSellerId},#{order.expiresAt})
+    </insert>
+    <update id="saveQr">
+        UPDATE wallet_recharge_order SET qr_code=#{qr}
+        WHERE order_no=#{orderNo} AND status='PENDING' AND qr_code IS NULL
+    </update>
+    <!-- 主动查单限频；不持有数据库行锁等待支付宝网络响应。 -->
+    <update id="claimQuery">
+        UPDATE wallet_recharge_order SET last_query_at=CURRENT_TIMESTAMP(3)
+        WHERE order_no=#{orderNo} AND status='PENDING'
+          AND (last_query_at IS NULL OR last_query_at &lt;= TIMESTAMPADD(SECOND,-5,CURRENT_TIMESTAMP(3)))
+    </update>
+    <update id="paid">
+        UPDATE wallet_recharge_order
+        SET status='PAID',provider_trade_no=#{tradeNo},paid_at=CURRENT_TIMESTAMP(3),credited_at=CURRENT_TIMESTAMP(3),version=version+1
+        WHERE order_no=#{orderNo} AND status='PENDING'
+    </update>
+    <update id="close">
+        UPDATE wallet_recharge_order SET status='CLOSED',closed_at=CURRENT_TIMESTAMP(3),version=version+1
+        WHERE order_no=#{orderNo} AND status='PENDING'
+    </update>
+    <insert id="ensureAccount">
+        INSERT INTO wallet_sandbox_account(user_id) VALUES(#{userId})
+        ON DUPLICATE KEY UPDATE user_id=user_id
+    </insert>
+    <select id="lockBalance" resultType="long" useCache="false" flushCache="true">
+        SELECT balance_cents FROM wallet_sandbox_account WHERE user_id=#{userId} FOR UPDATE
+    </select>
+    <update id="credit">
+        UPDATE wallet_sandbox_account SET balance_cents=balance_cents+#{amount},version=version+1
+        WHERE user_id=#{userId}
+    </update>
+    <insert id="ledger">
+        INSERT INTO wallet_sandbox_ledger(user_id,order_no,amount_cents,balance_after_cents,provider_trade_no)
+        VALUES(#{order.userId},#{order.orderNo},#{order.amountCents},#{balance},#{tradeNo})
+    </insert>
+</mapper>

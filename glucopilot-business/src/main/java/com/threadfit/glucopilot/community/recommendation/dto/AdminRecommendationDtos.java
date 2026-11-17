@@ -34,6 +34,9 @@ public final class AdminRecommendationDtos {
             double popularityScore,
             double freshnessScore,
             double followingScore,
+            double baseScore,
+            double repeatFactor,
+            double explorationScore,
             double totalScore) {}
 
     public record Report(
@@ -45,5 +48,6 @@ public final class AdminRecommendationDtos {
             boolean coldStart,
             List<VectorDimension> vector,
             List<Article> articles,
+            String refreshSeed,
             List<String> steps) {}
 }

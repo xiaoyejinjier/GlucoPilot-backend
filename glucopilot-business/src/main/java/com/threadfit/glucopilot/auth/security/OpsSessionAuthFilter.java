@@ -4,7 +4,11 @@ import com.ruoyi.framework.web.service.SysPermissionService;
 import com.ruoyi.framework.web.service.TokenService;
 import com.ruoyi.system.service.ISysUserService;
 import com.threadfit.glucopilot.auth.service.OpsIdentityService;
+import com.threadfit.glucopilot.common.api.ApiResponse;
+import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.context.RequestContext;
+import com.threadfit.glucopilot.common.util.JsonUtils;
+import com.threadfit.glucopilot.doctor.service.DoctorRealmService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -24,6 +28,8 @@ public class OpsSessionAuthFilter extends OncePerRequestFilter {
   private final ISysUserService users;
   private final SysPermissionService permissions;
   private final OpsIdentityService identities;
+  private final DoctorRealmService doctors;
+  private final JsonUtils json;
 
   @Override
   protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -39,9 +45,18 @@ public class OpsSessionAuthFilter extends OncePerRequestFilter {
     if (login != null) {
       var user = users.selectUserById(login.getUserId());
       if (user != null && "0".equals(user.getStatus()) && "0".equals(user.getDelFlag())) {
+        long ops = identities.opsIdOf(login.getUserId());
+        // 医生身份是单独的业务边界，不能靠额外授予运营权限绕过。
+        if (doctors.restricted(ops, user)
+            && !doctors.allowed(request.getMethod(), request.getRequestURI())) {
+          response.setStatus(403);
+          response.setContentType("application/json;charset=UTF-8");
+          response.getWriter().write(json.toJson(ApiResponse.fail(ErrorCode.FORBIDDEN)));
+          return;
+        }
         login.setUser(user);
-        login.setPermissions(permissions.getMenuPermission(user));
-        RequestContext.setOpsId(identities.opsIdOf(login.getUserId()));
+        login.setPermissions(doctors.grants(ops, user, permissions.getMenuPermission(user)));
+        RequestContext.setOpsId(ops);
         SecurityContextHolder.getContext()
             .setAuthentication(
                 new UsernamePasswordAuthenticationToken(login, null, login.getAuthorities()));

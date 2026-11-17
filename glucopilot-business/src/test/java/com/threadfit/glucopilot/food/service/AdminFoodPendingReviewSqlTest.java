@@ -76,6 +76,10 @@ class AdminFoodPendingReviewSqlTest {
                                 session.getMapper(FoodCategoryMapper.class),
                                 mapper,
                                 org.mockito.Mockito.mock(FoodCatalogCache.class));
+                jdbc.execute(
+                        "CREATE TABLE admin_work_reminder_read(ops_id BIGINT,kind"
+                            + " VARCHAR(32),source_id BIGINT,revision VARCHAR(255),read_at"
+                            + " TIMESTAMP(3),PRIMARY KEY(ops_id,kind,source_id,revision))");
                 var reminders =
                         new AdminWorkReminderService(
                                 MyBatisTestMappers.mapper(jdbc, AdminWorkReminderMapper.class));
@@ -107,7 +111,7 @@ class AdminFoodPendingReviewSqlTest {
                 assertEquals(2, first.getTotal());
                 assertEquals(2, first.getPages());
                 assertEquals(1, first.getRecords().size());
-                assertEquals(first.getTotal(), reminders.summary(grants).total());
+                assertEquals(first.getTotal(), reminders.summary(9L, grants).total());
                 var response =
                         org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
                                         new com.threadfit.glucopilot.food.controller
@@ -144,11 +148,11 @@ class AdminFoodPendingReviewSqlTest {
                 request.setEnabled(true);
                 RequestContext.setOpsId(9L);
                 assertEquals("AI_REVIEWED", service.saveFood(request).getNutritionSource());
-                assertEquals(1, reminders.summary(grants).total());
+                assertEquals(1, reminders.summary(9L, grants).total());
                 var remaining = service.pageFoods(null, null, null, true, query);
                 assertEquals(1, remaining.getTotal());
                 service.removeFood(Long.valueOf(remaining.getRecords().getFirst().getId()));
-                assertEquals(0, reminders.summary(grants).total());
+                assertEquals(0, reminders.summary(9L, grants).total());
                 assertEquals(0, service.pageFoods(null, null, null, true, query).getTotal());
             } finally {
                 RequestContext.clear();

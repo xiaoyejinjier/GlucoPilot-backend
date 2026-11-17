@@ -92,6 +92,8 @@ SELECT COUNT(*) total,
     @Select("<script>" + SELECT + FROM + " WHERE " + ACTIVE + " AND g.id=#{id}</script>")
     GlucoseAlertRows.Event selectEvent(@Param("id") long id);
 
+    GlucoseAlertRows.Event selectDetail(@Param("id") long id);
+
     @Select("SELECT id FROM glucose_record WHERE id=#{id} AND is_deleted=0 FOR UPDATE")
     @Options(useCache = false, flushCache = Options.FlushCachePolicy.TRUE)
     List<Long> lockSource(@Param("id") long id);

@@ -15,4 +15,6 @@ public interface CommunityRecommendationMapper {
             @Param("viewer") long viewer,
             @Param("since") LocalDateTime since,
             @Param("asOf") LocalDateTime asOf);
+
+    int expose(@Param("viewer") long viewer, @Param("ids") List<Long> ids);
 }

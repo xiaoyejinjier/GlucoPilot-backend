@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.doctor.mapper.DoctorPortalMapper">
+    <select id="bindingExists" resultType="boolean">SELECT EXISTS(SELECT 1 FROM doctor_ops_binding WHERE ops_id=#{ops})</select>
+    <!-- 账号、资质及小程序身份均有效才能解析成医生本人，调用者不能传入医生ID。 -->
+    <select id="boundDoctor" resultType="long">
+        SELECT d.user_id FROM doctor_ops_binding b JOIN consultation_doctor d ON d.user_id=b.doctor_user_id
+        JOIN user_account u ON u.id=d.user_id
+        JOIN gp_ops_identity_map m ON m.legacy_ops_id=b.ops_id
+        JOIN sys_user s ON s.user_id=m.ruoyi_user_id
+        WHERE b.ops_id=#{ops} AND d.status='APPROVED' AND u.is_deleted=0 AND u.account_status=1
+            AND s.status='0' AND s.del_flag='0'
+    </select>
+    <select id="opsForDoctor" resultType="long">SELECT ops_id FROM doctor_ops_binding WHERE doctor_user_id=#{user}</select>
+    <insert id="bind">INSERT INTO doctor_ops_binding(doctor_user_id,ops_id,created_by) VALUES(#{user},#{ops},#{actor})</insert>
+    <sql id="accountScope">
+        FROM consultation_doctor d JOIN user_account u ON u.id=d.user_id
+        LEFT JOIN doctor_ops_binding b ON b.doctor_user_id=d.user_id
+        LEFT JOIN gp_ops_identity_map m ON m.legacy_ops_id=b.ops_id
+        LEFT JOIN sys_user s ON s.user_id=m.ruoyi_user_id
+        WHERE u.is_deleted=0 AND (d.status='APPROVED' OR b.ops_id IS NOT NULL)
+    </sql>
+    <select id="accountCount" resultType="long">SELECT COUNT(*) <include refid="accountScope"/></select>
+    <select id="accounts" resultType="com.threadfit.glucopilot.doctor.dto.DoctorPortalDtos$Account">
+        SELECT d.user_id doctor_user_id,d.real_name,d.hospital,d.specialty,d.status doctor_status,
+            b.ops_id,s.user_name username,CASE WHEN s.status='0' AND s.del_flag='0' THEN 1 ELSE 0 END account_status
+        <include refid="accountScope"/> ORDER BY d.user_id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="incomeCount" resultType="long">
+        SELECT COUNT(*) FROM consultation_wallet_entry e JOIN consultation_order o ON o.order_no=e.order_no
+        WHERE e.user_id=#{user} AND e.amount_cents=100 AND o.doctor_user_id=#{user} AND o.status='PAID'
+    </select>
+    <select id="income" resultType="com.threadfit.glucopilot.doctor.dto.DoctorPortalDtos$IncomeEntry">
+        SELECT e.order_no,o.consultation_id,e.amount_cents,e.balance_after_cents,e.created_at
+        FROM consultation_wallet_entry e JOIN consultation_order o ON o.order_no=e.order_no
+        WHERE e.user_id=#{user} AND e.amount_cents=100 AND o.doctor_user_id=#{user} AND o.status='PAID'
+        ORDER BY e.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+</mapper>

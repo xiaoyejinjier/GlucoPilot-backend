@@ -287,8 +287,7 @@ public class GlucoseRecordService {
      */
     public GlucoseDtos.DayBoard dayBoard(Long userId, LocalDate recordDate) {
         List<GlucoseNode> nodes = glucosePeriodService.listEnabledNodes();
-        Map<String, GlucoseRecord> glucoseByNode =
-                glucoseRecordMapper
+        Map<String, GlucoseRecord> glucoseByNode = glucoseRecordMapper
                         .selectList(
                                 new LambdaQueryWrapper<GlucoseRecord>()
                                         .eq(GlucoseRecord::getUserId, userId)

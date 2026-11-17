@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.wallet.mapper.WalletOrderMapper">
+    <select id="walletState" resultType="java.util.HashMap">
+        SELECT u.id, u.wallet_activated_at AS activated_at, COALESCE(w.balance_cents,0) AS balance_cents
+        FROM user_account u LEFT JOIN wallet_sandbox_account w ON w.user_id=u.id
+        WHERE u.id = #{userId} AND u.is_deleted = 0 AND u.account_status = 1
+    </select>
+    <!-- 首次开通才写入时间；重复提交不会刷新时间，更不会产生资金流水。 -->
+    <update id="activate">
+        UPDATE user_account
+        SET wallet_activated_at = CURRENT_TIMESTAMP(3)
+        WHERE id = #{userId} AND is_deleted = 0 AND account_status = 1
+          AND wallet_activated_at IS NULL
+    </update>
+    <!-- 仅在两个固定表之间选择，禁止通过客户端参数拼接表名。 -->
+    <sql id="table"><choose><when test="recharge">wallet_recharge_order</when><otherwise>consultation_order</otherwise></choose></sql>
+    <sql id="scope">
+        user_id = #{userId}
+        <if test="status != null">AND status = #{status}</if>
+    </sql>
+    <sql id="columns">
+        order_no, status, amount_cents, currency, gmt_create AS created_at, paid_at, closed_at,
+        <choose>
+            <when test="recharge">credited_at, NULL AS consultation_id, NULL AS report_id, NULL AS doctor_user_id, NULL AS settlement_status</when>
+            <otherwise>NULL AS credited_at, consultation_id, report_id, doctor_user_id, settlement_status</otherwise>
+        </choose>
+    </sql>
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM <include refid="table"/>
+        WHERE <include refid="scope"/>
+    </select>
+    <select id="list" resultType="com.threadfit.glucopilot.wallet.entity.WalletOrderRow">
+        SELECT <include refid="columns"/>
+        FROM <include refid="table"/>
+        WHERE <include refid="scope"/>
+        ORDER BY gmt_create DESC, id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <!-- 所属用户条件必须与订单号同时查询，不能先按订单号查出后交给前端过滤。 -->
+    <select id="detail" resultType="com.threadfit.glucopilot.wallet.entity.WalletOrderRow">
+        SELECT <include refid="columns"/>
+        FROM <include refid="table"/>
+        WHERE user_id = #{userId} AND order_no = #{orderNo}
+    </select>
+</mapper>

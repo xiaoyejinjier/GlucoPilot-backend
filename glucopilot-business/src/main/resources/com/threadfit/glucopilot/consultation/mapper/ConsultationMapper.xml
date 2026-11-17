@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.consultation.mapper.ConsultationMapper">
+    <select id="ownedImage" resultType="int">
+        SELECT COUNT(*) FROM media_file WHERE id=#{media} AND user_id=#{user} AND ops_id IS NULL
+        AND biz_type=9 AND is_deleted=0 AND file_status=1 AND size_bytes BETWEEN 1 AND 5242880
+        AND mime_type IN ('image/jpeg','image/png','image/webp','image/gif')
+    </select>
+    <insert id="linkImage">INSERT INTO consultation_request_image(consultation_id,media_id,sort_no) VALUES(#{id},#{media},#{sort})</insert>
+    <select id="imageIds" resultType="long">SELECT media_id FROM consultation_request_image WHERE consultation_id=#{id} ORDER BY sort_no</select>
+    <select id="image" resultType="com.threadfit.glucopilot.file.entity.MediaFile">SELECT * FROM media_file WHERE id=#{media} AND biz_type=9 AND is_deleted=0 AND file_status=1</select>
+    <select id="messageRequest" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationMessage" useCache="false" flushCache="true">
+        SELECT * FROM consultation_message WHERE sender_id=#{user} AND client_request_id=#{key} FOR UPDATE
+    </select>
+    <insert id="insertMessage">
+        INSERT INTO consultation_message(consultation_id,sender_id,sender_role,content,client_request_id)
+        VALUES(#{id},#{user},#{role},#{form.content},#{form.clientRequestId})
+    </insert>
+    <select id="messages" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationMessage">
+        SELECT * FROM consultation_message WHERE consultation_id=#{id}
+        <if test="after != null">AND id&gt;#{after}</if>
+        <if test="before != null">AND id&lt;#{before}</if>
+        ORDER BY id <choose><when test="after != null">ASC</when><otherwise>DESC</otherwise></choose> LIMIT #{limit}
+    </select>
+    <select id="lockUser" resultType="long" useCache="false" flushCache="true">
+        SELECT id FROM user_account WHERE id=#{user} AND is_deleted=0 AND account_status=1 FOR UPDATE
+    </select>
+    <select id="doctor" resultType="com.threadfit.glucopilot.consultation.entity.DoctorProfile">
+        SELECT d.* FROM consultation_doctor d JOIN user_account u ON u.id=d.user_id
+        WHERE d.user_id=#{user} AND u.is_deleted=0 AND u.account_status=1
+    </select>
+    <select id="lockDoctor" resultType="com.threadfit.glucopilot.consultation.entity.DoctorProfile" useCache="false" flushCache="true">
+        SELECT * FROM consultation_doctor WHERE user_id=#{user} FOR UPDATE
+    </select>
+    <insert id="insertDoctor">
+        INSERT INTO consultation_doctor(user_id,real_name,hospital,specialty,license_number,qualification_note)
+        VALUES(#{user},#{form.realName},#{form.hospital},#{form.specialty},#{form.licenseNumber},#{form.qualificationNote})
+    </insert>
+    <update id="updateDoctor">
+        UPDATE consultation_doctor SET real_name=#{form.realName},hospital=#{form.hospital},specialty=#{form.specialty},
+            license_number=#{form.licenseNumber},qualification_note=#{form.qualificationNote},status='PENDING',
+            review_note='',reviewed_by=NULL,reviewed_at=NULL,version=version+1
+        WHERE user_id=#{user} AND status IN ('PENDING','REJECTED')
+    </update>
+    <sql id="doctorScope">
+        FROM consultation_doctor d JOIN user_account u ON u.id=d.user_id
+        WHERE u.is_deleted=0 AND u.account_status=1
+        <if test="status != null">AND d.status=#{status}</if>
+    </sql>
+    <select id="doctorCount" resultType="long">SELECT COUNT(*) <include refid="doctorScope"/></select>
+    <select id="doctors" resultType="com.threadfit.glucopilot.consultation.entity.DoctorProfile">
+        SELECT d.* <include refid="doctorScope"/> ORDER BY d.updated_at DESC,d.user_id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <update id="review">
+        UPDATE consultation_doctor SET status=#{form.status},review_note=#{form.reviewNote},reviewed_by=#{ops},
+            reviewed_at=CURRENT_TIMESTAMP(3),version=version+1
+        WHERE user_id=#{user} AND version=#{form.version}
+    </update>
+    <sql id="caseScope">
+        FROM consultation_request c JOIN user_account u ON u.id=c.patient_id
+        LEFT JOIN user_profile p ON p.user_id=u.id AND p.is_deleted=0
+        WHERE u.is_deleted=0 AND u.account_status=1
+        <if test="mine">AND c.patient_id=#{viewer}</if>
+        <if test="assigned">AND c.doctor_user_id=#{viewer}</if>
+        <if test="hideMine">AND c.patient_id&lt;&gt;#{viewer}</if>
+        <if test="topic != null">AND c.topic=#{topic}</if>
+    </sql>
+    <select id="count" resultType="long">SELECT COUNT(*) <include refid="caseScope"/></select>
+    <!-- 广场查询仅投影公开摘要，健康正文在本人/接诊详情中读取。 -->
+    <select id="list" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationRow">
+        SELECT c.id,c.patient_id,c.title,c.topic,c.status,c.anonymous,c.doctor_user_id,c.created_at,p.nickname patient_name
+        <include refid="caseScope"/> ORDER BY c.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="find" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationRow">
+        SELECT c.*,p.nickname patient_name FROM consultation_request c JOIN user_account u ON u.id=c.patient_id
+        LEFT JOIN user_profile p ON p.user_id=u.id AND p.is_deleted=0
+        WHERE c.id=#{id} AND u.is_deleted=0 AND u.account_status=1
+    </select>
+    <select id="lockCase" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationRow" useCache="false" flushCache="true">
+        SELECT * FROM consultation_request WHERE id=#{id} FOR UPDATE
+    </select>
+    <select id="request" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationRow">
+        SELECT * FROM consultation_request WHERE patient_id=#{user} AND client_request_id=#{key}
+    </select>
+    <insert id="insertCase">
+        INSERT INTO consultation_request(patient_id,title,topic,symptoms,glucose_note,medication_note,anonymous,client_request_id)
+        VALUES(#{user},#{form.title},#{form.topic},#{form.symptoms},COALESCE(#{form.glucoseNote},''),
+            COALESCE(#{form.medicationNote},''),#{form.anonymous},#{form.clientRequestId})
+    </insert>
+    <update id="claim">
+        UPDATE consultation_request SET doctor_user_id=#{doctor},status='IN_PROGRESS',claimed_at=CURRENT_TIMESTAMP(3),version=version+1
+        WHERE id=#{id} AND status='WAITING' AND doctor_user_id IS NULL AND patient_id&lt;&gt;#{doctor}
+    </update>
+    <select id="report" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationReport">
+        SELECT * FROM consultation_report WHERE id=#{id}
+    </select>
+    <select id="reportByCase" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationReport">
+        SELECT * FROM consultation_report WHERE consultation_id=#{id}
+    </select>
+    <select id="reportRequest" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationReport">
+        SELECT * FROM consultation_report WHERE doctor_user_id=#{user} AND client_request_id=#{key}
+    </select>
+    <insert id="insertReport">
+        INSERT INTO consultation_report(consultation_id,doctor_user_id,doctor_name,specialty,assessment,medication_advice,follow_up_advice,client_request_id)
+        VALUES(#{id},#{doctor.userId},#{doctor.realName},#{doctor.specialty},#{form.assessment},
+            #{form.medicationAdvice},#{form.followUpAdvice},#{form.clientRequestId})
+    </insert>
+    <update id="complete">
+        UPDATE consultation_request SET status='REPORT_READY',version=version+1
+        WHERE id=#{id} AND doctor_user_id=#{doctor} AND status='IN_PROGRESS'
+    </update>
+    <select id="hasAccess" resultType="boolean">
+        SELECT EXISTS(SELECT 1 FROM consultation_order WHERE user_id=#{user} AND report_id=#{report}
+            AND status='PAID' AND unlocked_at IS NOT NULL AND settlement_status='SETTLED')
+    </select>
+    <select id="orderRequest" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationOrder">
+        SELECT * FROM consultation_order WHERE user_id=#{user} AND client_request_id=#{key}
+    </select>
+    <select id="activeOrder" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationOrder">
+        SELECT * FROM consultation_order WHERE user_id=#{user} AND report_id=#{report} AND status IN ('PENDING','PAID','REFUNDING')
+    </select>
+    <insert id="insertOrder">
+        INSERT INTO consultation_order(order_no,user_id,consultation_id,report_id,doctor_user_id,amount_cents,payment_provider,client_request_id,settlement_status)
+        VALUES(#{no},#{user},#{report.consultationId},#{report.id},#{report.doctorUserId},100,'WALLET_SANDBOX',#{key},'PENDING')
+    </insert>
+    <select id="lockOrder" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationOrder" useCache="false" flushCache="true">
+        SELECT * FROM consultation_order WHERE user_id=#{user} AND order_no=#{no} FOR UPDATE
+    </select>
+    <select id="lockParticipants" resultType="long" useCache="false" flushCache="true">
+        SELECT id FROM user_account WHERE id IN (#{first},#{second}) AND is_deleted=0 AND account_status=1
+            AND wallet_activated_at IS NOT NULL ORDER BY id FOR UPDATE
+    </select>
+    <update id="debit">
+        UPDATE wallet_sandbox_account SET income_available_cents=LEAST(income_available_cents,balance_cents-100),balance_cents=balance_cents-100,version=version+1
+        WHERE user_id=#{user} AND balance_cents&gt;=100
+    </update>
+    <update id="creditDoctor">
+        UPDATE wallet_sandbox_account SET balance_cents=balance_cents+100,income_available_cents=income_available_cents+100,version=version+1
+        WHERE user_id=#{user}
+    </update>
+    <update id="markPaid">
+        UPDATE consultation_order SET status='PAID',paid_at=CURRENT_TIMESTAMP(3),unlocked_at=CURRENT_TIMESTAMP(3),
+            settlement_status='SETTLED',settled_at=CURRENT_TIMESTAMP(3),version=version+1
+        WHERE order_no=#{no} AND status='PENDING' AND payment_provider='WALLET_SANDBOX'
+    </update>
+    <insert id="entry">
+        INSERT INTO consultation_wallet_entry(order_no,user_id,amount_cents,balance_after_cents)
+        VALUES(#{no},#{user},#{amount},#{balance})
+    </insert>
+</mapper>

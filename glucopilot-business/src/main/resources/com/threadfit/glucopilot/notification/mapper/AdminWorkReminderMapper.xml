@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.notification.mapper.AdminWorkReminderMapper">
+    <!-- 同一来源产生新变化时生成新 revision，旧已读不会吞掉新消息。 -->
+    <select id="sources" resultType="com.threadfit.glucopilot.notification.entity.WorkReminderSource">
+        SELECT s.id, s.revision, s.latest_at, r.read_at
+        FROM (
+            <choose>
+                <when test="kind == 'REPORT'">
+                    SELECT id, CONCAT(id, '|', created_at) revision, created_at latest_at
+                    FROM community_report WHERE state = 'OPEN'
+                </when>
+                <when test="kind == 'FEEDBACK'">
+                    SELECT id, CONCAT(id, '|', COALESCE(gmt_modified, gmt_create)) revision,
+                           COALESCE(gmt_modified, gmt_create) latest_at
+                    FROM feedback WHERE is_deleted = 0
+                      AND (official_reply IS NULL OR TRIM(official_reply) = '')
+                </when>
+                <when test="kind == 'FOOD_REVIEW'">
+                    SELECT id, CONCAT(id, '|', COALESCE(gmt_modified, gmt_create)) revision,
+                           COALESCE(gmt_modified, gmt_create) latest_at
+                    FROM food_nutrition
+                    WHERE nutrition_source = 'AI_ESTIMATE' AND shelf_status = 0 AND is_deleted = 0
+                </when>
+                <when test="kind == 'GLUCOSE_UPDATE'">
+                    SELECT g.id, CONCAT(g.id, '|', g.glucose_value, '|', g.recorded_at, '|', h.id) revision,
+                           g.gmt_modified latest_at
+                    FROM glucose_record g
+                    JOIN user_account u ON u.id = g.user_id AND u.is_deleted = 0 AND u.account_status = 1
+                    JOIN gp_glucose_alert_case h ON h.id = (
+                        SELECT h2.id FROM gp_glucose_alert_case h2 WHERE h2.record_id = g.id
+                        ORDER BY h2.handled_at DESC, h2.id DESC LIMIT 1
+                    )
+                    WHERE g.is_deleted = 0
+                      AND (h.glucose_value &lt;&gt; g.glucose_value OR h.recorded_at &lt;&gt; g.recorded_at)
+                </when>
+                <otherwise>
+                    SELECT id, '' revision, created_at latest_at FROM community_report WHERE 1 = 0
+                </otherwise>
+            </choose>
+        ) s
+        LEFT JOIN admin_work_reminder_read r ON r.ops_id = #{opsId} AND r.kind = #{kind}
+            AND r.source_id = s.id AND r.revision = s.revision
+        ORDER BY s.id
+    </select>
+
+    <!-- 多版本回执追加保存，迟到的旧请求不会覆盖新快照的已读。 -->
+    <insert id="saveReads">
+        INSERT INTO admin_work_reminder_read (ops_id, kind, source_id, revision)
+        VALUES
+        <foreach collection="sources" item="source" separator=",">
+            (#{opsId}, #{kind}, #{source.id}, #{source.revision})
+        </foreach>
+        ON DUPLICATE KEY UPDATE read_at = read_at
+    </insert>
+</mapper>

@@ -19,6 +19,7 @@ public class CommunityAccountCleanupService {
         mapper.deleteFollows(userId);
         mapper.deleteReaders(userId);
         mapper.deleteViews(userId);
+        mapper.deleteRecommendationExposures(userId);
         mapper.deleteHiddenArticles(userId);
         mapper.deleteDrafts(userId);
         mapper.deleteNotifications(userId);

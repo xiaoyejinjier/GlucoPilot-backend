@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.glucose.mapper.GlucoseAlertMapper">
+    <!-- 历史异常更正为正常后仍可查看详情与旧处理历史；写接口继续仅允许当前异常。 -->
+    <select id="selectDetail" resultType="com.threadfit.glucopilot.glucose.entity.GlucoseAlertRows$Event">
+        SELECT g.id, g.user_id, u.username, COALESCE(NULLIF(p.nickname,''),u.username) nickname,
+               u.phone, g.record_date, g.node_code, g.glucose_value, g.source_type, g.remark, g.recorded_at,
+               COALESCE(h.status,'PENDING') status, h.note, COALESCE(h.version,0) version,
+               h.handled_by, h.handled_at, h.user_reply, h.replied_at
+        FROM glucose_record g
+        JOIN user_account u ON u.id = g.user_id AND u.is_deleted = 0
+        LEFT JOIN user_profile p ON p.user_id = g.user_id AND p.is_deleted = 0
+        LEFT JOIN gp_glucose_alert_case h ON h.record_id = g.id
+            AND h.glucose_value = g.glucose_value AND h.recorded_at = g.recorded_at
+        WHERE g.id = #{id} AND g.is_deleted = 0 AND g.glucose_value &gt; 0 AND g.glucose_value &lt; 40
+          AND g.node_code IN ('before_breakfast','after_breakfast','before_lunch',
+                              'after_lunch','before_dinner','after_dinner')
+          AND (g.glucose_value &lt; 3.9 OR g.glucose_value &gt;= 10
+               OR EXISTS (SELECT 1 FROM gp_glucose_alert_case old WHERE old.record_id = g.id))
+    </select>
+</mapper>

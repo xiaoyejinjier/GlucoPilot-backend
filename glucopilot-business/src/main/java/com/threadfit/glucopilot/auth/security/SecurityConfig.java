@@ -78,6 +78,7 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.POST,
+                        "/api/v1/payments/alipay/sandbox/notify",
                         "/api/v1/auth/wechat/sessions",
                         "/api/v1/auth/sms/codes",
                         "/api/v1/auth/phone/sessions",

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 
 /** 点赞/收藏写入：锁定文章，计算状态差值，更新计数与互动通知，均在同一事务内。 */
 @Service
@@ -58,15 +59,19 @@ public class CommunityArticleActionService {
 
         int likeDelta = 0;
         int collectDelta = 0;
+        // 分别记录行为时间，避免今天收藏使昨天的点赞也计入今日兴趣。
+        LocalDateTime actionTime = LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
         if (request.getLiked() != null) {
             int next = request.getLiked() ? 1 : 0;
             likeDelta = next - nullToZero(action.getIsLiked());
             action.setIsLiked(next);
+            if (likeDelta > 0) action.setLikedAt(actionTime);
         }
         if (request.getCollected() != null) {
             int next = request.getCollected() ? 1 : 0;
             collectDelta = next - nullToZero(action.getIsCollected());
             action.setIsCollected(next);
+            if (collectDelta > 0) action.setCollectedAt(actionTime);
         }
         newsUserActionMapper.updateById(action);
 

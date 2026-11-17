@@ -12,36 +12,46 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 /**
- * 用户兴趣向量生成：查询行为 → 时间衰减 → 标签累加 → 取前64维 → L2归一化。
+ * 当天兴趣向量生成：查询今日行为 → 标签累加 → 取前64维 → L2归一化。
  * 行为权重与文章评分SQL见resources同包根下recommendation/mapper/CommunityRecommendationMapper.xml。
  */
 @Service
 @RequiredArgsConstructor
 public class CommunityRecommendationService {
     private final CommunityRecommendationMapper mapper;
-    private static final int HISTORY_DAYS = 30; // 含今天在内的近30个自然日。
+    private static final int HISTORY_DAYS = 1; // 仅北京时间当天自然日。
     private static final int MAX_INTEREST_TAGS = 64; // 最多保留权重最高的64个兴趣标签。
-    private static final double HALF_LIFE_DAYS = 14.0; // 14天前的行为权重保留一半。
 
     /** 【入口A：小程序推荐】viewer为当前用户ID；只取SQL排序所需的时间和兴趣向量。 */
     public CommunityRecommendation prepare(long viewer) {
         return analyze(viewer).recommendation();
     }
 
-    /** 【入口B：完整分析】同时返回向量、原始/衰减权重和范数，供管理端解释计算。 */
+    public void expose(long viewer, List<Long> ids) {
+        if (ids == null
+                || ids.isEmpty()
+                || ids.size() > 50
+                || ids.stream().anyMatch(id -> id == null || id < 1))
+            throw new com.threadfit.glucopilot.common.exception.BizException(
+                    com.threadfit.glucopilot.common.api.ErrorCode.BAD_REQUEST);
+        mapper.expose(viewer, ids.stream().distinct().toList());
+    }
+
+    /** 【入口B：完整分析】同时返回向量、今日权重和范数，供管理端解释计算。 */
     public RecommendationAnalysis analyze(long viewer) {
-        var now = LocalDateTime.now();
+        var now = LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
         // 【1. 取行为】对应XML的signals：阅读1、点赞3、收藏5；本次查询和计算使用同一个now。
-        // 今天向前推29天的零点起算，按自然日限制近30天的行为窗口。
+        // 本地服务器时区不影响业务日期，今日0点之前的行为不参与。
         var since = now.toLocalDate().minusDays(HISTORY_DAYS - 1).atStartOfDay();
         return analyzeSignals(mapper.signals(viewer, since, now), now);
     }
 
-    /** 固定计算时间的入口，便于测试验证时间衰减，不依赖测试执行当天。 */
+    /** 固定计算时间的入口，便于验证自然日边界，不依赖测试执行当天。 */
     CommunityRecommendation prepare(long viewer, LocalDateTime now) {
         var since = now.toLocalDate().minusDays(HISTORY_DAYS - 1).atStartOfDay();
         return normalize(mapper.signals(viewer, since, now), now);
@@ -55,7 +65,7 @@ public class CommunityRecommendationService {
     /** 【核心计算】将Mapper返回的“标签ID、行为日期、行为权重”转成用户兴趣向量。 */
     static RecommendationAnalysis analyzeSignals(
             List<ArticleTagSignal> signals, LocalDateTime now) {
-        Map<Long, Double> weights = new HashMap<>(); // 标签ID → 衰减后的累计权重，参与推荐。
+        Map<Long, Double> weights = new HashMap<>(); // 标签ID → 今日累计权重，参与推荐。
         Map<Long, Double> rawWeights = new HashMap<>(); // 标签ID → 原始累计权重，用于解释。
         for (var signal : signals) {
             // 【2. 校验信号】忽略字段缺失、未来日期、超出窗口或非正/非有限的权重。
@@ -67,13 +77,13 @@ public class CommunityRecommendationService {
                     || age >= HISTORY_DAYS
                     || !Double.isFinite(signal.getWeight())
                     || signal.getWeight() <= 0) continue;
-            // 【3. 时间衰减】原始权重×0.5^(天数/14)：今天保留100%，14天前保留50%。
-            double decayed = signal.getWeight() * Math.pow(0.5, age / HALF_LIFE_DAYS);
+            // 【3. 今日权重】不再对旧兴趣滚动累积。
+            double todayWeight = signal.getWeight();
             // 【4. 按标签累加】merge遇到已有标签时使用Double::sum相加。
-            weights.merge(signal.getTagId(), decayed, Double::sum);
+            weights.merge(signal.getTagId(), todayWeight, Double::sum);
             rawWeights.merge(signal.getTagId(), signal.getWeight(), Double::sum);
         }
-        // 【5. 选择维度】按衰减权重降序取前64个标签；同权重按标签ID保证稳定顺序。
+        // 【5. 选择维度】按今日权重降序取前64个标签；同权重按标签ID保证稳定顺序。
         var ordered =
                 weights.entrySet().stream()
                         .sorted(
@@ -93,7 +103,7 @@ public class CommunityRecommendationService {
                         : ordered.stream()
                                 .map(e -> new TagWeight(e.getKey(), e.getValue() / norm))
                                 .toList();
-        // 【8. 解释数据】为每个保留标签返回原始权重、衰减权重、归一化向量值。
+        // 【8. 解释数据】保留旧DTO字段兼容调用方；decayedWeight现在等于今日原始权重。
         var dimensions =
                 tags.stream()
                         .map(

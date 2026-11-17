@@ -157,8 +157,9 @@ public class MediaFileServiceImpl implements MediaFileService {
     public void purgeAccountData(Long userId) {
         List<MediaFile> owned = mediaFileMapper.selectList(new LambdaQueryWrapper<MediaFile>()
                 .eq(MediaFile::getUserId, userId)
-                .between(MediaFile::getBizType,
-                        CodeEnum.MediaBizType.AVATAR.getCode(), CodeEnum.MediaBizType.CHAT_VOICE.getCode()));
+                .and(q -> q.between(MediaFile::getBizType,
+                        CodeEnum.MediaBizType.AVATAR.getCode(), CodeEnum.MediaBizType.CHAT_VOICE.getCode())
+                        .or().eq(MediaFile::getBizType, CodeEnum.MediaBizType.CONSULTATION_IMAGE.getCode())));
         for (MediaFile file : owned) {
             String storageKey = file.getStorageKey();
             if (storageKey == null || storageKey.isBlank()) {
@@ -224,6 +225,8 @@ public class MediaFileServiceImpl implements MediaFileService {
 
     /** 入参体积 / MIME 白名单校验（凭证与登记入口共用，顺序固定：大小在前、MIME 在后）。 */
     private void validateSizeAndMime(MediaBizType bizType, String mimeType, long sizeBytes) {
+        if (bizType == MediaBizType.CONSULTATION_IMAGE && sizeBytes > 5L * 1024 * 1024)
+            throw new BizException(ErrorCode.BAD_REQUEST, "问诊图片不能超过5MB");
         if (bizType == MediaBizType.ARTICLE_IMAGE && sizeBytes > 5L * 1024 * 1024) {
             throw new BizException(ErrorCode.BAD_REQUEST, "文章图片不能超过5MB");
         }
@@ -238,6 +241,7 @@ public class MediaFileServiceImpl implements MediaFileService {
     }
 
     private MediaFileRegisterResult toResult(MediaFile row) {
+        if(Integer.valueOf(9).equals(row.getBizType()))return MediaFileRegisterResult.builder().id(String.valueOf(row.getId())).fileUrl("/api/v1/consultation-media/"+row.getId()).build();
         return MediaFileRegisterResult.builder()
                 .id(String.valueOf(row.getId()))
                 .fileUrl(row.getBizType().equals(MediaBizType.AVATAR.getCode()) ? AvatarMediaService.path(row.getId()) : row.getFileUrl())

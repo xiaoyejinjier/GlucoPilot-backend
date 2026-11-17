@@ -25,7 +25,10 @@ public final class UserReminderDtos {
             LocalDateTime recordedAt,
             String userReply,
             LocalDateTime repliedAt,
-            boolean read) {}
+            boolean read,
+            boolean recordUpdated,
+            BigDecimal currentGlucoseValue,
+            LocalDateTime currentRecordedAt) {}
 
     public record Result(LocalDate date, List<Item> alerts, PageResult<Item> replies) {}
 

@@ -425,6 +425,9 @@
             COALESCE(a.created_at,n.gmt_create) article_created_at
         <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.explanationColumns"/>
         <include refid="articleSearchFrom"/>
+        <if test="query.recommendation != null and query.excludedIds != null and query.excludedIds.size() &gt; 0">
+            AND n.id NOT IN <foreach collection="query.excludedIds" item="excluded" open="(" separator="," close=")">#{excluded}</foreach>
+        </if>
         <include refid="com.threadfit.glucopilot.community.recommendation.mapper.CommunityRecommendationMapper.orderBy"/>
         LIMIT #{limit}
         OFFSET #{offset}

@@ -1,5 +1,101 @@
 # API 契约
 
+## 2026-11-16 求助广场隐藏本人求助
+
+- `GET /api/v1/consultations`新增可选布尔参数`hideMine`，默认false；仅普通广场（mine=false且assigned=false）生效，按当前登录用户排除patient_id，不接受客户端指定排除用户。过滤在数据库分页前执行，列表和total使用同一条件。我的问诊及医生已接诊列表保持原有范围。
+- 小程序广场顶部提供“隐藏我的求助”切换，记住本机偏好；切换分类、加载更多及下拉刷新保留选择，切换开关重置分页，迟到响应不覆盖当前筛选。
+
+## 2026-11-16 问诊配图、医患交流与沙箱提现
+
+- 发布问诊新增可选imageMediaIds（最多6张、每张5MB、bizType=9，必须本人上传的有效图片）。图片与求助在同一事务关联；广场不返回图片。GET /consultations/{id}/images及/images/{mediaId}仅患者本人和有效接诊医生可读，响应no-store；后台医生使用/admin/v1/doctor/consultations/{id}对应子路径。
+- GET/POST /consultations/{id}/messages提供问诊内独立交流，发送content/clientRequestId，按发送者和请求编号幂等，最多2000字；只允许本人患者和接诊且资质有效的医生，WAITING不开放交流，CLOSED不能发送。支持afterId增量和beforeId历史翻页（每次最多50条），不因发送交流消息出具或解锁付费问诊单。后台医生有相同路径，受doctor:consultation:manage控制。
+- 继续沿用充值订单→支付宝沙箱支付→验签通知/主动查单→钱包余额→100分问诊订单。金额、收款医生和成功状态均由服务端确定。回调POST /api/v1/payments/alipay/sandbox/notify校验签名、AppID、商家、订单、金额、交易号和交易状态，订单/余额/唯一流水同事务落库，重复回调只确认原结果。真实公网回调地址须由部署环境ALIPAY_SANDBOX_NOTIFY_URL配置，未配置时使用主动查单，不宣称公网已联通。
+- 医生沙箱提现：GET /wallet/withdrawals/summary、GET/POST /wallet/withdrawals；提交amountCents/clientRequestId，金额以分保存，先建提现订单并冻结可提现问诊收入。余额中的income_available_cents独立跟踪问诊收入：问诊入账增加、消费按剩余余额收缩、冻结减少、拒绝恢复；充值不增加该额度。历史额度按现有问诊收支净额保守回填，避免消费完收入后重新充值套出提现额度。
+- 管理员在/admin/v1/doctor-withdrawals查询并审批（version+审核意见，独立doctor:withdrawal:manage权限）；拒绝解冻，通过后计算第5个工作日的预计发放日期，定时任务到期模拟发放并记录唯一流水。状态PENDING/APPROVED/REJECTED/COMPLETED，所有页面明确仅沙箱模拟，不向支付宝真实转账。
+- 工作日以已配置wallet_work_calendar例外日期为准，未配置按周一至周五；管理员可在提现管理配置节假日及调休，已批准订单的预计日期保留快照。V70新增问诊配图、交流、提现订单、提现流水及工作日历，沙箱余额增加冻结金额。
+
+## 2026-11-16 当天标签兴趣与推荐换批
+
+- 推荐兴趣仅使用北京时间当天0点至查询时间的有效阅读、点赞、收藏，权重1/3/5，按启用标签汇总并L2归一化。昨天及更早行为不参与兴趣；点赞、收藏分别保存发生时间，修改收藏不会将旧点赞误算为今日点赞。
+- 基础分仍为60×兴趣+15×热度+15×新鲜度+10×关注。最终分=基础分×重复系数×0.95+探索分（0～5）。已点赞/收藏文章48小时内系数0.12，之后5天线性恢复至1；近24小时阅读、近6小时推荐下发也逐步恢复，取最小系数。按标签推荐其他内容，不直接提升本人已点赞文章；不改变点赞/收藏列表。
+- `GET /community/articles`新增可选`refreshSeed`（8～64位字母数字_-）、`excludeIds`（本批已加载ID，逗号分隔，最多200个）。仅推荐、非关注且无搜索时生效；加载更多保留种子并排除本批已有文章，取剩余候选前N篇。一轮最多200篇，重新进入或下拉刷新开启新一轮。旧客户端可继续原分页。
+- `POST /community/recommendation/exposures {newsIds:[...]}`记录成功渲染的列表（1～50个正ID），仅保存当前登录用户有权看到的已发布文章，独立于阅读统计；迟到响应不提交曝光。种子仅影响小幅探索分，不接受客户端兴趣向量、用户身份或分数。账号注销同步清除本人的推荐下发记录。
+- 推荐管理同步展示今日兴趣、基础分、重复系数、探索分和最终分，管理端预览不记录曝光。V69新增独立互动时间、本人推荐曝光和索引；旧互动时间按现有修改时间一次性回填，之后独立维护。
+
+## 2026-11-16 医生后台、角色菜单与账号绑定
+
+- 管理端新增与系统管理同级的“医生管理”：管理员可见医生审核、医生账号；医生仅可见获授权的接诊工作台、我的问诊、我的收入。旧 `/user-service/consultations` 跳转至 `/doctor-management/reviews`，页面使用统一 page-wrap/kt-card/分页布局。
+- 沿用若依 sys_user/sys_role/sys_menu/sys_role_menu 与 JWT/Redis 登录；医生角色编码 doctor，前端 role=doctor。V68 初始化医生目录、独立权限和默认角色菜单，增加医生小程序用户与后台运营身份的一对一绑定表，不创建默认医生或密码。
+- 管理员 `GET /admin/v1/doctor-accounts` 分页读取医生及绑定账号；`POST /doctor-accounts/{userId} {username,password}` 为审核通过的医生创建后台账号；`PUT /doctor-accounts/{userId} {status,password?}` 启停或重置密码。分别需管理员及 doctor:account:manage。医生审核改为 doctor:review:manage。
+- 管理员 `GET/PUT /admin/v1/doctor-role-permissions` 查询或保存 doctor 角色的功能授权（permissions 数组），仅允许 doctor:workbench:view、doctor:consultation:manage、doctor:income:view。系统角色管理/菜单管理仍可维护同一组真实若依数据；更改后医生重新登录加载最新菜单。
+- 医生接口 `/admin/v1/doctor/workbench`、`/doctor/consultations`、`/doctor/consultations/{id}`、`/{id}/claim`、`/{id}/report`、`/doctor/income`。当前登录后台身份从绑定解析小程序医生ID，且须持有效 doctor 角色、相应功能权限、有效绑定及已通过资质；不能传用户ID访问他人健康资料或收入。
+- 医生后台会话不能访问原管理员业务接口；菜单隐藏不替代后端权限。即使误授其他角色或权限，仍限制为医生接口及本人会话信息/退出入口。未获功能授权时显示“暂无可用功能”，避免跳转循环。
+
+## 2026-11-16 问诊与沙箱钱包支付
+
+- 本轮开放求助发布、医生申请/审核、接诊、出具咨询建议及患者付费查看。所有C端接口使用当前登录身份，响应no-store。公开广场仅提供标题、分类、状态及匿名展示名，详细健康描述仅患者本人和该单接诊医生可读。
+- `GET /consultations/capabilities` 返回ACTIVE能力，paymentProvider为WALLET_SANDBOX，费用100分。`POST /consultations`沿用原PublishRequest，按用户+clientRequestId幂等，成功保存。`GET /consultations`支持mine、assigned、topic及分页；`GET /consultations/{id}`返回本人/接诊权限和问诊单访问状态。
+- `GET/PUT /consultation-doctors/me`查询/提交医生申请，字段realName、hospital、specialty、licenseNumber、qualificationNote。申请为PENDING，仅管理员可审核为APPROVED/REJECTED/DISABLED，审核写入操作人、意见及版本。医生身份不由前端提交字段决定。
+- `POST /consultations/{id}/claim`仅已审核、已开通钱包医生可接诊，禁止本人接本人求助；状态WAITING→IN_PROGRESS。`POST /consultations/{id}/report`由接诊医生提交assessment、medicationAdvice、followUpAdvice及clientRequestId，出单后REPORT_READY，重复提交须内容一致，问诊单正文不可覆盖已出具版本。
+- `GET /consultation-reports/{id}`返回问诊单元信息，正文仅出单医生或已支付的所属患者可读。其他用户404。`POST /consultation-orders`沿用reportId/clientRequestId创建本人的100分订单，报告、患者和医生均从服务端读取。
+- `POST /consultation-orders/{orderNo}/payments`要求provider=WALLET_SANDBOX。先锁订单，再固定顺序锁双方有效且已开通钱包的账号与余额，同一事务扣患者100分、加医生100分、两条唯一流水、标记PAID/SETTLED/unlocked_at；不足返回400并保留待支付订单，重复支付返回原结果。沙箱余额沿用已验签充值，不能通过问诊接口自行增加。
+- 管理端`GET /admin/v1/consultation-doctors`分页查询，`POST /admin/v1/consultation-doctors/{userId}/review {status,reviewNote,version}`审核。要求user:manage权限和管理员身份，版本冲突返回409。管理端“用户与服务→问诊管理”展示申请资质和审核结果。
+- V67新增医生档案、求助、问诊单和问诊钱包流水；复用V64问诊订单及V66沙箱余额。该轮是沙箱咨询功能，医生填写的建议供问诊沟通，平台不自动生成处方。
+
+## 2026-11-13 沙箱付款码过期展示
+
+- 付款页将 pngBase64 转为内存中的 PNG data URI，直接交给 image 组件展示。二维码展示和清除跟随页面生命周期。
+- 小程序根据付款接口的 expiresAt 展示有效期，到期清除二维码并显示过期状态；付款接口现有40900“支付码已过期”响应也进入相同状态。
+- 过期后保留主动查单，已确认付款仍展示到账结果；“重新充值”返回钱包由用户再次确认创建订单。图片加载失败显示明确重试入口。
+
+## 2026-11-12 支付宝沙箱充值闭环
+
+- 本阶段仅钱包充值；医生、报告与问诊单尚未实现，问诊支付继续501，禁止对不存在的问诊单收费或伪造医生结算。
+- 仅固定支付宝沙箱网关，禁止生产网关。配置 `ALIPAY_SANDBOX_ENABLED/APP_ID/PRIVATE_KEY/PUBLIC_KEY/SELLER_ID` 后才启用；`ALIPAY_SANDBOX_NOTIFY_URL` 可选，公网回调推荐配置。本地无公网回调时可主动查单确认。不在日志、接口或小程序存放私钥。
+- 微信原生支付接口不用于支付宝；采用 `alipay.trade.precreate` 生成沙箱二维码，沙箱买家扫码。`POST /api/v1/wallet/recharge-orders {amountCents,clientRequestId}` 创建当前用户订单，1～1000元，幂等编号不可换金额；未开通钱包或配置不足不创建订单。
+- `POST /wallet/recharge-orders/{orderNo}/payments` 返回 `{orderNo,status,amountCents,qrCode,pngBase64,expiresAt}`；二维码最多15分钟，失败保留待支付订单可重试。`POST /wallet/recharge-orders/{orderNo}/refresh` 通过支付宝SDK主动查单，每订单最多5秒一次，返回本人订单；不采信客户端支付结果。上述入口均C端鉴权、no-store。
+- `POST /api/v1/payments/alipay/sandbox/notify` 唯一匿名回调入口，只接受表单，拒绝重复参数，RSA2验签并校验AppID、商家UID、订单号、金额、支付渠道和状态。该协议要求成功回调返回纯文本success，失败返回failure（ApiResponse的第三方协议例外）。
+- V66增加 `wallet_sandbox_account` 与 `wallet_sandbox_ledger`，只保存沙箱测试余额，和未来真实资金隔离；充值订单增加应用/商家快照、二维码和过期时间、查单节流时间。只有验签通知或SDK验签查单达到TRADE_SUCCESS/TRADE_FINISHED才在一个事务中标记已付、增加沙箱余额和写唯一流水；重复回调不重复到账。TRADE_CLOSED关闭未付款订单；付款不因本地二维码过期被丢弃。
+- 钱包摘要保留开通字段，增加 `sandbox:true`，已开通时返回沙箱余额和ledgerReady=true；rechargeEnabled/paymentEnabled依赖完整有效配置。页面明确标记沙箱余额、测试资金，不能提现、消费真实资金或给医生分账。真实钱包仍待后续资金业务接入。
+
+## 2026-11-12 按需开通钱包与社区分类入口
+
+- 所有有效C端账号都有钱包入口，无需创建资金账户即可查看；首次使用由本人确认开通。V65在 `user_account` 增加可空 `wallet_activated_at`，未开通为null；不新增资金账本，不自动充值。
+- `GET /api/v1/wallet` 在原摘要上增加 `available:true,activated,activatedAt`；余额仍为null，支付和充值能力仍为false。
+- `POST /api/v1/wallet/activation` 无需请求体，仅使用当前登录账号；条件更新首次开通时间，重复调用返回相同开通状态和时间（幂等）。不可代其他用户开通。开通不会创建订单、充值、扣款或授予问诊单权限。
+- 社区快捷入口按类别聚合：评论（收到的评论/我的评论）、关注（我的关注/新关注我的）、点赞（我的点赞/收到的点赞）、收藏（我的收藏/收到的收藏）、信息（仅私信），保留找糖友；热榜保留在下方信息流标签。
+- 已有关注/点赞/收藏/评论/通知接口保持不变。打开分类不标已读，打开具体互动页面后仅标该条互动已读；私信依旧由会话页面处理消息已读。各快捷入口红点仅统计自身类别，记录页全局提醒仍汇总全部类别。
+
+## 2026-11-12 钱包管理与我的订单（页面、订单表和只读接口）
+
+- “我的”新增钱包管理、我的订单；订单按充值/问诊、状态分页，只展示当前登录用户的数据。接口全部要求C端身份且响应 `Cache-Control: no-store`。
+- `GET /api/v1/wallet` 返回 `{balanceCents:null,currency:"CNY",ledgerReady:false,rechargeEnabled:false,paymentEnabled:false,consultationFeeCents:100}`。目前尚无钱包余额账本，不通过订单金额推算可用余额；页面显示待开通。
+- `GET /api/v1/wallet/recharge-orders`、`GET /api/v1/consultation-orders` 支持 `pageNum/pageSize/status`，状态可选 `PENDING/PAID/CLOSED/REFUNDING/REFUNDED`，未传查询全部；分页上限50。详情为上述路径追加 `/{orderNo}`，不存在或属于其他用户统一404。
+- 订单只读字段：`orderNo,type,title,status,amountCents,currency,createdAt,paidAt,closedAt,creditedAt,consultationId,reportId,doctorUserId,settlementStatus`。金额为整数分；问诊固定100分。只读订单不是报告授权依据，当前问诊报告接口仍关闭。
+- `POST /api/v1/wallet/recharge-orders {amountCents,clientRequestId}` 预留100～100000分（1～1000元），请求编号8～64位；校验后HTTP501/code50100，不插入订单、不改变余额。问诊创建订单和支付接口继续501；前端不得声称已支付、已到账或已给医生转账。
+- V64新增且仅新增 `wallet_recharge_order`（充值订单）与 `consultation_order`（问诊单查看订单）。订单号唯一、同用户请求编号唯一、渠道流水唯一；问诊保存患者/问诊单/医生引用、100分及结算状态。同一用户的同一报告只允许一个待支付/已支付/退款中订单。未来患者/医生表关联和余额账本随真实业务另行接入。
+- 未来支付必须验签、核对服务端金额与订单归属、回调幂等；充值到账、钱包扣款、问诊授权与医生结算各有明确时间字段。本期不提供支付回调和资金写接口。
+
+## 2026-11-12 问诊页面与接口预留（尚未开放业务）
+
+- 小程序第二个Tab由设备管理改为问诊；设备管理改为“我的”下普通页面，绑定/同步/解绑接口保持不变。
+- 本期为界面与接口预留，不创建真实求助、医生问诊单、订单、支付或分账记录。所有接口要求C端登录；无模拟患者、医生、付款成功或处方数据。
+- `GET /api/v1/consultations/capabilities` 返回 `{mode:"PREVIEW",submissionEnabled:false,doctorServiceEnabled:false,paymentEnabled:false,feeCents:100,currency:"CNY",paymentProvider:"ALIPAY_SANDBOX"}`。
+- `GET /api/v1/consultations?mine=false&topic=&pageNum=1&pageSize=10` 返回空PageResult；`GET /api/v1/consultations/{id}`、`GET /api/v1/consultation-reports/{id}` 返回404。公开广场未来仅返回脱敏摘要，完整健康资料仅对本人及获准接诊的医生开放。
+- `POST /api/v1/consultations` 预留 `{title,topic,symptoms,glucoseNote,medicationNote,anonymous,clientRequestId}`；本期校验后返回HTTP501 / code50100，内容不落库。客户端提供本地页面预览，并明确标注尚未发布。
+- `GET /api/v1/consultation-orders` 返回空PageResult，`GET /api/v1/consultation-orders/{orderNo}` 返回404。
+- `POST /api/v1/consultation-orders {reportId,clientRequestId}` 及 `POST /api/v1/consultation-orders/{orderNo}/payments {provider:"ALIPAY_SANDBOX",clientRequestId}` 返回HTTP501 / code50100。本期支付按钮不可扣款；1元仅为展示的问诊单查看费用，收款对象展示为出具问诊单的医生，实际账户/结算尚未接入。
+- 后续接入须由服务端确定金额100分、报告所属患者与出单医生；验签并确认支付到账后才授予报告阅读权限。未付款响应不得包含被锁定的报告正文、用药细节；禁止客户端付款成功回调直接解锁。订单需幂等、支付回调去重，医生收款以服务端结算记录为准，不根据前端传入的金额/医生账户转账。
+- 医生身份/资质审核、接诊、出单、处方审核与药品购买，以及支付宝沙箱SDK/回调/退款/结算均留待后续，本期不提供可执行处方，不自动开药。无需新增数据库迁移。
+
+## 2026-11-09 测量更新提示与管理员消息已读
+
+- 用户提醒 `REPLY` 增加 `recordUpdated/currentGlucoseValue/currentRecordedAt`。建议继续对应原测量快照；原记录更新后明确展示新旧值，原先已读的旧建议重新提醒一次。已读 revision 包含当前测量，迟到的旧 revision 返回409，不能清除新的提示。
+- `GET /admin/v1/work-reminders` 按当前登录管理员返回未读总数；各类别增加 `pendingCount/revision/recordId`。已读待办仍保留，未读数为0时不显示红点。新增 `GLUCOSE_UPDATE`（`health:alert:view`）：最近处理的测量快照与当前血糖不一致，包括当前已恢复正常的记录。
+- `PUT /admin/v1/work-reminders/read`，请求 `{revisions:{REPORT:"…",FEEDBACK:"…",FOOD_REVIEW:"…",GLUCOSE_UPDATE:"…"}}`；可传一个类别或页面展示的全部类别。revision 是已展示来源快照集合的SHA-256，仅保存该管理员的已读回执，不更改待办状态；集合已变化返回409，未授权类别返回403，整体事务回滚。
+- 管理员异常详情允许查看已有处理历史、当前已正常的记录；当前正常时只读。管理端信封可携带 `recordId` 定位对应详情。原异常处理接口继续检查血糖快照和事件版本。
+- 新增V63已读回执迁移。所有新增查询/写入使用MyBatis XML，响应保持ApiResponse。
+
 ## 2026-11-09 社区热度排行榜（热榜专用公式 + Redis ZSET）
 
 `GET /api/v1/community/hot-articles`：需 C 端登录。可选 `limit`（默认 10，最大 10）。返回 `{ records, generatedAt, total }`：`records` 元素与社区 feed 的 `Article` 相同；`total` 为本次实际返回条数（经当前用户可见性与「减少此类内容」过滤后可能不足 10）；`generatedAt` 为榜单快照生成时间（ISO-8601）。

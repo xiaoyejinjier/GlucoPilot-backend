@@ -412,9 +412,8 @@ class GlucoseAlertServiceTest {
         jdbc.update("UPDATE glucose_record SET glucose_value=6 WHERE id=1");
         assertEquals(0, page(null, null, null, 1, 10).page().getTotal());
         assertEquals(1, repository.history(1).size());
-        assertEquals(
-                ErrorCode.NOT_FOUND,
-                assertThrows(BizException.class, () -> service.detail(1)).getErrorCode());
+        assertEquals("NORMAL", service.detail(1).event().alertType());
+        assertEquals(1, service.detail(1).history().size());
         jdbc.update("UPDATE glucose_record SET glucose_value=3.8,is_deleted=1 WHERE id=1");
         assertEquals(
                 ErrorCode.NOT_FOUND,

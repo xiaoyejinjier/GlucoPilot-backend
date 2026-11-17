@@ -71,7 +71,9 @@ public class UserReminderServiceTest {
                         + " VARCHAR(32),resolved_at TIMESTAMP(3),feedback_read_at TIMESTAMP(3))");
         var migration =
                 new ResourceDatabasePopulator(
-                        new ClassPathResource("db/migration/V56__user_reminder_reads.sql"));
+                        new ClassPathResource("db/migration/V56__user_reminder_reads.sql"),
+                        new ClassPathResource(
+                                "db/migration/V63__admin_reminder_reads_and_measurement_snapshots.sql"));
         migrationConnection = ds.getConnection();
         migration.populate(migrationConnection);
         jdbc.update("INSERT INTO user_account(id) VALUES(1),(2)");
@@ -108,6 +110,39 @@ public class UserReminderServiceTest {
         var page = new PageQuery();
         page.setPageSize(3);
         return page;
+    }
+
+    @Test
+    void oldAdviceIsRetainedAndReappearsWithCurrentMeasurementWhenRecordChanges() {
+        var before = service.detail(1L, "REPLY", 100L);
+        assertFalse(before.recordUpdated());
+        service.read(1L, "REPLY", 100L, new UserReminderDtos.Read(before.revision()));
+        assertEquals(0, service.list(1L, DAY, page()).replies().getTotal());
+        jdbc.update(
+                "UPDATE glucose_record SET glucose_value=12.5,recorded_at='2026-11-05 09:15:00'"
+                    + " WHERE id=10");
+        var current = service.detail(1L, "REPLY", 100L);
+        assertTrue(current.recordUpdated());
+        assertEquals(0, current.glucoseValue().compareTo(new java.math.BigDecimal("12.6")));
+        assertEquals(0, current.currentGlucoseValue().compareTo(new java.math.BigDecimal("12.5")));
+        assertEquals("第一次公开回复", current.userReply());
+        assertEquals(1, service.list(1L, DAY, page()).replies().getTotal());
+        assertEquals(
+                ErrorCode.CONFLICT,
+                assertThrows(
+                                BizException.class,
+                                () ->
+                                        service.read(
+                                                1L,
+                                                "REPLY",
+                                                100L,
+                                                new UserReminderDtos.Read(before.revision())))
+                        .getErrorCode());
+        service.read(1L, "REPLY", 100L, new UserReminderDtos.Read(current.revision()));
+        assertEquals(0, service.list(1L, DAY, page()).replies().getTotal());
+        jdbc.update("UPDATE glucose_record SET glucose_value=5.2 WHERE id=10");
+        assertEquals(1, service.list(1L, DAY, page()).replies().getTotal());
+        assertTrue(service.detail(1L, "REPLY", 100L).recordUpdated());
     }
 
     @Test

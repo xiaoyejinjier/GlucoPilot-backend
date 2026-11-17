@@ -204,7 +204,9 @@ class AdminCommunityArticlesTest {
         var report = recommendationAdmin().report(2);
         assertFalse(report.coldStart());
         assertTrue(report.vectorNorm() > 0);
-        assertEquals(recommended(2), report.articles().stream().map(a -> a.id()).toList());
+        var previewPage=new PageQuery();previewPage.setPageSize(20);
+        assertEquals(service.feed(2,null,false,null,"RECOMMEND",previewPage,report.refreshSeed(),"").getRecords().stream().map(Article::id).toList(),
+                report.articles().stream().map(a -> a.id()).toList());
         assertEquals(
                 service.feed(2, null, false, null, new PageQuery()).getTotal(),
                 report.candidateCount());
@@ -214,12 +216,13 @@ class AdminCommunityArticlesTest {
                     item.tags().stream().mapToDouble(t -> t.contribution()).sum(),
                     1e-9);
             assertEquals(
-                    item.totalScore(),
+                    item.baseScore(),
                     item.interestScore()
                             + item.popularityScore()
                             + item.freshnessScore()
                             + item.followingScore(),
                     1e-8);
+            assertEquals(item.totalScore(),0.95*item.baseScore()*item.repeatFactor()+item.explorationScore(),1e-8);
             assertTrue(item.totalScore() >= 0 && item.totalScore() <= 100.000001);
         }
         assertEquals(
@@ -383,6 +386,63 @@ class AdminCommunityArticlesTest {
         assertEquals(total, all.size());
         assertTrue(all.contains("100"));
         assertTrue(all.contains("259"));
+    }
+
+    @Test
+    void likedArticleTeachesTagsButNewSameTagArticleRanksAhead() {
+        article(100,"同标签未读文章",0,1);recommendationTag(10,"diet");recommendationTag(100,"diet");
+        jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_liked,liked_at,gmt_modified) VALUES(2,10,1,?,?)",
+                java.time.LocalDateTime.now().minusMinutes(5),java.time.LocalDateTime.now());
+        var ids=recommended(2);assertTrue(ids.indexOf("100")<ids.indexOf("10"));
+        var report=recommendationAdmin().report(2);
+        assertEquals(java.time.LocalDate.now(),report.historyStart());
+        assertEquals(3,report.vector().getFirst().rawWeight(),1e-9);
+        var liked=report.articles().stream().filter(a->a.id().equals("10")).findFirst().orElseThrow();
+        assertEquals(0.12,liked.repeatFactor(),1e-9);
+        jdbc.update("UPDATE news_user_action SET liked_at=? WHERE user_id=2 AND news_id=10",java.time.LocalDateTime.now().minusDays(8));
+        var recovered=recommendationAdmin().report(2).articles().stream().filter(a->a.id().equals("10")).findFirst().orElseThrow();
+        assertEquals(1,recovered.repeatFactor(),1e-9);
+        assertTrue(CommunityTestMappers.recommendation(jdbc).prepare(2).tags().isEmpty());
+    }
+
+    @Test
+    void collectingTodayDoesNotRecountYesterdaysLike() {
+        recommendationTag(10,"diet");
+        jdbc.update("INSERT INTO news_user_action(user_id,news_id,is_liked,is_collected,liked_at,collected_at,gmt_modified) VALUES(2,10,1,1,?,?,?)",
+                java.time.LocalDateTime.now().minusDays(1),java.time.LocalDateTime.now().minusMinutes(1),java.time.LocalDateTime.now());
+        var analysis=CommunityTestMappers.recommendation(jdbc).analyze(2);
+        assertEquals(5,analysis.dimensions().getFirst().rawWeight(),1e-9);
+        jdbc.update("UPDATE news_user_action SET collected_at=? WHERE user_id=2 AND news_id=10",java.time.LocalDateTime.now().minusDays(1));
+        assertTrue(CommunityTestMappers.recommendation(jdbc).prepare(2).tags().isEmpty());
+    }
+
+    @Test
+    void successfulListExposureRotatesResultsWithoutCountingAsReadingOrBypassingPrivacy() {
+        article(100,"新候选一",0,1);article(101,"新候选二",0,1);article(102,"私人候选",0,1);
+        jdbc.update("INSERT INTO community_article_access(news_id,visibility) VALUES(102,'PRIVATE')");
+        var q=new PageQuery();q.setPageSize(1);
+        String first=service.feed(2,null,false,null,"RECOMMEND",q,"refresh_seed_1","").getRecords().getFirst().id();
+        service.recommendationExposures(2,List.of(Long.parseLong(first),102L,9999L));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM community_recommendation_exposure WHERE user_id=2",Integer.class));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM community_article_view",Integer.class));
+        assertNotEquals(first,service.feed(2,null,false,null,"RECOMMEND",q,"refresh_seed_2","").getRecords().getFirst().id());
+        assertTrue(CommunityTestMappers.recommendation(jdbc).prepare(2).tags().isEmpty());
+    }
+
+    @Test
+    void refreshBatchPaginatesWithoutDuplicatesWhileExposureChangesScores() {
+        for(long id=100;id<125;id++)article(id,"换批文章"+id,0,1);
+        var q=new PageQuery();q.setPageSize(5);var seen=new LinkedHashSet<String>();long total=0;
+        for(int page=1;page<=6;page++) {
+            q.setPageNum(page);
+            var result=service.feed(2,null,false,null,"RECOMMEND",q,"stable_seed_1",String.join(",",seen));total=result.getTotal();
+            for(var article:result.getRecords())assertTrue(seen.add(article.id()));
+            service.recommendationExposures(2,result.getRecords().stream().map(a->Long.valueOf(a.id())).toList());
+            if(page>=result.getPages())break;
+        }
+        assertEquals(total,seen.size());
+        assertThrows(BizException.class,()->service.feed(2,null,false,null,"RECOMMEND",new PageQuery(),"bad",""));
+        assertThrows(BizException.class,()->service.feed(2,null,false,null,"RECOMMEND",new PageQuery(),"valid_seed_1","1 OR 1=1"));
     }
 
     @Test

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.wallet.withdrawal.mapper.WithdrawalMapper">
+    <select id="byRequest" resultType="com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalOrder">
+        SELECT * FROM wallet_withdrawal_order WHERE user_id=#{user} AND client_request_id=#{key}
+    </select>
+    <select id="lock" resultType="com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalOrder" useCache="false" flushCache="true">
+        SELECT * FROM wallet_withdrawal_order WHERE order_no=#{no} FOR UPDATE
+    </select>
+    <select id="find" resultType="com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalOrder">
+        SELECT * FROM wallet_withdrawal_order WHERE order_no=#{no}
+    </select>
+    <select id="balance" resultType="com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalBalance" useCache="false" flushCache="true">
+        SELECT balance_cents,frozen_cents,income_available_cents FROM wallet_sandbox_account WHERE user_id=#{user} <if test="lock">FOR UPDATE</if>
+    </select>
+    <insert id="insert">
+        INSERT INTO wallet_withdrawal_order(order_no,user_id,amount_cents,client_request_id) VALUES(#{no},#{user},#{amount},#{key})
+    </insert>
+    <update id="freeze">UPDATE wallet_sandbox_account SET income_available_cents=income_available_cents-#{amount},balance_cents=balance_cents-#{amount},frozen_cents=frozen_cents+#{amount},version=version+1 WHERE user_id=#{user} AND balance_cents&gt;=#{amount} AND income_available_cents&gt;=#{amount}</update>
+    <update id="release">
+        UPDATE wallet_sandbox_account SET frozen_cents=frozen_cents-#{amount},version=version+1
+        <if test="refund">,balance_cents=balance_cents+#{amount},income_available_cents=income_available_cents+#{amount}</if>
+        WHERE user_id=#{user} AND frozen_cents&gt;=#{amount}
+    </update>
+    <update id="review">
+        UPDATE wallet_withdrawal_order SET status=#{status},review_note=#{note},reviewed_by=#{ops},reviewed_at=CURRENT_TIMESTAMP(3),expected_payout_date=#{due},version=version+1
+        WHERE order_no=#{no} AND version=#{version} AND status='PENDING'
+    </update>
+    <update id="complete">UPDATE wallet_withdrawal_order SET status='COMPLETED',completed_at=CURRENT_TIMESTAMP(3),payout_reference=#{reference},version=version+1 WHERE order_no=#{no} AND status='APPROVED'</update>
+    <insert id="event">
+        INSERT INTO wallet_withdrawal_event(order_no,event_type,amount_cents,balance_after_cents,frozen_after_cents,actor_id)
+        VALUES(#{no},#{type},#{amount},#{balance.balanceCents},#{balance.frozenCents},#{actor})
+    </insert>
+    <sql id="filters">WHERE 1=1 <if test="user != null">AND o.user_id=#{user}</if><if test="status != null">AND o.status=#{status}</if></sql>
+    <select id="list" resultType="com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalOrder">
+        SELECT o.*,d.real_name doctor_name FROM wallet_withdrawal_order o LEFT JOIN consultation_doctor d ON d.user_id=o.user_id
+        <include refid="filters"/> ORDER BY o.created_at DESC,o.order_no DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="count" resultType="long">SELECT COUNT(*) FROM wallet_withdrawal_order o <include refid="filters"/></select>
+    <select id="due" resultType="string">SELECT order_no FROM wallet_withdrawal_order WHERE status='APPROVED' AND expected_payout_date&lt;=#{today} ORDER BY expected_payout_date,order_no LIMIT 50</select>
+    <select id="workingDay" resultType="int">SELECT working_day FROM wallet_work_calendar WHERE calendar_date=#{date}</select>
+    <insert id="calendar">INSERT INTO wallet_work_calendar(calendar_date,working_day,note,updated_by) VALUES(#{date},#{working},#{note},#{ops}) ON DUPLICATE KEY UPDATE working_day=#{working},note=#{note},updated_by=#{ops},updated_at=CURRENT_TIMESTAMP(3)</insert>
+    <select id="calendarRows" resultType="java.util.HashMap">SELECT calendar_date,working_day,note FROM wallet_work_calendar WHERE calendar_date BETWEEN #{start} AND #{end} ORDER BY calendar_date</select>
+</mapper>

@@ -23,10 +23,10 @@ class CommunityRecommendationServiceTest {
     }
 
     @Test
-    void fourteenDayHalfLifeAndL2NormalizationProduceExpectedCosineInputs() {
+    void onlyTodayContributesAndL2NormalizationProducesExpectedCosineInputs() {
         var profile =
                 CommunityRecommendationService.normalize(
-                        List.of(signal(1, 0, 8), signal(2, 14, 8)), now);
+                        List.of(signal(1, 0, 8), signal(2, 0, 4),signal(3,1,100)), now);
         assertEquals(2, profile.tags().size());
         assertEquals(2.0, profile.tags().get(0).weight() / profile.tags().get(1).weight(), 1e-10);
         assertEquals(
@@ -46,7 +46,7 @@ class CommunityRecommendationServiceTest {
                                 signal(4, 0, Double.NaN)),
                         now);
         assertTrue(empty.tags().isEmpty());
-        var valid = CommunityRecommendationService.normalize(List.of(signal(1, 29, 8)), now);
+        var valid = CommunityRecommendationService.normalize(List.of(signal(1, 0, 8)), now);
         assertEquals(1, valid.tags().size());
         assertEquals(1, valid.tags().getFirst().weight());
     }
@@ -64,13 +64,13 @@ class CommunityRecommendationServiceTest {
     }
 
     @Test
-    void historyQueryIsBoundToViewerAndThirtyCalendarDays() {
+    void historyQueryIsBoundToViewerAndTodayStart() {
         var mapper = mock(CommunityRecommendationMapper.class);
-        when(mapper.signals(36, now.toLocalDate().minusDays(29).atStartOfDay(), now))
+        when(mapper.signals(36, now.toLocalDate().atStartOfDay(), now))
                 .thenReturn(List.of(signal(1, 0, 3)));
         var service = new CommunityRecommendationService(mapper);
         var profile = service.prepare(36, now);
         assertEquals(1, profile.tags().size());
-        verify(mapper).signals(36, now.toLocalDate().minusDays(29).atStartOfDay(), now);
+        verify(mapper).signals(36, now.toLocalDate().atStartOfDay(), now);
     }
 }

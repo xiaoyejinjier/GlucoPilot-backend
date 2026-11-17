@@ -31,7 +31,10 @@ public class AdminRecommendationService {
         if (user == null || user.isEmpty())
             throw new BizException(ErrorCode.NOT_FOUND, "用户不存在或已停用");
         var analysis = recommendation.analyze(userId);
-        var context = analysis.recommendation();
+        var original = analysis.recommendation();
+        var context =
+                new com.threadfit.glucopilot.community.recommendation.dto.CommunityRecommendation(
+                        original.asOf(), original.tags(), UUID.randomUUID().toString());
         var query = new CommunityArticleQuery();
         query.setViewer(userId);
         query.setPublished(true);
@@ -103,24 +106,30 @@ public class AdminRecommendationService {
                             15 * number(row, "rec_popularity"),
                             15 * number(row, "rec_freshness"),
                             10 * number(row, "rec_followed"),
+                            number(row, "rec_base"),
+                            number(row, "rec_repeat"),
+                            number(row, "rec_rotation"),
                             number(row, "rec_score")));
         }
         var steps =
                 List.of(
-                        "读取近30天本人有效行为：阅读1、点赞3、收藏5。",
-                        "按14天半衰期衰减，聚合到启用标签，保留最高64项。",
-                        "L2范数为衰减权重平方和的平方根；各权重除以范数生成用户向量。",
+                        "仅取北京时间当天本人有效行为：阅读1、点赞3、收藏5，点赞和收藏独立计时。",
+                        "聚合到启用标签，保留最高64项；旧行为不参与今日兴趣。",
+                        "L2范数为今日标签权重平方和的平方根；各权重除以范数生成用户向量。",
                         "文章启用标签取1并归一化；与用户向量点积得到余弦相似度。",
-                        "总分=兴趣分(60×相似度)+热度分(最高15)+新鲜度分(最高15)+关注分(0或10)，排序后取前20篇。");
+                        "基础分=60×相似度+15×热度+15×新鲜度+10×关注；已点赞/收藏48小时内降权，之后5天逐步恢复。",
+                        "阅读24小时、推荐下发6小时内也降低复现；最终分=基础分×重复系数×0.95+探索分(0～5)。",
+                        "刷新换种子、优先未推荐内容；管理端只预览、不登记曝光，内容不足时仍可能重复。");
         return new Report(
                 new User(Long.toString(userId), text(user, "nickname")),
                 context.asOf(),
-                context.asOf().toLocalDate().minusDays(29),
+                context.asOf().toLocalDate(),
                 total,
                 analysis.norm(),
                 vector.isEmpty(),
                 vector,
                 ranked,
+                context.seed(),
                 steps);
     }
 

@@ -15,4 +15,6 @@ public class NewsUserAction extends BaseEntity {
     private Long newsId;
     private Integer isLiked;
     private Integer isCollected;
+    private java.time.LocalDateTime likedAt;
+    private java.time.LocalDateTime collectedAt;
 }

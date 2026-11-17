@@ -18,4 +18,6 @@ public class UserReminderRow {
     private String userReply;
     private LocalDateTime repliedAt;
     private LocalDateTime readAt;
+    private BigDecimal currentGlucoseValue;
+    private LocalDateTime currentRecordedAt;
 }

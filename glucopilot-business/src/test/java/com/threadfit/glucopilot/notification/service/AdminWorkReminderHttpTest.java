@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.notification.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 import com.threadfit.glucopilot.auth.service.RuoYiAuthorizationService;
 import com.threadfit.glucopilot.common.context.RequestContext;
@@ -20,6 +21,46 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.*;
 
 class AdminWorkReminderHttpTest {
+    @Test
+    void readUsesAuthenticatedOperatorAndDoesNotTrustRequestAccount() throws Exception {
+        try (var context = new AnnotationConfigApplicationContext(Config.class)) {
+            var controller = context.getBean(AdminWorkReminderController.class);
+            var service = context.getBean(AdminWorkReminderService.class);
+            var authorization = context.getBean(RuoYiAuthorizationService.class);
+            SecurityContextHolder.getContext()
+                    .setAuthentication(
+                            new TestingAuthenticationToken(
+                                    "feedback-manager", "unused", "feedback:manage"));
+            RequestContext.setOpsId(7L);
+            when(authorization.permissionCodesOf(7L)).thenReturn(Set.of("feedback:manage"));
+            var response =
+                    MockMvcBuilders.standaloneSetup(controller)
+                            .build()
+                            .perform(
+                                    put("/admin/v1/work-reminders/read?opsId=99")
+                                            .contentType("application/json")
+                                            .content(
+                                                    "{\"revisions\":{\"FEEDBACK\":\""
+                                                            + "a".repeat(64)
+                                                            + "\"}}"))
+                            .andReturn()
+                            .getResponse();
+            assertEquals(200, response.getStatus());
+            verify(service)
+                    .read(
+                            eq(7L),
+                            eq(Set.of("feedback:manage")),
+                            argThat(
+                                    request ->
+                                            request.revisions()
+                                                    .get("FEEDBACK")
+                                                    .equals("a".repeat(64))));
+        } finally {
+            SecurityContextHolder.clearContext();
+            RequestContext.clear();
+        }
+    }
+
     @Configuration
     @EnableMethodSecurity
     static class Config {
@@ -79,13 +120,19 @@ class AdminWorkReminderHttpTest {
             verifyNoInteractions(service, authorization);
             RequestContext.setOpsId(7L);
             when(authorization.permissionCodesOf(7L)).thenReturn(Set.of("feedback:manage"));
-            when(service.summary(Set.of("feedback:manage")))
+            when(service.summary(7L, Set.of("feedback:manage")))
                     .thenReturn(
                             new AdminWorkReminderService.Summary(
                                     1,
                                     List.of(
                                             new AdminWorkReminderService.Item(
-                                                    "FEEDBACK", "新反馈", 1, null))));
+                                                    "FEEDBACK",
+                                                    "新反馈",
+                                                    1,
+                                                    null,
+                                                    1,
+                                                    "a".repeat(64),
+                                                    null))));
             var response =
                     MockMvcBuilders.standaloneSetup(controller)
                             .build()
@@ -97,7 +144,7 @@ class AdminWorkReminderHttpTest {
             assertTrue(response.getContentAsString().contains("FEEDBACK"));
             assertFalse(response.getContentAsString().contains("REPORT"));
             verify(authorization).permissionCodesOf(7L);
-            verify(service).summary(Set.of("feedback:manage"));
+            verify(service).summary(7L, Set.of("feedback:manage"));
         } finally {
             SecurityContextHolder.clearContext();
             RequestContext.clear();
@@ -116,13 +163,19 @@ class AdminWorkReminderHttpTest {
                                     "food-manager", "unused", "food:library:manage"));
             RequestContext.setOpsId(8L);
             when(authorization.permissionCodesOf(8L)).thenReturn(Set.of("food:library:manage"));
-            when(service.summary(Set.of("food:library:manage")))
+            when(service.summary(8L, Set.of("food:library:manage")))
                     .thenReturn(
                             new AdminWorkReminderService.Summary(
                                     2,
                                     List.of(
                                             new AdminWorkReminderService.Item(
-                                                    "FOOD_REVIEW", "待审核食品", 2, null))));
+                                                    "FOOD_REVIEW",
+                                                    "待审核食品",
+                                                    2,
+                                                    null,
+                                                    2,
+                                                    "a".repeat(64),
+                                                    null))));
             var response =
                     MockMvcBuilders.standaloneSetup(controller)
                             .build()
@@ -133,7 +186,7 @@ class AdminWorkReminderHttpTest {
             assertEquals("no-store", response.getHeader("Cache-Control"));
             assertTrue(response.getContentAsString().contains("FOOD_REVIEW"));
             assertFalse(response.getContentAsString().contains("REPORT"));
-            verify(service).summary(Set.of("food:library:manage"));
+            verify(service).summary(8L, Set.of("food:library:manage"));
         } finally {
             SecurityContextHolder.clearContext();
             RequestContext.clear();

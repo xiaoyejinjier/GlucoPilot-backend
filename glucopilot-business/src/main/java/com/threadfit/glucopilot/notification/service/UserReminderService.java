@@ -127,7 +127,13 @@ public class UserReminderService {
                 row.getRecordedAt(),
                 row.getUserReply(),
                 row.getRepliedAt(),
-                row.getReadAt() != null);
+                row.getReadAt() != null,
+                "REPLY".equals(kind)
+                        && row.getCurrentGlucoseValue() != null
+                        && (row.getGlucoseValue().compareTo(row.getCurrentGlucoseValue()) != 0
+                                || !row.getRecordedAt().equals(row.getCurrentRecordedAt())),
+                row.getCurrentGlucoseValue(),
+                row.getCurrentRecordedAt());
     }
 
     /** 顶部一键已读：先固定事务快照，批量处理未展示的回复，任一写入失败一起回滚。 */
@@ -165,7 +171,13 @@ public class UserReminderService {
                         + "|"
                         + row.getRepliedAt()
                         + "|"
-                        + row.getUserReply());
+                        + row.getUserReply()
+                        + ("REPLY".equals(kind)
+                                ? "|"
+                                        + row.getCurrentGlucoseValue()
+                                        + "|"
+                                        + row.getCurrentRecordedAt()
+                                : ""));
     }
 
     public static String hash(String text) {

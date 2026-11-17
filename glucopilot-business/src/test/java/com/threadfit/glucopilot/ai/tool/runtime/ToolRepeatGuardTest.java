@@ -92,4 +92,33 @@ class ToolRepeatGuardTest {
 
         assertThat(guard.sessionCount()).isEqualTo(ToolRepeatGuard.MAX_SESSIONS);
     }
+
+    @Test
+    void 按工具名作废只清该工具的缓存() {
+        // 写工具（save_long_term_memory）只该让"读记忆"的缓存失效，
+        // 不该连带作废血糖/社区检索——那几类结果不受这次写入影响，清掉只是白白多花 token 重查。
+        ToolRepeatGuard guard = new ToolRepeatGuard();
+        guard.remember(key(SESSION, "list_long_term_memory", "{}"), "{\"total\":0}");
+        guard.remember(key(SESSION, "query_glucose_stats", "{\"days\":7}"), "{\"avg\":6.2}");
+
+        guard.forget(SESSION, "list_long_term_memory");
+
+        assertThat(guard.recall(key(SESSION, "list_long_term_memory", "{}"))).isEmpty();
+        assertThat(guard.recall(key(SESSION, "query_glucose_stats", "{\"days\":7}"))).isPresent();
+        assertThat(guard.entryCount(SESSION)).isEqualTo(1);
+    }
+
+    @Test
+    void 按工具名作废不应误伤前缀相同的其他工具() {
+        // 缓存键是「工具名 + \0 + 入参」，按前缀匹配必须带上分隔符，
+        // 否则 forget("list_long_term_memory") 会把 "list_long_term_memory_x" 一起清掉。
+        ToolRepeatGuard guard = new ToolRepeatGuard();
+        guard.remember(key(SESSION, "list_long_term_memory", "{}"), "a");
+        guard.remember(key(SESSION, "list_long_term_memory_extra", "{}"), "b");
+
+        guard.forget(SESSION, "list_long_term_memory");
+
+        assertThat(guard.recall(key(SESSION, "list_long_term_memory", "{}"))).isEmpty();
+        assertThat(guard.recall(key(SESSION, "list_long_term_memory_extra", "{}"))).isPresent();
+    }
 }

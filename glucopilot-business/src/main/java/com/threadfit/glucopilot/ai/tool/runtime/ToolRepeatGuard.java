@@ -115,6 +115,32 @@ public class ToolRepeatGuard {
         }
     }
 
+    /**
+     * 只清掉某会话里<b>某个工具</b>的缓存。
+     *
+     * <p>为什么需要比 {@link #forget(long)} 更细的粒度：缓存的前提是"同样的入参，底层数据没变"。
+     * 写工具（记住一条长期记忆）恰好打破这个前提——用户刚说完"记住我不吃香菜"，紧接着问
+     * "你还记得我忌口吗"，如果列表工具的结果还躺在缓存里，模型看到的就是写入之前的旧快照。
+     * 清掉整个会话的缓存也能修好，但会连带把血糖、社区检索等无关结果一起作废，
+     * 白白让下一次调用重新查库。所以按「工具名 + 入参」的键前缀精确删。
+     *
+     * @param sessionId 会话 id
+     * @param toolName  工具名（与 {@link Key#toolName()} 同源，即 {@code @Tool(name=…)}）
+     */
+    public void forget(long sessionId, String toolName) {
+        if (toolName == null || toolName.isEmpty()) {
+            return;
+        }
+        String prefix = toolName + '\u0000';
+        synchronized (sessions) {
+            SessionCache cache = sessions.get(sessionId);
+            if (cache == null) {
+                return;
+            }
+            cache.removeIf(key -> key.startsWith(prefix));
+        }
+    }
+
     /** 当前缓存的会话数（测试与观测用）。 */
     public int sessionCount() {
         synchronized (sessions) {
@@ -170,6 +196,11 @@ public class ToolRepeatGuard {
 
         void remove(String cacheKey) {
             entries.remove(cacheKey);
+        }
+
+        /** 按缓存键前缀批量作废（写工具改了底层数据后，只作废受影响的那一个工具的缓存）。 */
+        void removeIf(java.util.function.Predicate<String> predicate) {
+            entries.keySet().removeIf(predicate);
         }
 
         int size() {

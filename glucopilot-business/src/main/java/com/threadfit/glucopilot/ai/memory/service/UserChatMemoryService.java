@@ -3,7 +3,9 @@ package com.threadfit.glucopilot.ai.memory.service;
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
 import com.threadfit.glucopilot.common.api.PageQuery;
 
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -85,6 +87,48 @@ public interface UserChatMemoryService {
      * 读失败返回空列表：记忆是增强项，读不到就当没有，绝不让这一轮问答失败。
      */
     List<MemoryItem> forInjection(Long userId);
+
+    /**
+     * 读工具（{@code list_long_term_memory}）单次最多返回的条数。
+     * <p>
+     * 放在接口上是让「工具层的默认值/上限」与「服务层的硬夹紧」共用同一个数字，
+     * 避免两处各写一个 30、将来改一处漏一处。
+     */
+    int MAX_MODEL_ITEMS = 30;
+
+    /** 给模型看的一条记忆：带更新时间（用于"上次你说"），<b>不带</b>置信度数值与主键。 */
+    record MemoryEntry(String key, String text, LocalDateTime updatedAt) {
+    }
+
+    /**
+     * 读工具的一次性视图。
+     *
+     * <p>为什么把 {@code total} 和 {@code items} 分开：注入侧最大的毛病是模型"看到 15 条就以为总共 15 条"。
+     * 这里显式给出「一共几条、这次给了几条、还有没有更多」，它才能对用户说清"我记着 27 条，最相关的先说"，
+     * 而不是拿 15 条去猜剩下的不存在。
+     *
+     * @param total     当前筛选条件下的有效条数（无筛选时等于五类之和）
+     * @param counts    五类各自的有效条数（不受筛选影响，零值也出现）
+     * @param items     本次返回的条目，已按「置信度降序、最近更新降序」排好
+     * @param truncated 是否还有更多匹配（{@code total > items.size()}）
+     */
+    record MemoryOverview(int total, Map<String, Integer> counts, List<MemoryEntry> items, boolean truncated) {
+    }
+
+    /**
+     * 供读工具使用的总览：可按类与关键词收窄，条数受 {@link #MAX_MODEL_ITEMS} 限制。
+     *
+     * <p>与 {@link #forInjection} 的区别：注入侧要的是"每次都塞进 prompt 的最可信几条"（有预算约束），
+     * 这里要的是"模型主动问了才取"的视图（有筛选、有总量、条数更多）。两者排序口径必须一致，
+     * 否则模型从两条路径看到同一批记忆却得出不同的重要度判断。
+     *
+     * <p>读失败照常抛出：工具会把异常翻译成结构化错误，而不是悄悄返回"你没有任何记忆"。
+     *
+     * @param memoryKey 只看某一类；空白表示不限类，非白名单值抛 400
+     * @param keyword   正文子串（已由调用方 trim 与长度校验）；空白表示不筛
+     * @param limit     本次最多返回几条（调用方负责夹紧，服务端再按 {@link #MAX_MODEL_ITEMS} 兜底）
+     */
+    MemoryOverview overviewForModel(Long userId, String memoryKey, String keyword, int limit);
 
     /**
      * 用户自己看自己的记忆（C 端合规自助）：<b>分页</b>返回有效条目，不按注入上限截断。

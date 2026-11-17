@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.regex.Pattern;
 import com.threadfit.glucopilot.ai.memory.controller.UserChatMemoryController;
 import com.threadfit.glucopilot.ai.memory.dto.MemoryExtractionDtos;
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
@@ -85,6 +86,9 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * 那一页的用途是"看清全貌"，而注入的用途是"别答错"。
      */
     static final int MAX_ITEMS_PER_KEY_INJECTED = 3;
+
+    /** 空白折叠：关键词检索前把连续空白压成一个空格，避免「不吃  香菜」搜不到「不吃 香菜」。 */
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     /**
      * 显式写入（{@code save_long_term_memory} 工具路径）的固定置信度。
@@ -301,6 +305,58 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                     "未知的记忆类型：" + key + "（只能是 " + String.join(" / ", ALLOWED_KEYS) + "）");
         }
         return key;
+    }
+
+    // ------------------------------------------------------------------ 读取（供读工具）
+
+    /**
+     * 读工具的总览视图：可按类与关键词收窄，条数与 {@link #MAX_MODEL_ITEMS} 有关。
+     *
+     * <h2>为什么单独一次 count，而不是用「查回来的行数」</h2>
+     * 读工具的价值一半在「你一共记了多少条」：只给条目，模型会把"我看到 15 条"说成"你一共 15 条"，
+     * 这正是注入侧一直存在的毛病（注入有上限、但模型不知道上限存在）。多一次走索引的 count，
+     * 换来模型能诚实地说"我记着 27 条，先说最相关的几条"，值得。
+     *
+     * <h2>为什么多取一条</h2>
+     * {@code limit + 1} 只用来判断"还有没有更多"，最后一条不返回——比再查一次 count 便宜，
+     * 也比用 {@code total > shown} 判断更稳（筛选条件与分页边界同时变化时不会误判）。
+     *
+     * <h2>读失败为什么照常抛出</h2>
+     * 与 {@link #forInjection} 相反：这里的调用方是"模型主动问了一句"，把异常翻译成结构化错误，
+     * 模型可以据此说"我这边查不到"，而不是拿到一个空列表去回答"你没有任何忌口"。
+     */
+    @Override
+    public MemoryOverview overviewForModel(Long userId, String memoryKey, String keyword, int limit) {
+        String key = normalizeKeyFilter(memoryKey);
+        String kw = normalizeKeyword(keyword);
+        int cap = Math.max(1, Math.min(limit, MAX_MODEL_ITEMS));
+        if (userId == null) {
+            return new MemoryOverview(0, emptyCounts(), List.of(), false);
+        }
+        List<ChatUserMemoryEntity> rows = memoryMapper.selectActiveFiltered(userId, key, kw, cap + 1);
+        boolean truncated = rows.size() > cap;
+        List<ChatUserMemoryEntity> shown = truncated ? rows.subList(0, cap) : rows;
+        List<MemoryEntry> items = new ArrayList<>(shown.size());
+        for (ChatUserMemoryEntity row : shown) {
+            String text = row.getMemoryText() == null ? "" : row.getMemoryText().trim();
+            items.add(new MemoryEntry(row.getMemoryKey(), text, row.getGmtModified()));
+        }
+        int total = memoryMapper.countActiveFiltered(userId, key, kw);
+        return new MemoryOverview(total, countsOf(userId), items, truncated);
+    }
+
+    /**
+     * 规范化读工具的关键词：空白 → {@code null}；内部连续空白折成一个空格。
+     *
+     * <p>长度校验留在工具层（那里才知道"用户输入的问题 vs 模型自己编的参数"该怎么解释），
+     * 这里只做「能不能进 SQL」的清洗。
+     */
+    private static String normalizeKeyword(String keyword) {
+        if (keyword == null) {
+            return null;
+        }
+        String kw = WHITESPACE.matcher(keyword).replaceAll(" ").trim();
+        return kw.isEmpty() ? null : kw;
     }
 
     /**

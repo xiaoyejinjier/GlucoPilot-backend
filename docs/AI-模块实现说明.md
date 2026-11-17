@@ -3,9 +3,9 @@
 > 面向「要读懂/要接手/要改」的人：逐层讲清 `com.threadfit.glucopilot.ai` 下 236 个类的职责、彼此依赖、关键方法，全部对照真实代码。
 > 与 `AI对话-简单接入方案.md`（设计动机与取舍）、`AI-社区内容审核设计.md`（审核专项）互补：那两份讲「为什么这么做」，这份讲「现在到底是怎么写的」。
 
-- 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
+- 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（239 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、12 个工具（其中 1 个写工具）、10 份提示词、60 个 AI 测试类；全量 1024 用例 0 失败；Flyway v62
+- 现状：8 个场景、13 个工具（1 个写工具 + 1 个记忆读工具）、11 份提示词版本行、62 个 AI 测试类；全量 1101 用例 0 失败；Flyway v72
 
 ---
 
@@ -503,18 +503,19 @@ AiPromptTemplateService.validateRenderable(text, config.getVariables(), "classpa
 ```
 而不是 `{"verdict": "REJECT"}`。解析侧 `ContentModerationParser` 因此写成逐行 `key：value`，容忍中英文冒号、`=`、Markdown。
 
-### 7.3 版本演进：CHAT 从 v1 到 v3
+### 7.3 版本演进：CHAT 从 v1 到 v4
 
-对话主提示词已经历三次播种，`ai_prompt_template` 里 v1/v2 都保留着（`is_enabled=0`），随时可在后台切回：
+对话主提示词已经历四次播种，`ai_prompt_template` 里旧版本都保留着（`is_enabled=0`），随时可在后台切回：
 
 | 版本 | 来源 | 变化 |
 | --- | --- | --- |
 | v1 | V18 | 首版：角色、安全规则、工具规范 |
 | v2 | （历史版本，已停用） | 草稿/回滚点 |
 | v3 | V62 | 新增 `save_long_term_memory` 的使用边界：只记长期事实、一次性安排与用药细节不记、同键覆盖不要重复调用 |
-| 兜底 | `resources/prompts/chat/system.md` | 与 v3 逐字一致，DB 不可用时用它 |
+| v4 | V72 | 工具清单加 `list_long_term_memory`，并补两条规则：什么时候该去查记忆、查到几条就以 `total` 为准不要谎称全部 |
+| 兜底 | `resources/prompts/chat/system.md` | 与 v4 逐字一致，DB 不可用时用它 |
 
-**为什么加版本而不是改 v1**：`chat_session.system_prompt_ver` 记的是 `chat@vN`，原地改会让「这条回复用的是哪版提示词」失去意义，也让历史会话无法复现；后台按 `is_enabled` 切换版本，是我们唯一可回滚的手段。
+**为什么加版本而不是改上一版**：`chat_session.system_prompt_ver` 记的是 `chat@vN`，原地改会让「这条回复用的是哪版提示词」失去意义，也让历史会话无法复现；后台按 `is_enabled` 切换版本，是我们唯一可回滚的手段。
 
 ### 7.4 注入点：调用点请求级，而不是 advisor
 
@@ -587,7 +588,7 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 
 `CALL_COUNTER` 放在 `toolContext` 里而不是类字段，是刻意的：并发两轮各数各的，天然隔离。
 
-### 8.3 现有 12 个工具（11 个类）
+### 8.3 现有 13 个工具（12 个类）
 
 第一批（明细类，回答「具体是哪条」）：
 
@@ -610,11 +611,18 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 | `ReminderTools` | `list_reminders` | 今日提醒（服药/测糖等）与待回复的回访 |
 | `ArticleSearchTools` | `search_community_articles` | 检索社区文章（与 feed 同一套可见性过滤，只给摘要与作者） |
 
-第三批（写入类，唯一一个写工具）：
+第三批（记忆读写，唯一一个写工具 + 配对的读工具）：
 
 | 类 | 工具名 | 用途 |
 | --- | --- | --- |
-| `MemoryTools` | `save_long_term_memory` | 把用户当轮陈述的长期事实写进跨会话记忆（键限五类、≤200 字、置信度服务端固定 85） |
+| `MemoryTools` | `save_long_term_memory` | 把用户当轮陈述的长期事实写进跨会话记忆（键限五类、一条只写一件事、≤200 字、置信度服务端固定 85） |
+| `MemoryQueryTools` | `list_long_term_memory` | 查小语记住了什么（可按类/关键词收窄，返回 `total`/`shown`/`truncated`，**没有分页游标**） |
+
+**为什么还需要一个「读记忆」的工具**：每轮自动注入的长期记忆只有最可信的十几条（`inject-max-items` × 每类 3 条合并成一行），而存储不设上限、条目会随会话累积。没有读工具时，第 N 名以后的事实在模型眼里**根本不存在**——用户问「你还记得我有什么忌口吗」，它只能拿看到的那几条笃定回答，表现为"记性差"。读工具按需付费：不查不花 token，查一次几百 token。
+
+**读工具刻意不返回什么**：主键与 `item_hash`（模型拿到 id 只会想删，而删除是用户的权利）、置信度数值（界面已决定不显示百分比）、来源会话、分页游标（给了 `page` 就会翻页找记忆，几轮下来吃光 `max-total-tool-calls`）。要更多应当**收窄条件**而不是往后翻。
+
+**写成功要作废读工具的缓存**：`ToolRepeatGuard` 的前提是「同样入参、底层数据没变」，写记忆恰好打破它——同一轮里"先查、发现没有、写一条、再查确认"很常见，不作废的话第二次读会拿到写之前的空结果，模型就会说"没记住"。只作废 `list_long_term_memory` 这一个工具（血糖/社区检索不受影响）。
 
 **为什么敢开一个写工具**：它写的是「系统对用户的记忆」，可撤销（记忆页可删）、有界（5 键 × 每键 1 条 × 200 字）、不触碰任何业务单据；而"这句话是不是长期事实"本质是语义判断——旧的关键词判定（「记住 / 记一下 / 帮我记」）对「我最近不能吃辣了」「医生让我少油少盐」完全失效。写血糖、写饮食这类动作**不可照抄**，必须走用户显式确认。
 
@@ -965,6 +973,15 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 **为什么删除前先清墓碑**：唯一键含只有 0/1 的 `is_deleted`，每个 `(user, key, item_hash)` 至多留一条已删行；删→重建→再删必然撞唯一键（实测 `ERROR 1062`）。三个删除入口都先按同范围物理清墓碑，但只在**确实有生效行**时清，避免幂等重复删除抹掉审计证据。
 
 `write(...)` 返回 `SaveOutcome(saved, reason)`，四道闸（键 ∈ 五类 / 非空且 ≤200 字 / 置信度 ≥60 / 不含剂量与诊断词）各自给出**可执行**的拒绝原因——工具回执会进上下文，模型据此换键或放弃，重试同样内容没有意义。
+
+**读取有两个出口，读的是同一张表**：
+
+| 出口 | 入口方法 | 条数上限 | 失败策略 | 谁在用 |
+| --- | --- | --- | --- | --- |
+| 每轮注入 | `forInjection(userId)` | `inject-max-items`（8）× 每类 3 条合并一行 → ≤15 条 | 读失败返回空（不打断对话） | `ChatHistoryAssembler` |
+| 读工具 | `overviewForModel(userId, key, keyword, limit)` | `limit` 1~30（默认 15），可按类/关键词收窄 | 抛给工具层转成 `{"error":…}` | 模型调 `list_long_term_memory` |
+
+两者排序口径必须一致（置信度降序 → 最近更新降序 → id 降序），否则模型先读工具、再看到注入内容，会对「哪条更重要」得出矛盾结论。`overviewForModel` 多查一次 `countActiveFiltered`：读工具的价值一半在「一共记了多少条」，只给条目会让模型把「我看到 15 条」说成「你一共 15 条」。
 
 **归档补齐（V61 `memory_extracted_upto_msg_id`）**：会话闲置归档时，`ChatSessionServiceImpl.archiveIdleSessions` 先挑出「即将归档、且长期记忆还没覆盖到最后一条消息」的 **1 个**会话（`selectIdleSessionNeedingMemory`），归档后再为它提交一次 `extractAsync(..., "session-archived")`。
 

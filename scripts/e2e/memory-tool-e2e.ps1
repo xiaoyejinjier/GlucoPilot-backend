@@ -7,10 +7,11 @@
   用的是后端 yaml/DB 里已配置的凭据，不需要 E2E_DEEPSEEK_KEY。
 
   断言的都是能被外部观测到的硬事实：
-    1. 用户说「我不吃辣」→ chat_tool_call 里出现一次 save_long_term_memory，且 ok=1；
+    1. 用户说「我不吃辣」→ chat_tool_call 里出现 save_long_term_memory，且每次调用都 ok=1；
     2. 工具回执是短确认（不含记忆正文，正文在 chat_user_memory 里）；
-    3. chat_user_memory 落了一条 diet_taboo，置信度=85（服务端固定，不是模型自评）；
-    4. 追问同一件事时该键仍然只有一条（同键覆盖，不会堆积）；
+    3. chat_user_memory 落进 diet_taboo，置信度全是 85（服务端固定，不是模型自评）；
+       V71 起一类可以有多条（「不吃辣」「不吃香菜」各算一条），所以不再要求恰好一条；
+    4. 追问同一件事时同键不会出现同文重复（去重生效，不会堆垃圾）；
     5. 「今晚想吃火锅」这类一次性安排不落库（键数不增加）；
     6. 记忆会进下一轮 prompt（日志「会话记忆装配 … 记忆=N」N≥1）；
     7. 用户自助清空接口把这批记忆删干净（为下次重跑留干净现场）。
@@ -136,13 +137,19 @@ Check '第一轮补全成功（未报错）' ($null -ne $round1.Done -and $null 
     "done=$($round1.Done -ne $null) error=$($round1.Error.message)"
 
 $toolRows = Get-SqlScalar "SELECT CONCAT(COUNT(*), '/', COALESCE(SUM(ok), 0)) FROM sugar_health.chat_tool_call WHERE session_id = $sessionId AND tool_name = 'save_long_term_memory';"
-Check '发生了一次 save_long_term_memory 调用且成功' ($toolRows -like '1/1') "count/okSum=$toolRows"
+$toolParts = $toolRows -split '/'
+$toolCalls = [int]$toolParts[0]
+$toolOkSum = [int]$toolParts[1]
+# V71 起一条消息里可以出现多个"事"，模型可能并行发两次调用（"不吃辣"与"不吃香菜"各一次）；
+# 这里只要求「至少调过一次、且每次都成功」，不把并行调用判成失败。
+Check '调用了 save_long_term_memory 且每次调用都成功' ($toolCalls -ge 1 -and $toolCalls -le 3 -and $toolOkSum -eq $toolCalls) "count/okSum=$toolRows"
 
 $digest = Get-SqlScalar "SELECT COALESCE(result_digest, '') FROM sugar_health.chat_tool_call WHERE session_id = $sessionId AND tool_name = 'save_long_term_memory' ORDER BY id DESC LIMIT 1;"
 Check '工具回执是短确认（不重复记忆正文）' ($digest -match '已记录' -and $digest -notmatch '香菜') "digest=$digest"
 
-$memories = Get-SqlScalar "SELECT CONCAT(COUNT(*), '/', COALESCE(MAX(confidence), 0)) FROM sugar_health.chat_user_memory WHERE user_id = $userId AND memory_key = 'diet_taboo' AND is_deleted = 0;"
-Check '落了一条 diet_taboo 且置信度=85（服务端固定）' ($memories -like '1/85') "count/confidence=$memories"
+# V71 起一类可以有多条（一条只记一件事），所以断言从「正好一条」改成「至少一条，且置信度全是 85」。
+$memories = Get-SqlScalar "SELECT CONCAT(COUNT(*), '/', COALESCE(MIN(confidence), 0), '/', COALESCE(MAX(confidence), 0)) FROM sugar_health.chat_user_memory WHERE user_id = $userId AND memory_key = 'diet_taboo' AND is_deleted = 0;"
+Check '至少落了一条 diet_taboo，置信度全是 85（服务端固定）' ($memories -match '^[1-9]\d*/85/85$') "count/min/max=$memories"
 
 $memText = Get-SqlScalar "SELECT COALESCE(memory_text, '') FROM sugar_health.chat_user_memory WHERE user_id = $userId AND memory_key = 'diet_taboo' AND is_deleted = 0 LIMIT 1;"
 Check '记忆正文是第三人称陈述且含忌口信息' ($memText.Length -gt 0 -and $memText.Length -le 200) "text=$memText"
@@ -158,13 +165,16 @@ foreach ($line in $assembleLines) { if ($line -match '记忆=(\d+)') { $n = [int
 Check '日志显示长期记忆确实被注入（记忆=N，N≥1）' (@($assembleLines).Count -ge 1 -and $injected -ge 1) `
     "lines=$(@($assembleLines).Count) 记忆=$injected（检查日志级别）"
 
-# ---------------------------------------------------------------- 3. 同键覆盖、不堆积
-Write-Host "3) 追问同一件事：同键覆盖，不应堆出第二条" -ForegroundColor Gray
+# ---------------------------------------------------------------- 3. 同一件事重复说，不堆重复条目
+Write-Host "3) 追问同一件事：允许一条更完整的说法，但不许出现同文重复" -ForegroundColor Gray
 $round3 = Invoke-Round -sessionId $sessionId -headers $headers -text '再说一遍，我最近不能吃辣了，香菜也不行' -tag 'round3'
 Check '第三轮补全成功（未报错）' ($null -ne $round3.Done -and $null -eq $round3.Error) `
     "done=$($round3.Done -ne $null) error=$($round3.Error.message)"
-$dietCount = Get-SqlScalar "SELECT COUNT(*) FROM sugar_health.chat_user_memory WHERE user_id = $userId AND memory_key = 'diet_taboo' AND is_deleted = 0;"
-Check '该键仍然只有一条（同键覆盖）' ($dietCount -eq '1') "count=$dietCount"
+# V71 之后「同键覆盖」变成「同文视为同一条、异文新增一条」，所以这里断言的是去重而不是条数：
+# 同样的正文（含空白差异）不该出现第二行，否则用户每次追问都会多一条垃圾。
+$dietRows = Get-SqlScalar "SELECT CONCAT(COUNT(*), '/', COUNT(DISTINCT memory_text)) FROM sugar_health.chat_user_memory WHERE user_id = $userId AND memory_key = 'diet_taboo' AND is_deleted = 0;"
+$dietParts = $dietRows -split '/'
+Check '同键条目没有同文重复（去重生效）' ($dietParts[0] -eq $dietParts[1]) "count/distinct=$dietRows"
 
 # ---------------------------------------------------------------- 4. 一次性安排不落库
 Write-Host "4) 一次性安排（今晚想吃火锅）不应进长期记忆" -ForegroundColor Gray

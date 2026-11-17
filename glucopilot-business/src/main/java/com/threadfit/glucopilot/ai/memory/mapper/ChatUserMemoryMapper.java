@@ -145,6 +145,39 @@ public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
     List<ChatUserMemoryKeyCount> countActiveGroupByKey(@Param("userId") Long userId);
 
     /**
+     * 读工具用的候选集：可按类与关键词收窄，排序与注入口径一致（置信度降序、最近更新降序）。
+     *
+     * <p>为什么排序必须与 {@code forInjection} 一致：模型从两条路径看到同一批记忆，
+     * 若一边"最可信的在前"、另一边"最新的在前"，它会对"哪条更重要"得出互相矛盾的判断。
+     *
+     * <p>为什么筛选条件用两段 {@code <if>} 而不是在 Java 里过滤：条目数不设上限，
+     * 先全量拉回来再筛会把"记忆多的用户"变成慢查询；收窄条件放在 SQL 里才能只取需要的行。
+     * 关键词用 {@code LOCATE} 而非 {@code LIKE}：不需要转义 {@code %} 与 {@code _}，
+     * 用户的忌口词里出现这些字符时不会变成通配符。
+     */
+    @Select("<script>SELECT * FROM chat_user_memory WHERE user_id = #{userId} AND is_deleted = 0"
+            + "<if test='memoryKey != null'> AND memory_key = #{memoryKey}</if>"
+            + "<if test='keyword != null'> AND LOCATE(#{keyword}, memory_text) &gt; 0</if>"
+            + " ORDER BY confidence DESC, gmt_modified DESC, id DESC LIMIT #{limit}</script>")
+    List<ChatUserMemoryEntity> selectActiveFiltered(@Param("userId") Long userId,
+                                                    @Param("memoryKey") String memoryKey,
+                                                    @Param("keyword") String keyword,
+                                                    @Param("limit") int limit);
+
+    /**
+     * 与 {@link #selectActiveFiltered} 同条件的计数。
+     *
+     * <p>为什么单独查一次而不是用「查回来的行数」：读工具要把「一共有几条、你看到几条」同时告诉模型，
+     * 否则它会把"我看到了 15 条"当成"总共 15 条"——这正是注入侧一直存在的毛病。
+     */
+    @Select("<script>SELECT COUNT(*) FROM chat_user_memory WHERE user_id = #{userId} AND is_deleted = 0"
+            + "<if test='memoryKey != null'> AND memory_key = #{memoryKey}</if>"
+            + "<if test='keyword != null'> AND LOCATE(#{keyword}, memory_text) &gt; 0</if></script>")
+    int countActiveFiltered(@Param("userId") Long userId,
+                            @Param("memoryKey") String memoryKey,
+                            @Param("keyword") String keyword);
+
+    /**
      * 账号注销：物理删除该用户的全部长期记忆（含墓碑）。
      * <p>
      * 与逻辑删除刻意不同——注销后"系统记过什么"不能以任何形式留存。

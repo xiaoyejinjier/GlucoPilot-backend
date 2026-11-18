@@ -8,6 +8,7 @@ import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.support.AiCallContext;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import lombok.extern.slf4j.Slf4j;
@@ -140,7 +141,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
             if (!StringUtils.hasText(input)) {
                 return false;
             }
-            String summary = callModel(input);
+            String summary = callModel(input, userId, sessionId);
             if (!StringUtils.hasText(summary)) {
                 log.warn("摘要模型返回空内容，本次不写库 sessionId={}", sessionId);
                 return false;
@@ -258,15 +259,17 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      * CHAT 提示词，用它做摘要会把整段历史再塞一遍、还会把"控糖助手"人设注入摘要里。
      * 系统提示词按请求取（与视觉链路同一套做法，后台改完立即生效）。
      */
-    private String callModel(String input) {
+    private String callModel(String input, Long userId, Long sessionId) {
         String system = promptTemplateService.systemPrompt(SceneCode.SUMMARY);
-        String content = clients.utilityClient().prompt()
+        // 账单归属：摘要是一轮对话之外的第二笔账，报表要能单独看到它的成本
+        AiCallContext.Call callContext = new AiCallContext.Call(SceneCode.SUMMARY, userId, sessionId);
+        String content = AiCallContext.run(callContext, () -> clients.utilityClient().prompt()
                 .system(system)
                 // 关思维链 + 输出封顶：摘要要"快"而不是"想得多"，详见 SceneModelResolver.summaryOptionsBuilder
                 .options(sceneModelResolver.summaryOptionsBuilder())
                 .user(input)
                 .call()
-                .content();
+                .content());
         if (!StringUtils.hasText(content)) {
             return null;
         }

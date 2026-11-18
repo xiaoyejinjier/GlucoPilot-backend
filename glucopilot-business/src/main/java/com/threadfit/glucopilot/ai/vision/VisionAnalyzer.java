@@ -4,6 +4,7 @@ import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.support.AiCallContext;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
 import com.threadfit.glucopilot.common.exception.BizException;
@@ -103,12 +104,12 @@ public class VisionAnalyzer {
         if (sceneOptions != null) {
             prompt.options(sceneOptions);
         }
-        return prompt
+        return AiCallContext.run(new AiCallContext.Call(scene, null, null), () -> prompt
                 .user(user -> user
                         .text(instruction)
                         .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes)))
                 .call()
-                .content();
+                .content());
     }
 
     /**

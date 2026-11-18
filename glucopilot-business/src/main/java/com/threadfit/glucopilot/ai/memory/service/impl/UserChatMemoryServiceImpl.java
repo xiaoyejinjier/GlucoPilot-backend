@@ -8,6 +8,7 @@ import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.support.AiCallContext;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.api.ErrorCode;
@@ -728,7 +729,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             // 老窗先、新窗后：两个窗口提到同一个键时，后写的新说法才留得下来
             for (List<ChatMessage> window : splitOldestFirst(recent, windowSize)) {
                 windows++;
-                List<MemoryCandidate> candidates = extractCandidates(buildInput(userId, window));
+                List<MemoryCandidate> candidates = extractCandidates(buildInput(userId, window), userId, sessionId);
                 for (MemoryCandidate candidate : candidates) {
                     if (upsert(userId, candidate.key(), candidate.text(), candidate.confidence(), sessionId)) {
                         written++;
@@ -851,18 +852,20 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
      * <p>两条路径的失败语义一致：抛 {@link RuntimeException} 由 {@code runExtract} 的 catch 兜住，
      * 本轮一条都不写（记忆是增强项，写半截比不写更糟）。
      */
-    private List<MemoryCandidate> extractCandidates(String input) {
+    private List<MemoryCandidate> extractCandidates(String input, Long userId, Long sessionId) {
+        // 账单归属：抽取是每条会话终局/显式触发的一次额外调用，成本要能单独归集
+        AiCallContext.Call callContext = new AiCallContext.Call(SceneCode.MEMORY, userId, sessionId);
         var prompt = clients.utilityClient().prompt()
                 .system(promptTemplateService.systemPrompt(SceneCode.MEMORY))
                 .options(sceneModelResolver.memoryOptionsBuilder())
                 .user(input);
         if (!aiProperties.getMemory().isStructuredOutput()) {
-            return parse(prompt.call().content());
+            return parse(AiCallContext.run(callContext, () -> prompt.call().content()));
         }
-        MemoryExtractionDtos.MemoryPayload payload = prompt
+        MemoryExtractionDtos.MemoryPayload payload = AiCallContext.run(callContext, () -> prompt
                 .advisors(a -> a.advisors(STRUCTURED_OUTPUT_ADVISOR))
                 .call()
-                .entity(MemoryExtractionDtos.MemoryPayload.class);
+                .entity(MemoryExtractionDtos.MemoryPayload.class));
         return toCandidates(payload);
     }
 

@@ -48,6 +48,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import com.threadfit.glucopilot.ai.support.AiCallContext;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatCompletionService;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatContextRecorder;
 import com.threadfit.glucopilot.ai.business.chat.service.ChatMessageService;
@@ -277,8 +278,15 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
             promptSpec = promptSpec.options(chatClientRegistry.optionsFor(SceneCode.CHAT));
         }
 
-        Flux<ServerSentEvent<byte[]>> deltas = promptSpec.stream()
-                .chatResponse()
+        // 账单归属：这张表要回答"哪个场景、哪个用户、哪个会话花了多少"。
+        // 走 Reactor Context 而不是 ThreadLocal：ChatClient 的流式是**惰性**的（订阅时才进
+        // DynamicChatModel.stream），订阅与发射都可能换线程；ThreadLocal 既跟不过去，也会在线程池里
+        // 残留上一个请求的归属（实测：用 run 包住"构建 Flux"那一步，CHAT 行 scene_code 是空的；
+        // 用 Flux.using 绑订阅又会在终止线程与订阅线程不一致时把上下文漏在订阅线程上）。
+        AiCallContext.Call callContext = new AiCallContext.Call(SceneCode.CHAT, userId, sessionId);
+        ChatClient.ChatClientRequestSpec streamSpec = promptSpec;
+        Flux<ServerSentEvent<byte[]>> deltas = streamSpec.stream().chatResponse()
+                .contextWrite(context -> context.put(AiCallContext.CONTEXT_KEY, callContext))
                 // 先聚合再过滤：最后一个 chunk 可能只带 usage / 结束原因而正文为空，
                 // 若因为「正文为空」提前返回，token 计量就会丢
                 .doOnNext(chunk -> aggregate(state, chunk))

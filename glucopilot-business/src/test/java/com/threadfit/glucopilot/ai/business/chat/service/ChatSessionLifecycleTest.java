@@ -86,7 +86,9 @@ class ChatSessionLifecycleTest {
     void setUp() {
         properties = new AIProperties();
         service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, chatContextMapper,
-                chatToolCallMapper, properties, chatClientRegistry, promptTemplateService,
+                chatToolCallMapper,
+                org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.model.mapper.AiCallLogMapper.class),
+                properties, chatClientRegistry, promptTemplateService,
                 userChatMemoryService);
     }
 

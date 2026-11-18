@@ -11,7 +11,7 @@
 
 ## 0. 总览
 
-### 0.1 `ai` 包实体直接对应的 9 张表
+### 0.1 `ai` 包实体直接对应的 10 张表
 
 | # | 表 | 中文说明 | 首次创建 | 后续改动 | 开发库行数 |
 | --- | --- | --- | --- | --- | --- |
@@ -24,6 +24,7 @@
 | 7 | `chat_tool_call` | 会话内工具调用元数据 | V21 | V22（`short` 化 + `result_digest`） | 26 |
 | 8 | `chat_user_memory` | 跨会话长期记忆 | V1 | — | 2 |
 | 9 | `ocr_task` | OCR 识别任务 | V1 | — | 0 |
+| 10 | `ai_call_log` | 模型调用账本（每次 `DynamicChatModel.call/stream` 一行） | V75 | — | 0 |
 
 ### 0.2 AI 相关但不在 `ai` 包的表
 
@@ -366,6 +367,35 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 ---
 
+## 8.1 `ai_call_log` — 模型调用账本（V75）
+
+**用途**：每次模型调用一行，写在 `DynamicChatModel.call/stream`（全仓唯一的模型调用漏斗），供用量报表、缓存命中率、失败率与「哪个场景在烧钱」使用。异步写入（`AsyncAiCallRecorder`，单线程 + 有界队列，满了丢弃并计数），**宁可少一条账单也不让用户的回复路径做同步 DB 写**。
+
+**索引**：`PRIMARY(id)`、`idx_acl_time(gmt_create)`、`idx_acl_scene_time(scene_code,gmt_create)`、`idx_acl_user(user_id)`、`idx_acl_session(session_id)`、`idx_acl_model(model_code,gmt_create)`、`idx_acl_ok_time(ok,gmt_create)`
+
+| # | 列 | 类型 | 空 | 默认 | 含义 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `id` | bigint unsigned | NO | 自增 | 主键 |
+| 2 | `scene_code` | varchar(32) | NO | '' | 场景编码（`SceneCode.name()`）；空串＝未归属（框架内部调用、启动探活） |
+| 3 | `user_id` | bigint unsigned | YES | — | 归属用户；系统调用（审核节拍器、翻译预生成）为空 |
+| 4 | `session_id` | bigint unsigned | YES | — | 归属会话；对话以外的场景为空 |
+| 5 | `channel` | varchar(16) | YES | — | 通道（`text` / `vision`） |
+| 6 | `provider_code` | int | YES | — | 协议/厂商编码 |
+| 7 | `model_code` | varchar(64) | YES | — | 模型**身份**编码（`ai_model_config.model_code`） |
+| 8 | `model_endpoint` | varchar(128) | YES | — | 实际发给厂商的模型名 |
+| 9 | `prompt_tokens` | int unsigned | YES | — | 输入 token（上游没上报则 NULL） |
+| 10 | `completion_tokens` | int unsigned | YES | — | 输出 token |
+| 11 | `cache_hit_tokens` | int unsigned | YES | — | 缓存命中 token |
+| 12 | `cache_miss_tokens` | int unsigned | YES | — | 缓存未命中 token |
+| 13 | `latency_ms` | int unsigned | YES | — | 本次调用耗时（夹到 int 上限） |
+| 14 | `stream` | tinyint(1) | YES | 0 | 是否流式 |
+| 15 | `ok` | tinyint(1) | YES | 1 | 0 失败、1 成功 |
+| 16 | `error_code` | varchar(64) | YES | — | 失败时的**异常类名**（只记类名不记消息正文） |
+| 17 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 调用完成时间 |
+
+> 三条口径约定：①**只追加**，只有「注销清理」（`purgeByUserId`）与「过期删除」（`AiCallLogCleanupJob`，默认保留 90 天、每批 5000 行）会删它；②**不存正文**（prompt/回答都不落，要复现用 `session_id + gmt_create` 回查 `chat_message`）；③**与 `chat_message.prompt_tokens` 不可相加**——那是「按轮」（一次回答最终落库的用量，工具回环里只保留最后一次），这里是「按调用」（每个模型请求一行）。命中率的分母是 `cache_hit_tokens + cache_miss_tokens`，两者都为 0 表示「上游没上报」，报表里显示为 null 而不是 0%。
+
+---
 ## 9. `chat_user_memory` — 跨会话长期记忆表
 
 **用途**：`UserChatMemoryServiceImpl` 抽取/更新，`forInjection` 读出来注入系统提示词。

@@ -4,6 +4,7 @@ import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
+import com.threadfit.glucopilot.ai.support.AiCallContext;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -127,7 +128,9 @@ public class ModelEnglishTranslator implements EnglishTranslator {
                               new UserMessage(data));
             if(options!=null)requestSpec=requestSpec.options(options);
             var spec=requestSpec;
-            var response=Mono.fromCallable(()->spec.call().chatResponse())
+            // 账单归属要压在调用发生的那个线程上：这里是 boundedElastic，而不是调用方的线程
+            var callContext=new AiCallContext.Call(SceneCode.TRANSLATION, null, null);
+            var response=Mono.fromCallable(()->AiCallContext.run(callContext, ()->spec.call().chatResponse()))
                     .subscribeOn(Schedulers.boundedElastic()).timeout(Duration.ofSeconds(60)).block();
             String text=response==null||response.getResult()==null?"":response.getResult().getOutput().getText();
             try{return parse(text,source,json);}catch(RuntimeException ex){if(attempt==1||Thread.currentThread().isInterrupted())throw ex;}

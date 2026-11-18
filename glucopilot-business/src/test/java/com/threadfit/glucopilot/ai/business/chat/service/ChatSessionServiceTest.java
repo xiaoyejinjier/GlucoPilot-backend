@@ -58,7 +58,9 @@ class ChatSessionServiceTest {
     @BeforeEach
     void setUp() {
         service = new ChatSessionServiceImpl(chatSessionMapper, chatMessageMapper, chatContextMapper,
-                chatToolCallMapper, new AIProperties(), chatClientRegistry, promptTemplateService,
+                chatToolCallMapper,
+                org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.model.mapper.AiCallLogMapper.class),
+                new AIProperties(), chatClientRegistry, promptTemplateService,
                 org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService.class));
     }
 

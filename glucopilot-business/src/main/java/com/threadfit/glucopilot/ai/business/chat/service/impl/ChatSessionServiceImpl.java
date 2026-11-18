@@ -60,6 +60,13 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     private final ChatMessageMapper chatMessageMapper;
     private final com.threadfit.glucopilot.ai.business.chat.mapper.ChatContextMapper chatContextMapper;
     private final com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper chatToolCallMapper;
+    /**
+     * 账单表（V75）：注销时必须一起清。
+     * <p>
+     * 它是第五张含 {@code user_id} 的会话相关表。漏掉它不会报错，只会让"注销后仍能查到
+     * 这个人何时用过哪个场景"变成一次事后才发现的合规问题——所以放在这里、紧挨其他四张。
+     */
+    private final com.threadfit.glucopilot.ai.model.mapper.AiCallLogMapper aiCallLogMapper;
     private final AIProperties aiProperties;
     private final AiChatClientRegistry chatClientRegistry;
     private final AiPromptTemplateService promptTemplateService;
@@ -136,6 +143,9 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         chatMessageMapper.purgeByUserId(userId);
         chatContextMapper.purgeByUserId(userId);
         chatToolCallMapper.purgeByUserId(userId);
+        // 账单只存场景/用量/耗时，没有任何正文——但 user_id + 时间戳本身就足以还原"某人何时用过什么"，
+        // 所以它同样属于注销范围（保留期是给系统做统计的，不是给"已注销用户"留档的）
+        aiCallLogMapper.purgeByUserId(userId);
         chatSessionMapper.purgeByUserId(userId);
     }
 

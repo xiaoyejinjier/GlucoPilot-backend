@@ -1,10 +1,12 @@
 package com.threadfit.glucopilot.ai.model.runtime;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 
@@ -12,10 +14,14 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
+
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
+import com.threadfit.glucopilot.ai.support.AiCallContext;
 
 /**
  * <b>可热替换的 ChatModel 委托</b>——后台改配置能"下一条消息就生效"的关键部件。
@@ -61,28 +67,90 @@ public class DynamicChatModel implements ChatModel {
 
     private final AtomicLong prunedVersion = new AtomicLong(Long.MIN_VALUE);
 
+    /** 账单出口；懒取，没有实现（单测/无 Key 部署）时静默不记。 */
+    private final ObjectProvider<AiCallRecorder> recorder;
+
     public DynamicChatModel(String channel,
                             AiRuntimeConfigService runtime,
                             ChatModelFactory factory,
                             Function<AiRuntimeConfigService.Snapshot, AiModelSpec> channelDefault,
                             Function<AiRuntimeConfigService.Snapshot, AiModelSpec> yamlChannelSpec,
                             Supplier<ChatModel> yamlFallback) {
+        this(channel, runtime, factory, channelDefault, yamlChannelSpec, yamlFallback, null);
+    }
+
+    public DynamicChatModel(String channel,
+                            AiRuntimeConfigService runtime,
+                            ChatModelFactory factory,
+                            Function<AiRuntimeConfigService.Snapshot, AiModelSpec> channelDefault,
+                            Function<AiRuntimeConfigService.Snapshot, AiModelSpec> yamlChannelSpec,
+                            Supplier<ChatModel> yamlFallback,
+                            ObjectProvider<AiCallRecorder> recorder) {
         this.channel = channel;
         this.runtime = runtime;
         this.factory = factory;
         this.channelDefault = channelDefault;
         this.yamlChannelSpec = yamlChannelSpec;
         this.yamlFallback = yamlFallback;
+        this.recorder = recorder;
     }
 
+    /**
+     * 同步调用：成功与失败都记一行账单。
+     * <p>
+     * 记账放在 try/catch 两头而不是 finally，是因为两者要写的东西不同（成功带用量、
+     * 失败带异常类名）——finally 里判定不如直写清楚。
+     */
     @Override
     public ChatResponse call(Prompt prompt) {
-        return resolve(prompt).call(prompt);
+        AiCallContext.Call context = AiCallContext.current();
+        AiModelSpec spec = resolveSpec(prompt);
+        long startNanos = System.nanoTime();
+        try {
+            ChatResponse response = modelFor(spec).call(prompt);
+            record(context, spec, usageOf(response), startNanos, false, null);
+            return response;
+        } catch (RuntimeException e) {
+            record(context, spec, null, startNanos, false, e);
+            throw e;
+        }
     }
 
+    /**
+     * 流式调用：只在流结束时记一行（成功、失败各一次，绝不重复）。
+     * <p>
+     * <b>上下文从 Reactor Context 读，不读 ThreadLocal</b>：{@code stream()} 是在<b>订阅</b>时执行的，
+     * 而订阅可能发生在别的线程上；ThreadLocal 既跟不过去，也无法在发射/终止跨线程时可靠清理
+     * （实测会在线程池里留下上一个请求的场景与用户，下一次调用就被记到别人头上）。
+     * 调用方用 {@code .contextWrite(ctx -> ctx.put(AiCallContext.CONTEXT_KEY, call))} 挂上来。
+     * <p>
+     * <b>为什么用 {@code AtomicBoolean} 去重</b>：部分失败时 {@code doOnError} 与 {@code doFinally}
+     * 会各触发一次，两个都写就变成"一次调用两行账单"，报表里的调用数会平白翻倍。
+     */
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
-        return resolve(prompt).stream(prompt);
+        // deferContextual：把"读上下文 + 解析模型 + 计时"全部推到订阅时执行
+        return Flux.deferContextual(contextView -> streamIn(AiCallContext.fromContext(contextView), prompt));
+    }
+
+    private Flux<ChatResponse> streamIn(AiCallContext.Call context, Prompt prompt) {
+        AiModelSpec spec = resolveSpec(prompt);
+        long startNanos = System.nanoTime();
+        AtomicReference<ModelCallUsage> usage = new AtomicReference<>(ModelCallUsage.empty());
+        AtomicBoolean written = new AtomicBoolean(false);
+        return modelFor(spec).stream(prompt)
+                // 先聚合再判定：最后一个 chunk 常常只带 usage、正文为空，跳过它会丢掉用量
+                .doOnNext(chunk -> usage.set(usage.get().merge(usageOf(chunk))))
+                .doOnError(error -> {
+                    if (written.compareAndSet(false, true)) {
+                        record(context, spec, usage.get(), startNanos, true, error);
+                    }
+                })
+                .doFinally(signal -> {
+                    if (written.compareAndSet(false, true)) {
+                        record(context, spec, usage.get(), startNanos, true, null);
+                    }
+                });
     }
 
     /**
@@ -111,7 +179,15 @@ public class DynamicChatModel implements ChatModel {
         return modelFor(channelDefault.apply(runtime.snapshot()));
     }
 
-    private ChatModel resolve(Prompt prompt) {
+    /**
+     * 解析本次要用的模型规格。
+     * <p>
+     * 注意它返回的是 {@link AiModelSpec}（身份 + 端点 + 参数）而不是 {@link ChatModel}：
+     * 账单要记「model_code（不可改的身份）」与「model_endpoint（发给厂商的名字）」两个不同的东西，
+     * 而从 {@code ChatResponse.getMetadata().getModel()} 只能反推后者——那正是
+     * {@code chat_message.model_code} 语义混淆的来历（它其实存的是 endpoint）。
+     */
+    private AiModelSpec resolveSpec(Prompt prompt) {
         AiRuntimeConfigService.Snapshot snapshot = runtime.snapshot();
         pruneIfConfigChanged(snapshot);
 
@@ -119,10 +195,10 @@ public class DynamicChatModel implements ChatModel {
         if (StringUtils.hasText(requested)) {
             AiModelSpec byName = snapshot.resolveByName(requested);
             if (byName != null) {
-                return modelFor(byName);
+                return byName;
             }
         }
-        return modelFor(channelDefault.apply(snapshot));
+        return channelDefault.apply(snapshot);
     }
 
     private static String requestedModel(Prompt prompt) {
@@ -192,5 +268,45 @@ public class DynamicChatModel implements ChatModel {
 
     private static String cacheKey(AiModelSpec spec) {
         return spec.modelCode() + "|" + spec.buildFingerprint();
+    }
+
+    /** 从响应元数据取用量；任何一层缺失都按「没有用量」处理，绝不让记账影响主链路。 */
+    private static ModelCallUsage usageOf(ChatResponse response) {
+        if (response == null || response.getMetadata() == null) {
+            return ModelCallUsage.empty();
+        }
+        try {
+            Usage usage = response.getMetadata().getUsage();
+            return ModelCallUsage.from(usage);
+        } catch (RuntimeException e) {
+            return ModelCallUsage.empty();
+        }
+    }
+
+    /**
+     * 写一行账单。这是全仓唯一的模型调用漏斗，所以也是唯一能保证"漏不掉"的位置。
+     *
+     * <p>记账本身失败只 WARN：账单是观测设施，不能把一次成功的模型调用变成用户的 500。
+     */
+    private void record(AiCallContext.Call context,
+                        AiModelSpec spec,
+                        ModelCallUsage usage,
+                        long startNanos,
+                        boolean stream,
+                        Throwable error) {
+        AiCallRecorder sink = recorder == null ? null : recorder.getIfAvailable();
+        if (sink == null) {
+            return;
+        }
+        try {
+            long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
+            sink.record(AiCallRecord.of(context, channel, spec.modelCode(), spec.modelEndpoint(),
+                    usage == null || usage.isEmpty() ? null : usage,
+                    latencyMs, stream, error == null,
+                    error == null ? null : error.getClass().getSimpleName()));
+        } catch (RuntimeException e) {
+            log.warn("账单记录失败（忽略）scene={} model={}", context == null ? null : context.scene(),
+                    spec.modelCode(), e);
+        }
     }
 }

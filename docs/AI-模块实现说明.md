@@ -886,6 +886,8 @@ P1 之前，后台保存模型配置只做**格式**校验：编码非空、能�
 
 维度只能是「天 × 模型」：摘要、记忆抽取、内容审核、饮食识别、OCR 这些内部调用都只取 `.content()`，没有用量记录。所以接口返回一个固定 `note`，前端原样展示——让所有人看到同一句口径说明，而不是各自写一句不同的解释。
 
+> 这段是 V73 之前的形态，**已被 9.8.2 取代**：V75 之后报表读 `ai_call_log`，维度是「天 × 场景 × 模型」且覆盖全部调用。保留这段是为了记住"为什么当初只能看对话链路"——不是没想到，而是没有账本。
+
 ### 9.8.1 缓存命中：`ModelCallUsage` + `V73` 两列（观测，不改行为）
 
 `prompt_tokens` 回答不了"这一轮到底花了多少钱"：DeepSeek/OpenAI 的上下文缓存把**命中部分**按约 1/10 计价，而原来的用量只记总数，等于把省下来的钱又按全价算了一遍。V73 给 `chat_message` 加 `cache_hit_tokens` / `cache_miss_tokens`，取数收口到 `ModelCallUsage` 这一个值对象：
@@ -897,6 +899,20 @@ P1 之前，后台保存模型配置只做**格式**校验：编码非空、能�
 `UsageProbe.logOnce(usage)` 在首次拿到 usage 时打一条 INFO（`AtomicBoolean` 保证进程内只一条），把 `prompt/completion/cacheRead/cacheWrite/nativeUsage` 原样印出来。存在的意义只有一个：**用一条真实日志回答"这个通道到底给不给缓存字段"**，而不是靠读源码猜。它是一次性探针，不是长期日志——每请求打会把日志淹掉，DEBUG 级线上又看不到。
 
 工具顺序也在这条线上（`AiToolRegistry.callbacks()`）：工具定义是 prompt 静态前缀里最大的一段，顺序一变整段缓存作废。现在按 `allow-list` 的下标排序、同名再按名字兜底，**不再跟 Spring 的 Bean 注入顺序**——那个顺序会随扫描与框架升级悄悄改变，症状只会是"成本涨了"，几乎无法归因。
+
+### 9.8.2 账单：`ai_call_log`（V75）——一次模型调用一行
+
+9.8 那个出口只能统计对话链路（数据来自 `chat_message`），而摘要、记忆抽取、内容审核、翻译、图片识别全都只取 `.content()` 就丢掉用量。V75 新建 `ai_call_log`，把**每次模型调用**记成一行：
+
+- **写在唯一漏斗上**：`DynamicChatModel.call()` / `stream()`。全仓所有模型请求都要经过这两个方法（`textChatClient`、`utilityChatClient`、`visionChatClient` 底层都是同一个 `DynamicChatModel`），在这里记账，新加场景不需要再改一处。**不写在 ChatClient 层**：那层有 advisor/工具回环，一次请求会过多次，记出来的是"请求"不是"模型调用"。
+- **场景靠 `AiCallContext`（ThreadLocal）带下来**：`DynamicChatModel` 不该知道业务，所以调用方用 `AiCallContext.run(new Call(SceneCode.CHAT, userId, sessionId), () -> ...)` 把归属压在**发起调用的那个线程**上。两个必须记住的坑：①流式必须在 `Flux.defer(() -> AiCallContext.run(...))` 里压（ChatClient 惰性，订阅时线程已经换了）；②`Mono.fromCallable(...).subscribeOn(boundedElastic)` 要把 `run` 放在 `fromCallable` **内部**，放在外面等于在请求线程上压、在别的线程上读。
+- **流式只记一行**：`stream()` 在方法入口取一次上下文（Reactor 链上 `ThreadLocal` 早已不可靠），用 `AtomicReference<ModelCallUsage>` 合并 chunk、`AtomicBoolean` 守住 `doOnError`/`doFinally`/`doOnComplete` 三个出口只落一次账。
+- **失败也入账**（`ok=0` + `error_code` = 异常类名，不存消息正文）：超时与 4xx 同样消耗配额，剔掉会让账单偏低，而"账单偏低"是最难发现的错。
+- **异步、有界、丢得掉**：`AsyncAiCallRecorder` 单线程 + `ArrayBlockingQueue(2000)` + `AbortPolicy`（**故意不用 CallerRunsPolicy**：那样队列满时会把 DB 写搬回用户请求线程，一次 DB 抖动就变成响应变慢）。丢弃只计数 + 60 秒节流 WARN——账单是观测数据，不值得为它影响回复。
+- **注销必须清**：`ai_call_log` 带 `user_id`，是第五张含用户标识的表。`ChatSessionServiceImpl.purgeAccountData` 已补 `purgeByUserId`，漏掉就是"注销后仍可查某人何时用了什么场景"。
+- **保留期 90 天**：`AiCallLogCleanupJob`（`@Scheduled` 3:30）按 `ai.call-log.retention-days` 分批删（每批 `cleanup-batch-size` = 5000 行），`retention-days <= 0` 视为关闭。
+
+口径上它与 `chat_message.prompt_tokens` **不可相加**：后者"按轮"（一次回答最终落库的用量，工具回环里只剩最后一次），前者"按调用"（每个模型请求一行）。报表（接口文档 4.28）已切到账本口径，并在 `note` 里明写这句。
 
 ### 9.9 记忆抽取的结构化输出试点
 

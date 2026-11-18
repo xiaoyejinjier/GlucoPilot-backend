@@ -4,6 +4,7 @@ import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
+import com.threadfit.glucopilot.ai.support.AiCallContext;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -124,7 +125,11 @@ public class ModelContentModerationService implements ContentModerationService {
         if (options != null) {
             requestSpec = requestSpec.options(options);
         }
-        var response = requestSpec.call().chatResponse();
+        // 账单归属：审核由节拍器驱动、没有登录用户，所以 user/session 为空——
+        // 但场景必须记，否则"审核花了多少"又回到不可观测
+        var spec = requestSpec;
+        var response = AiCallContext.run(new AiCallContext.Call(SceneCode.MODERATION, null, null),
+                () -> spec.call().chatResponse());
         if (response == null
                 || response.getResult() == null
                 || response.getResult().getOutput() == null) {

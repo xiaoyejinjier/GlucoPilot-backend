@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.business.chat.service;
 
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatDtos;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
+import com.threadfit.glucopilot.ai.model.runtime.ModelCallUsage;
 
 /**
  * 会话消息写入与历史读取契约（接口 2.24 + 契约外补充的"会话内历史"）。
@@ -27,8 +28,12 @@ public interface ChatMessageService {
      * 写入助手回复（流结束后调用）。
      * <p>
      * 在响应式回调线程上执行，取不到 RequestContext（ThreadLocal），因此审计字段显式写 userId。
+     * <p>
+     * 用量整体传一个 {@link ModelCallUsage}（而不是两个 {@code Integer}）：现在要落的不只是
+     * prompt/completion，还有缓存命中的两部分，参数继续平铺会到 11 个——那种签名调用点一多，
+     * 位置错一位就是"命中数写进了完成数"这种静默错账。
      */
     ChatMessage appendAssistantMessage(Long userId, Long sessionId, Long replyToMsgId, String contentText,
-                                       String modelCode, Integer promptTokens, Integer completionTokens,
+                                       String modelCode, ModelCallUsage usage,
                                        Integer finishReason, Integer latencyMs);
 }

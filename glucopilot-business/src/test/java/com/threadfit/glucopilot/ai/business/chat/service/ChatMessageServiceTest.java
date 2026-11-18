@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.business.chat.support.OwnedMediaResolver;
+import com.threadfit.glucopilot.ai.model.runtime.ModelCallUsage;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.ChatMsgType;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
@@ -19,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -131,12 +133,36 @@ class ChatMessageServiceTest {
         when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(2);
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
 
-        service.appendAssistantMessage(USER_ID, SESSION_ID, 42L, "答案", "test-model", 1, 2, 1, 10);
+        service.appendAssistantMessage(USER_ID, SESSION_ID, 42L, "答案", "test-model", usage(1, 2), 1, 10);
 
         verify(chatMessageMapper).insert(captor.capture());
         // 唯一键 uk_session_client_active 对 NULL 不生效（唯一索引允许多个 NULL），
         // 所以助手消息必须有一个确定性的值，"同一轮至多一条回复"才是数据库保证的
         assertEquals("assistant:42", captor.getValue().getClientMsgId());
+    }
+
+    @Test
+    void 用量里的缓存命中应一并落库() {
+        when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(2);
+
+        ChatMessage saved = service.appendAssistantMessage(USER_ID, SESSION_ID, 42L, "答案", "test-model",
+                new ModelCallUsage(1000, 100, 800L, 200L), 1, 10);
+
+        // 命中/未命中分两列存：只存总数就无法区分「这一轮省了钱」和「这一轮全靠全价」
+        assertEquals(1000, saved.getPromptTokens());
+        assertEquals(800L, saved.getCacheHitTokens());
+        assertEquals(200L, saved.getCacheMissTokens());
+    }
+
+    @Test
+    void 用量缺失时缓存两列应为null而不是0() {
+        when(chatMessageMapper.selectNextSeqNo(SESSION_ID)).thenReturn(2);
+
+        ChatMessage saved = service.appendAssistantMessage(USER_ID, SESSION_ID, 42L, "答案", "test-model",
+                ModelCallUsage.empty(), 1, 10);
+
+        assertNull(saved.getCacheHitTokens());
+        assertNull(saved.getCacheMissTokens());
     }
 
     @Test
@@ -152,7 +178,7 @@ class ChatMessageServiceTest {
         when(chatMessageMapper.selectAssistantReply(SESSION_ID, 42L)).thenReturn(winner);
 
         ChatMessage result = service.appendAssistantMessage(
-                USER_ID, SESSION_ID, 42L, "本请求的回答", "test-model", 1, 2, 1, 10);
+                USER_ID, SESSION_ID, 42L, "本请求的回答", "test-model", usage(1, 2), 1, 10);
 
         // 两个客户端最终收敛到同一条回答（幂等语义与用户消息路径一致）
         assertEquals(88L, result.getId());
@@ -169,7 +195,7 @@ class ChatMessageServiceTest {
         when(chatMessageMapper.selectAssistantReply(SESSION_ID, 42L)).thenReturn(null);
 
         assertThrows(DuplicateKeyException.class, () -> service.appendAssistantMessage(
-                USER_ID, SESSION_ID, 42L, "答案", "test-model", 1, 2, 1, 10));
+                USER_ID, SESSION_ID, 42L, "答案", "test-model", usage(1, 2), 1, 10));
     }
 
     @Test
@@ -180,7 +206,7 @@ class ChatMessageServiceTest {
                 .thenReturn(1);
 
         ChatMessage saved = service.appendAssistantMessage(
-                USER_ID, SESSION_ID, 42L, "答案", "test-model", 1, 2, 1, 10);
+                USER_ID, SESSION_ID, 42L, "答案", "test-model", usage(1, 2), 1, 10);
 
         assertEquals(8, saved.getSeqNo(), "重试时必须重新取号");
         verify(chatMessageMapper, times(2)).insert(any(ChatMessage.class));
@@ -193,7 +219,7 @@ class ChatMessageServiceTest {
                 .thenThrow(duplicateKey("chat_message.uk_session_seq"));
 
         assertThrows(DuplicateKeyException.class, () -> service.appendAssistantMessage(
-                USER_ID, SESSION_ID, 42L, "答案", "test-model", 1, 2, 1, 10));
+                USER_ID, SESSION_ID, 42L, "答案", "test-model", usage(1, 2), 1, 10));
 
         // 重试是有上限的：无限重试会把请求挂死，也会掩盖真正的问题
         verify(chatMessageMapper, times(3)).insert(any(ChatMessage.class));
@@ -249,5 +275,9 @@ class ChatMessageServiceTest {
         MediaFile media = new MediaFile();
         media.setId(id);
         return media;
+    }
+    /** 用量快照：只有 prompt/completion 两项的快捷构造（缓存命中默认「不知道」）。 */
+    private static ModelCallUsage usage(int promptTokens, int completionTokens) {
+        return new ModelCallUsage(promptTokens, completionTokens, null, null);
     }
 }

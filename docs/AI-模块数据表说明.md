@@ -267,7 +267,9 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 **用途**：对话正文 + 多模态引用 + token 计量。`ChatMessageServiceImpl` 写，`ChatCompletionServiceImpl` 读/写。
 
-**这里也是全库唯一有真实用量数据的地方**：`prompt_tokens` / `completion_tokens` / `model_code` / `latency_ms` 只在助手消息上落库，`GET /admin/v1/ai/usage`（接口文档 4.28）就是按 `CAST(gmt_create AS DATE) × model_code` 聚合这几列。摘要、记忆抽取、内容审核、饮食识别、OCR 都只取 `.content()`，没有用量记录——所以「哪个场景花了多少」目前答不出来，这是数据缺口而不是接口缺失。
+**这里也是全库唯一有真实用量数据的地方**：`prompt_tokens` / `completion_tokens` / `cache_hit_tokens` / `cache_miss_tokens` / `model_code` / `latency_ms` 只在助手消息上落库，`GET /admin/v1/ai/usage`（接口文档 4.28）就是按 `CAST(gmt_create AS DATE) × model_code` 聚合这几列。摘要、记忆抽取、内容审核、饮食识别、OCR 都只取 `.content()`，没有用量记录——所以「哪个场景花了多少」目前答不出来，这是数据缺口而不是接口缺失。
+
+两列缓存字段的读法（V73）：`cache_hit_tokens` 是 `prompt_tokens` 里被上下文缓存命中的那部分，`cache_miss_tokens` 是剩下的部分，**两者之和等于 `prompt_tokens`**；命中部分的单价约为未命中的 1/10（DeepSeek 官方口径），所以「真实成本」不能用 `prompt_tokens × 单价` 直接算。取不到时两列都是 NULL（例如本轮模型没返回 usage、或厂商不带缓存字段），报表要把 NULL 当「未知」而不是「0 命中」。
 
 **索引**：`PRIMARY(id)`、`uk_session_seq(session_id,seq_no)`、`uk_session_client_active(session_id,client_msg_id,is_deleted)`、`idx_session_seq`、`idx_session_time(session_id,gmt_create)`、`idx_reply_to(reply_to_msg_id)`
 
@@ -289,16 +291,18 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 14 | `model_code` | varchar(64) | YES | — | 本条助手回复**实际**用的模型（取响应元数据，不是配置值） |
 | 15 | `prompt_tokens` | int unsigned | YES | — | 提示 token 数（助手消息） |
 | 16 | `completion_tokens` | int unsigned | YES | — | 生成 token 数（助手消息） |
-| 17 | `finish_reason` | tinyint unsigned | YES | — | 1 正常、2 长度截断、3 内容过滤、4 错误 |
-| 18 | `latency_ms` | int unsigned | YES | — | 模型耗时毫秒（首字节到末帧） |
-| 19 | `client_msg_id` | varchar(64) | YES | — | 客户端幂等 ID；重发时应用层捕获 MySQL 1062 当成功返回既有消息 |
-| 20 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
-| 21 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
-| 22 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
-| 23 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
-| 24 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
-| 25 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 26 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 17 | `cache_hit_tokens` | int unsigned | YES | — | 上下文缓存**命中**的 token 数（V73）。取不到就存 NULL，不存 0——0 会被读成「确实一次没命中」，把「没解析出来」伪装成「缓存没用上」 |
+| 18 | `cache_miss_tokens` | int unsigned | YES | — | 未命中的 token 数（= `prompt_tokens` − 命中，V73）。它是 `prompt_tokens` 的**一部分**，两者不可相加 |
+| 19 | `finish_reason` | tinyint unsigned | YES | — | 1 正常、2 长度截断、3 内容过滤、4 错误 |
+| 20 | `latency_ms` | int unsigned | YES | — | 模型耗时毫秒（首字节到末帧） |
+| 21 | `client_msg_id` | varchar(64) | YES | — | 客户端幂等 ID；重发时应用层捕获 MySQL 1062 当成功返回既有消息 |
+| 22 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
+| 23 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
+| 24 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
+| 25 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
+| 26 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
+| 27 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
+| 28 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
 
 > 两个唯一键各管一件事：`uk_session_seq` 保证顺序号不撞（`insertWithSeqNo` 重试的依据）；`uk_session_client_active` 保证前端重试不会插两条。
 

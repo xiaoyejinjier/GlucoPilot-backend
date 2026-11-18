@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.model.runtime.ModelCallUsage;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
@@ -133,16 +134,22 @@ class ChatCompletionServiceTest {
         when(chatMessageMapper.selectAssistantReply(SESSION_ID, TARGET_MSG_ID)).thenReturn(null);
 
         when(chatMessageService.appendAssistantMessage(anyLong(), anyLong(), anyLong(), anyString(), anyString(),
-                any(), any(), any(), anyInt())).thenAnswer(invocation -> {
+                any(), any(), anyInt())).thenAnswer(invocation -> {
             ChatMessage saved = new ChatMessage();
             saved.setId(99L);
             saved.setReplyToMsgId(invocation.getArgument(2));
             saved.setContentText(invocation.getArgument(3));
             saved.setModelCode(invocation.getArgument(4));
-            saved.setPromptTokens(invocation.getArgument(5));
-            saved.setCompletionTokens(invocation.getArgument(6));
-            saved.setFinishReason(invocation.getArgument(7));
-            saved.setLatencyMs(invocation.getArgument(8));
+            // 有些用例故意传 null（模拟"这一轮拿不到用量"），落库侧必须容忍
+            ModelCallUsage usage = invocation.getArgument(5);
+            if (usage != null) {
+                saved.setPromptTokens(usage.promptTokens());
+                saved.setCompletionTokens(usage.completionTokens());
+                saved.setCacheHitTokens(usage.cacheHitTokens());
+                saved.setCacheMissTokens(usage.cacheMissTokens());
+            }
+            saved.setFinishReason(invocation.getArgument(6));
+            saved.setLatencyMs(invocation.getArgument(7));
             return saved;
         });
     }
@@ -163,7 +170,7 @@ class ChatCompletionServiceTest {
         assertTrue(payload(done).contains("\"finishReason\":1"), payload(done));
 
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
-                eq("你好，今天"), eq("test-model"), eq(0), eq(0),
+                eq("你好，今天"), eq("test-model"), eq(new ModelCallUsage(0, 0, null, null)),
                 eq(CodeEnum.ChatFinishReason.NORMAL.getCode()), anyInt());
     }
 
@@ -198,7 +205,7 @@ class ChatCompletionServiceTest {
         assertEquals(0, roundGuard.inFlightCount(), "error 事件发出时执行权必须已经释放");
 
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
-                eq("部分内容"), anyString(), any(), any(),
+                eq("部分内容"), anyString(), any(),
                 eq(CodeEnum.ChatFinishReason.ERROR.getCode()), anyInt());
     }
 
@@ -216,7 +223,7 @@ class ChatCompletionServiceTest {
         assertEquals(1, taken.size());
         assertEquals("delta", taken.get(0).event());
         verify(chatMessageService, never()).appendAssistantMessage(anyLong(), anyLong(), anyLong(), anyString(),
-                anyString(), any(), any(), any(), anyInt());
+                anyString(), any(), any(), anyInt());
     }
 
     @Test
@@ -229,7 +236,7 @@ class ChatCompletionServiceTest {
         // 空正文不产生 delta 事件，但计量要落库
         assertEquals(2, events.size());
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
-                eq("答"), eq("test-model"), eq(11), eq(7),
+                eq("答"), eq("test-model"), eq(new ModelCallUsage(11, 7, null, null)),
                 eq(CodeEnum.ChatFinishReason.NORMAL.getCode()), anyInt());
     }
 
@@ -254,7 +261,7 @@ class ChatCompletionServiceTest {
     void 落库失败时error分支不应重复落库() {
         useModel(Flux.just(textChunk("内容")));
         when(chatMessageService.appendAssistantMessage(anyLong(), anyLong(), anyLong(), anyString(), anyString(),
-                any(), any(), any(), anyInt())).thenThrow(new IllegalStateException("DB 不可用"));
+                any(), any(), anyInt())).thenThrow(new IllegalStateException("DB 不可用"));
 
         List<ServerSentEvent<byte[]>> events = collect();
 
@@ -264,7 +271,7 @@ class ChatCompletionServiceTest {
         assertEquals("error", events.get(1).event());
         // 只尝试过一次落库：既没有因失败重试，也没有重复插入
         verify(chatMessageService).appendAssistantMessage(anyLong(), anyLong(), anyLong(), anyString(), anyString(),
-                any(), any(), any(), anyInt());
+                any(), any(), anyInt());
     }
 
     // ---------- 回答开头的英文铺垫 ----------
@@ -295,7 +302,7 @@ class ChatCompletionServiceTest {
         assertTrue(!payload(done).contains("I'll check"), "done 正文里不应有英文铺垫：" + payload(done));
 
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
-                eq("本月（10 月）血糖情况分析如下：平均 8.0 mmol/L。"), anyString(), any(), any(),
+                eq("本月（10 月）血糖情况分析如下：平均 8.0 mmol/L。"), anyString(), any(),
                 eq(CodeEnum.ChatFinishReason.NORMAL.getCode()), anyInt());
     }
 
@@ -307,7 +314,7 @@ class ChatCompletionServiceTest {
         collect();
 
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
-                eq("HbA1c 是糖化血红蛋白，反映近 3 个月的平均血糖。"), anyString(), any(), any(),
+                eq("HbA1c 是糖化血红蛋白，反映近 3 个月的平均血糖。"), anyString(), any(),
                 eq(CodeEnum.ChatFinishReason.NORMAL.getCode()), anyInt());
     }
 
@@ -321,7 +328,7 @@ class ChatCompletionServiceTest {
         collect();
 
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
-                eq("你的记录如下"), anyString(), any(), any(),
+                eq("你的记录如下"), anyString(), any(),
                 eq(CodeEnum.ChatFinishReason.ERROR.getCode()), anyInt());
     }
 
@@ -407,7 +414,7 @@ class ChatCompletionServiceTest {
         // 模型会连着看到两遍、白花 token——这条断言就是防这个。
         InOrder inOrder = inOrder(chatMessageService, chatMessageMapper);
         inOrder.verify(chatMessageService).appendAssistantMessage(anyLong(), anyLong(), anyLong(),
-                anyString(), anyString(), any(), any(), any(), anyInt());
+                anyString(), anyString(), any(), any(), anyInt());
         inOrder.verify(chatMessageMapper).updateMediaCaption(eq(TARGET_MSG_ID), anyString());
     }
 

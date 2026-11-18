@@ -5,7 +5,7 @@
 
 - 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（239 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、13 个工具（1 个写工具 + 1 个记忆读工具）、11 份提示词版本行、62 个 AI 测试类；全量 1101 用例 0 失败；Flyway v72
+- 现状：8 个场景、13 个工具（1 个写工具 + 1 个记忆读工具）、11 份提示词版本行、63 个 AI 测试类；全量 1126 用例 0 失败；Flyway v73
 
 ---
 
@@ -885,6 +885,18 @@ P1 之前，后台保存模型配置只做**格式**校验：编码非空、能�
 3. **半开区间 `[start 00:00, end+1d 00:00)`**：避免 MySQL `DATE_ADD` 与 H2 `DATEADD` 的方言差异，也不会漏掉结束日带毫秒的行。
 
 维度只能是「天 × 模型」：摘要、记忆抽取、内容审核、饮食识别、OCR 这些内部调用都只取 `.content()`，没有用量记录。所以接口返回一个固定 `note`，前端原样展示——让所有人看到同一句口径说明，而不是各自写一句不同的解释。
+
+### 9.8.1 缓存命中：`ModelCallUsage` + `V73` 两列（观测，不改行为）
+
+`prompt_tokens` 回答不了"这一轮到底花了多少钱"：DeepSeek/OpenAI 的上下文缓存把**命中部分**按约 1/10 计价，而原来的用量只记总数，等于把省下来的钱又按全价算了一遍。V73 给 `chat_message` 加 `cache_hit_tokens` / `cache_miss_tokens`，取数收口到 `ModelCallUsage` 这一个值对象：
+
+- `from(Usage)` 先问框架（Spring AI 2.0 的 `Usage.getCacheReadInputTokens()`），拿不到再从 `getNativeUsage()` 里捞厂商字段（DeepSeek 的 `prompt_cache_hit_tokens`、OpenAI 的嵌套 `prompt_tokens_details.cached_tokens`、`cached_tokens`）。两套命名必须都认：我们走 OpenAI 兼容通道、底座却是 DeepSeek，谁都不保证另一个的名字。
+- `cache_miss_tokens = prompt − hit`，且只在 `hit <= prompt` 时推算；**取不到就是 NULL，绝不写 0**——0 在报表里等于"确实一次没命中"，会把"没解析出来"伪装成"缓存没用上"。
+- `StreamState.usage` 用 `merge()` 逐字段非空覆盖，**不是累加**：同一轮多个 chunk 带的是同一份累计值，累加会翻倍。原来的 `aggregate()` 是赋值，工具回环里会只剩最后一次 usage，这里顺带修掉。
+
+`UsageProbe.logOnce(usage)` 在首次拿到 usage 时打一条 INFO（`AtomicBoolean` 保证进程内只一条），把 `prompt/completion/cacheRead/cacheWrite/nativeUsage` 原样印出来。存在的意义只有一个：**用一条真实日志回答"这个通道到底给不给缓存字段"**，而不是靠读源码猜。它是一次性探针，不是长期日志——每请求打会把日志淹掉，DEBUG 级线上又看不到。
+
+工具顺序也在这条线上（`AiToolRegistry.callbacks()`）：工具定义是 prompt 静态前缀里最大的一段，顺序一变整段缓存作废。现在按 `allow-list` 的下标排序、同名再按名字兜底，**不再跟 Spring 的 Bean 注入顺序**——那个顺序会随扫描与框架升级悄悄改变，症状只会是"成本涨了"，几乎无法归因。
 
 ### 9.9 记忆抽取的结构化输出试点
 

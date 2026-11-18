@@ -5,6 +5,8 @@ import com.threadfit.glucopilot.ai.business.chat.entity.ChatMessage;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
+import com.threadfit.glucopilot.ai.model.runtime.ModelCallUsage;
+import com.threadfit.glucopilot.ai.model.runtime.UsageProbe;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.ai.business.chat.support.EnglishPreambleGuard;
@@ -293,9 +295,10 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
                     state.estimatedPromptTokens = promptEstimate.get();
                     ChatMessage saved = persist(userId, sessionId, target, input, state, finishReason, latencyMs);
                     calibrateEstimate(state);
-                    log.info("流式补全完成 userId={} sessionId={} assistantMsgId={} latencyMs={} tokens={}/{} finish={}",
+                    log.info("流式补全完成 userId={} sessionId={} assistantMsgId={} latencyMs={} tokens={}/{} 缓存命中={} finish={}",
                             userId, sessionId, saved.getId(), latencyMs,
-                            state.promptTokens, state.completionTokens, finishReason);
+                            state.usage.promptTokens(), state.usage.completionTokens(),
+                            state.usage.cacheHitTokens(), finishReason);
                     // ② 期：本轮已落库 → 若已有消息落在窗口之外，异步把它们压缩进滚动摘要
                     // （不阻塞、失败只记日志，绝不影响这一轮已经成功的回复）
                     chatSummaryService.maybeSummarizeAsync(userId, sessionId);
@@ -381,12 +384,10 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
             }
             Usage usage = metadata.getUsage();
             if (usage != null) {
-                if (usage.getPromptTokens() != null) {
-                    state.promptTokens = usage.getPromptTokens();
-                }
-                if (usage.getCompletionTokens() != null) {
-                    state.completionTokens = usage.getCompletionTokens();
-                }
+                // 一次性探针：确认框架的 getCacheReadInputTokens() 到底有没有值
+                // （OpenAI 兼容 + DeepSeek 底座这两套字段名谁都不一定认领，见 UsageProbe 注释）
+                UsageProbe.logOnce(usage);
+                state.usage = state.usage.merge(ModelCallUsage.from(usage));
             }
         }
         Generation generation = chunk.getResult();
@@ -440,8 +441,7 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
                 target.getId(),
                 truncate(englishPreambleGuard.apply(state.text.toString())),
                 StringUtils.hasText(state.modelCode) ? state.modelCode : chatClientRegistry.modelCode(SceneCode.CHAT),
-                state.promptTokens,
-                state.completionTokens,
+                state.usage,
                 finishReason,
                 (int) Math.min(latencyMs, Integer.MAX_VALUE));
         writeBackCaption(target, input);
@@ -514,13 +514,14 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
      * （{@code chat_message.prompt_tokens}），把两者的比例反馈回去，几轮之后估算就贴近实际。
      */
     private void calibrateEstimate(StreamState state) {
-        if (state.promptTokens == null || state.promptTokens <= 0 || state.estimatedPromptTokens <= 0) {
+        Integer promptTokens = state.usage.promptTokens();
+        if (promptTokens == null || promptTokens <= 0 || state.estimatedPromptTokens <= 0) {
             return;
         }
-        tokenEstimator.calibrate(state.promptTokens, state.estimatedPromptTokens);
+        tokenEstimator.calibrate(promptTokens, state.estimatedPromptTokens);
         // 用 INFO 打：估算器是否在收敛，是"预算有没有真正起作用"的唯一可观测证据（DEBUG 线上看不到）
         log.info("记忆估算校准：真实prompt_tokens={} 估算={} 当前系数={}",
-                state.promptTokens, state.estimatedPromptTokens, String.format("%.2f", tokenEstimator.factor()));
+                promptTokens, state.estimatedPromptTokens, String.format("%.2f", tokenEstimator.factor()));
     }
 
     /**
@@ -673,8 +674,15 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
     private static final class StreamState {
         private final StringBuilder text = new StringBuilder();
         private String modelCode;
-        private Integer promptTokens;
-        private Integer completionTokens;
+        /**
+         * 本轮用量（prompt / completion / 缓存命中）。
+         * <p>
+         * 每来一个带 usage 的 chunk 就整体覆盖：DeepSeek 只在最后一块给用量，
+         * 覆盖即是最终值；<b>不能累加</b>——同一轮的多个 chunk 带的是同一份累计值，
+         * 累加会把 prompt_tokens 算成数倍（老代码里 {@code aggregate} 用的就是覆盖语义，
+         * 这里是把它落成显式的值对象，避免"两个 Integer 各自赋值"再被误改为累加）。
+         */
+        private ModelCallUsage usage = ModelCallUsage.empty();
         private String providerFinishReason;
         /** 本轮是否已落库：防止「落库失败 → 错误分支再落一次」造成重复行。 */
         private boolean persisted;

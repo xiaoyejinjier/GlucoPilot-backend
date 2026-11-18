@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.advisor;
 
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.mapper.SummaryState;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
 import com.threadfit.glucopilot.ai.memory.reader.ChatContextReader;
@@ -61,7 +62,10 @@ class AdvisorChainOrderTest {
                 List.of(new UserMessage("我早餐吃了两个包子"), new AssistantMessage("记下了，碳水和油脂都偏高")));
 
         ChatContextReader contextReader = mock(ChatContextReader.class);
-        when(contextReader.summary(SESSION_ID)).thenReturn("用户早餐常吃包子，目标餐后 8 以内");
+        SummaryState summaryState = new SummaryState();
+        summaryState.setText("用户早餐常吃包子，目标餐后 8 以内");
+        summaryState.setUptoMsgId(2L);
+        when(contextReader.summaryState(SESSION_ID)).thenReturn(summaryState);
         when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
         when(contextReader.longTermMemory(any())).thenReturn(List.of());
 

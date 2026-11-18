@@ -3,6 +3,8 @@ package com.threadfit.glucopilot.ai.memory.reader;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatToolCall;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper;
+import com.threadfit.glucopilot.ai.business.chat.mapper.MessageGap;
+import com.threadfit.glucopilot.ai.business.chat.mapper.SummaryState;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,14 +41,49 @@ public class ChatContextReader {
 
     /** 滚动摘要；没有或读失败返回 null。 */
     public String summary(Long sessionId) {
+        SummaryState state = summaryState(sessionId);
+        return state == null ? null : state.getText();
+    }
+
+    /**
+     * 滚动摘要 + 它覆盖到哪一条消息（③ 期）。
+     * <p>
+     * 装配日志要同时打「摘要多少字」和「覆盖到 #几」：只看"有没有摘要"无法判断摘要够不够用——
+     * 覆盖位置与窗口起点之间的缝隙（空洞）才是"模型记不记得住前面聊了什么"的真正指标。
+     * <p>
+     * 读失败返回 null（记忆是增强项，不能让它把这一轮问答带崩）。
+     */
+    public SummaryState summaryState(Long sessionId) {
         if (sessionId == null) {
             return null;
         }
         try {
-            String summary = chatSessionMapper.selectContextSummary(sessionId);
-            return StringUtils.hasText(summary) ? summary.trim() : null;
+            SummaryState state = chatSessionMapper.selectSummaryState(sessionId);
+            if (state == null || !StringUtils.hasText(state.getText())) {
+                return null;
+            }
+            state.setText(state.getText().trim());
+            return state;
         } catch (RuntimeException e) {
             log.warn("读取会话摘要失败（本轮不使用摘要）sessionId={}", sessionId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 摘要与窗口之间的空洞（③ 期）：既没进摘要、也没进本轮窗口的消息条数与起点。
+     * <p>
+     * 只在装配时确实裁掉了历史（{@code dropped > 0}）才调用：没有裁剪说明窗口从会话开头就装下了，
+     * 不可能有空洞，那一次查询就白花。读失败返回 null（日志里少两个字段，不影响回答）。
+     */
+    public MessageGap messageGap(Long sessionId, Long uptoMsgId, int dropped) {
+        if (sessionId == null || uptoMsgId == null || dropped <= 0) {
+            return null;
+        }
+        try {
+            return chatSessionMapper.selectMessageGap(sessionId, uptoMsgId, dropped);
+        } catch (RuntimeException e) {
+            log.warn("统计摘要与窗口之间的空洞失败 sessionId={} upto={} dropped={}", sessionId, uptoMsgId, dropped, e);
             return null;
         }
     }

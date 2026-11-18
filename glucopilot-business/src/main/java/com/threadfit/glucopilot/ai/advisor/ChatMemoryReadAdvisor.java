@@ -16,6 +16,8 @@ import reactor.core.publisher.Flux;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
+import com.threadfit.glucopilot.ai.business.chat.mapper.MessageGap;
+import com.threadfit.glucopilot.ai.business.chat.mapper.SummaryState;
 import com.threadfit.glucopilot.ai.memory.reader.ChatContextReader;
 import com.threadfit.glucopilot.ai.memory.assembly.ChatHistoryAssembler;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
@@ -92,7 +94,9 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
             return request;
         }
         List<Message> history = chatMemory.get(sessionId.toString());
-        String summary = contextReader.summary(sessionId);
+        // 摘要正文与「覆盖到哪一条」一次取回：装配日志需要两者才能判断摘要够不够用（③ 期）
+        SummaryState summaryState = contextReader.summaryState(sessionId);
+        String summary = summaryState == null ? null : summaryState.getText();
         List<String> toolDigests = contextReader.recentToolDigests(sessionId);
         // ③ 期：长期记忆是用户维度（与 sessionId 无关），userId 由调用方放进 advisor 参数
         Long userId = userId(request);
@@ -101,13 +105,16 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
 
         ChatHistoryAssembler.Assembled assembled = assembler.assemble(history, current, summary, toolDigests, memories, fixedOverhead);
         ChatHistoryAssembler.Stats stats = assembled.stats();
+        String summaryLog = summaryLog(sessionId, summaryState, stats.droppedHistory());
         if (stats.droppedHistory() > 0 || stats.summaryUsed() || stats.toolDigestUsed() || stats.memoryItems() > 0) {
             // 「记忆=N」是排查"用户说它记不住"的第一现场：N=0 说明一条长期记忆都没进 prompt
             // （没查到 / 被过滤 / userId 没传到 advisor 参数），N>0 才说明注入到位。
-            log.info("会话记忆装配 sessionId={} 记忆={} 保留历史={} 裁剪={} 估算token={} 预算={} 摘要={} 工具摘要={}"
+            // 「空洞」是排查"模型忘了刚才聊过什么"的现场：摘要覆盖到 #a、窗口从 #b 开始，
+            // a 与 b 之间那几条既不在摘要也不在窗口里，模型看不到（见 ai.memory.window-messages）。
+            log.info("会话记忆装配 sessionId={} 记忆={} 保留历史={} 裁剪={} 估算token={} 预算={} {} 工具摘要={}"
                             + (stats.budgetExceeded() ? "（超预算：保底条数优先）" : ""),
                     sessionId, stats.memoryItems(), stats.keptHistory(), stats.droppedHistory(),
-                    stats.estimatedTokens(), stats.budgetTokens(), stats.summaryUsed(), stats.toolDigestUsed());
+                    stats.estimatedTokens(), stats.budgetTokens(), summaryLog, stats.toolDigestUsed());
         } else {
             log.debug("会话记忆装配 sessionId={} 保留历史={} 估算token={}", sessionId,
                     stats.keptHistory(), stats.estimatedTokens());
@@ -120,6 +127,39 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
                 .prompt(new Prompt(assembled.messages(), request.prompt().getOptions()))
                 .context(request.context())
                 .build();
+    }
+
+    /**
+     * 组装日志里的「摘要」片段（③ 期）：字数、覆盖到哪一条、以及摘要与窗口之间的空洞。
+     *
+     * <p>三种情形刻意分开写：没有摘要（还没攒够）、有摘要但没裁剪（窗口从会话开头装下了，不可能有空洞，
+     * 也就不查库）、有摘要且裁剪过（此时才查一次空洞）。这样平时每轮只多出一次主键点查，
+     * 只有真的发生裁剪时才多一条聚合查询。
+     */
+    private String summaryLog(Long sessionId, SummaryState state, int dropped) {
+        if (state == null) {
+            return "摘要=无";
+        }
+        StringBuilder text = new StringBuilder();
+        text.append("摘要=").append(state.getText() == null ? 0 : state.getText().length()).append("字");
+        text.append(" 覆盖到#").append(state.getUptoMsgId() == null ? "无" : state.getUptoMsgId());
+        if (dropped <= 0) {
+            text.append(" 空洞=0（未裁剪）");
+            return text.toString();
+        }
+        MessageGap gap = contextReader.messageGap(sessionId, state.getUptoMsgId(), dropped);
+        if (gap == null || gap.getMissing() == null) {
+            text.append(" 空洞=未知");
+            return text.toString();
+        }
+        text.append(" 空洞=").append(gap.getMissing());
+        if (gap.getMissing() > 0) {
+            text.append(" 起于#").append(gap.getFirstMissingId());
+            log.warn("摘要与窗口之间有 {} 条消息既未进摘要也未进窗口 sessionId={} 起于#{}；"
+                            + "可调大 ai.memory.window-messages 或 keep-recent-messages，或让摘要更勤",
+                    gap.getMissing(), sessionId, gap.getFirstMissingId());
+        }
+        return text.toString();
     }
 
     /** 会话 ID：框架的 advisor 参数里带（{@code ChatCompletionService} 注入）。 */

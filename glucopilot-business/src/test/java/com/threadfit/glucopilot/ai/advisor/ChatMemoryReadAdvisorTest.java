@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import com.threadfit.glucopilot.ai.business.chat.mapper.SummaryState;
 import com.threadfit.glucopilot.ai.memory.reader.ChatContextReader;
 import com.threadfit.glucopilot.ai.advisor.ChatMemoryAdvisorParams;
 import com.threadfit.glucopilot.ai.advisor.ChatMemoryReadAdvisor;
@@ -71,7 +72,7 @@ class ChatMemoryReadAdvisorTest {
     void 顾问注入的历史条数不应超过窗口配置() {
         ChatMemory chatMemory = mock(ChatMemory.class);
         when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 80));
-        when(contextReader.summary(SESSION_ID)).thenReturn(null);
+        when(contextReader.summaryState(SESSION_ID)).thenReturn(null);
         when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of());
 
         List<Message> injected = injectedMessages(advisor(chatMemory), new UserMessage("那我晚饭呢"));
@@ -127,7 +128,7 @@ class ChatMemoryReadAdvisorTest {
     void 摘要与工具摘要作为附加上下文注入且标注不是原话() {
         ChatMemory chatMemory = mock(ChatMemory.class);
         when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 3));
-        when(contextReader.summary(SESSION_ID)).thenReturn("用户早餐前血糖 6.8，希望餐后控制到 8 以内");
+        when(contextReader.summaryState(SESSION_ID)).thenReturn(summary("用户早餐前血糖 6.8，希望餐后控制到 8 以内", 6L));
         when(contextReader.recentToolDigests(SESSION_ID))
                 .thenReturn(List.of("query_glucose_range → {avg:6.8,count:5}"));
 
@@ -201,7 +202,7 @@ class ChatMemoryReadAdvisorTest {
     void 分片元数据写回调用方持有的槽位() {
         ChatMemory chatMemory = mock(ChatMemory.class);
         when(chatMemory.get(String.valueOf(SESSION_ID))).thenReturn(messages(1, 3));
-        when(contextReader.summary(SESSION_ID)).thenReturn("用户早餐前血糖 6.8");
+        when(contextReader.summaryState(SESSION_ID)).thenReturn(summary("用户早餐前血糖 6.8", 6L));
         when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of("query_glucose_range → 6.8"));
         when(contextReader.longTermMemory(any())).thenReturn(
                 List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "对花生过敏", 95)));
@@ -236,6 +237,14 @@ class ChatMemoryReadAdvisorTest {
     }
 
     // ---------- 辅助 ----------
+
+    /** 造一份「摘要正文 + 覆盖到某条」的读取结果（③ 期把两者合并成一次读取）。 */
+    private static SummaryState summary(String text, Long uptoMsgId) {
+        SummaryState state = new SummaryState();
+        state.setText(text);
+        state.setUptoMsgId(uptoMsgId);
+        return state;
+    }
 
     private static List<Message> injectedMessages(ChatMemoryReadAdvisor advisor, Message currentMessage) {
         List<ChatClientRequest> captured = new ArrayList<>();

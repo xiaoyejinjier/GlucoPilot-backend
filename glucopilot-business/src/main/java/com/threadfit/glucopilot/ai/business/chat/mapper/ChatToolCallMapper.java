@@ -23,13 +23,20 @@ public interface ChatToolCallMapper extends BaseMapper<ChatToolCall> {
     List<ChatToolCall> selectRecentBySession(@Param("sessionId") Long sessionId, @Param("limit") Integer limit);
 
     /**
-     * 取最近 N 条**带结果摘要**的调用（时间正序返回），用于会话记忆回放（B3 后半）。
+     * 取最近 N 个**工具**各自最新的一条结果摘要（倒序返回），用于会话记忆回放。
+     * <p>
+     * <b>按工具去重，而不是取最近 N 条记录</b>：回放的用途是"让模型知道哪些数据已经查过，
+     * 不要再重复调"。若按记录取，连续查三次血糖就会把「体检档案」「饮食记录」的摘要挤出窗口，
+     * 模型下一轮又会去调它们——正好和回放的目的相反。
      * <p>
      * 只取有 digest 的行：早于 ② 期的历史数据没有摘要，返回空串只会白占预算。
+     * {@code limit} 的含义因此是"最多几个工具"，与 {@code ai.memory.tool-replay-max-items} 对应。
      */
-    @Select("SELECT tool_name, result_digest, gmt_create FROM chat_tool_call "
-            + "WHERE session_id = #{sessionId} AND result_digest IS NOT NULL AND result_digest <> '' "
-            + "ORDER BY id DESC LIMIT #{limit}")
+    @Select("SELECT t.tool_name, t.result_digest, t.gmt_create FROM chat_tool_call t "
+            + "JOIN (SELECT tool_name, MAX(id) AS max_id FROM chat_tool_call "
+            + "      WHERE session_id = #{sessionId} AND result_digest IS NOT NULL AND result_digest <> '' "
+            + "      GROUP BY tool_name) latest ON latest.max_id = t.id "
+            + "ORDER BY t.id DESC LIMIT #{limit}")
     List<ChatToolCall> selectRecentDigests(@Param("sessionId") Long sessionId, @Param("limit") Integer limit);
 
     /**

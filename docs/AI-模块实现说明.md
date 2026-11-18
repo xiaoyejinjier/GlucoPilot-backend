@@ -607,7 +607,7 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 | --- | --- | --- |
 | `GlucoseStatsTools` | `query_glucose_stats` | 只给聚合：达标率/偏高偏低计数/均值/极值/变异系数/按时段与周的走势（≤92 天，**不返回明细**） |
 | `ChatHistoryTools` | `search_chat_history` | 在本人历史会话里按关键词找片段（≤365 天、按会话给结果、按「一问一答」去重、每会话 ≤2 处、可带 `sessionId` 续查） |
-| `SessionStateTools` | `get_session_state` | 当前会话的状态：摘要、已调用过的工具及结论摘要 |
+| `SessionStateTools` | `get_session_state` | 当前会话的状态：摘要覆盖到哪一条、已调用过的工具及结论摘要（**不回摘要正文**，它已在系统提示里） |
 | `ReminderTools` | `list_reminders` | 今日提醒（服药/测糖等）与待回复的回访 |
 | `ArticleSearchTools` | `search_community_articles` | 检索社区文章（与 feed 同一套可见性过滤，只给摘要与作者） |
 
@@ -641,7 +641,7 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
    `RepeatAwareToolCallback` 用 `sessionId + 工具名 + 规范化入参` 做键，命中就**直接返回上次的 JSON**（debug 日志写明命中），未命中才执行并记住。没有 `sessionId`（后台任务）时直接透传，不做去重。
    `ToolRepeatGuard` 的护栏：TTL 30 分钟、每会话最多 16 条、最多 512 个会话、单条结果 ≤8000 字符（过大不缓存），双层 LRU。
    注意包装顺序：`TracingToolCallback` 在**外层**，所以命中缓存的那次调用照样会写 `chat_tool_call` 记账——审计看到的是「模型确实调了」，而不是「被拦掉了」。
-2. **提示层**（首选）：`get_session_state` 会把「已调用过的工具 + 结论摘要」交给模型，并在 `hint` 里明确要求「已调用过的直接复用，别重复调」；各工具返回体也带 `hint` 说明还能拿到什么。让模型一开始就别调第二次，比事后拦更好。
+2. **提示层**（首选）：`get_session_state` 会把「已调用过的工具 + 结论摘要」交给模型，并在 `hint` 里明确要求「已调用过的直接复用，别重复调」；各工具返回体也带 `hint` 说明还能拿到什么。让模型一开始就别调第二次，比事后拦更好。这里回放的摘要**按工具去重**（`selectRecentDigests` 里的 `GROUP BY tool_name` + `MAX(id)`），而不是「最近 N 条记录」——否则连查三次血糖就把「体检档案」「饮食记录」挤出窗口，模型下一轮又会去调它们。
 
 **这不是限流**：调用次数上限仍由框架的 `spring.ai.tools.limits.max-total-tool-calls`（当前 8）负责，超了按 `on-limit-exceeded: throw` 抛错。去重只解决「同样的输入重复问」。
 
@@ -1006,10 +1006,19 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 **观测：日志里的「记忆=N」**。`ChatMemoryReadAdvisor` 的装配日志现在长这样：
 
 ```
-会话记忆装配 sessionId=164 记忆=1 保留历史=4 裁剪=0 估算token=7369 预算=4096 摘要=false 工具摘要=true（超预算：保底条数优先）
+会话记忆装配 sessionId=164 记忆=1 保留历史=4 裁剪=12 估算token=7369 预算=4096 摘要=120字 覆盖到#128 空洞=0 工具摘要=true（超预算：保底条数优先）
 ```
 
 `记忆=N` 是**真正写进 prompt 的条数**，不是"库里查到几条"——空白条目会被丢掉、每条约 120 字截断（`ChatHistoryAssembler.appendMemories` 返回的就是这个计数，落在 `Stats.memoryItems()`）。排查"用户说它记不住"时先看这个数：N=0 说明一条都没进 prompt（没抽到 / userId 没传到 advisor 参数 / 被过滤），N>0 才说明注入到位、问题在别处（提示词措辞或模型忽略）。E2E `memory-tool-e2e.ps1` 的第 2 组断言就是按这个数判断注入的。
+
+**摘要的三个字段与「空洞」**（③ 期）：`摘要=120字 覆盖到#128` 来自一次主键点查（`ChatSessionMapper.selectSummaryState` 同时取回 `context_summary` 与 `summary_upto_msg_id`，省掉第二次查询）。`空洞` 指的是**既没被摘要覆盖、也没进本轮窗口**的那几条消息：
+
+- 摘要覆盖到 `#128`、窗口装的是最近 `#141~#160` → `#129~#140` 谁也没装，模型看不到。
+- 计算方式：把「窗口里最老那条」定位出来（`ORDER BY id ASC LIMIT 1 OFFSET 裁剪条数`），再数 `upto < id < 窗口起点` 的条数——一条聚合查询，且**只在真的裁剪过历史（`裁剪 > 0`）时才查**。
+- 输出三种形态：`空洞=0（未裁剪）`（没裁就不可能漏）、`空洞=未知`（聚合查询失败，不影响回答）、`空洞=N 起于#M`（除了日志，还会额外打一条 WARN）。
+- 出现 `空洞 > 0` 说明 `ai.memory.window-messages` / `keep-recent-messages` 与摘要频率不匹配：要么调大窗口，要么让摘要更勤。这是"模型忘了刚才聊过什么"最常见的机器可判原因。
+
+**`get_session_state` 不返回摘要正文**（② 期）：CHAT 场景下滚动摘要每轮都由本 advisor 注入系统提示，工具再返回一遍等于同一段文本付两次费（摘要上限 800 字 ≈ 500 token）。所以工具只给 `{uptoMsgId, chars, note}`，`note` 指向 `search_chat_history` 去取摘要之外的原话。
 
 
 ### 10.2 `ChatSummaryServiceImpl`（298 行）：滚动摘要

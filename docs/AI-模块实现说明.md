@@ -5,7 +5,7 @@
 
 - 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（239 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、13 个工具（1 个写工具 + 1 个记忆读工具）、11 份提示词版本行、63 个 AI 测试类；全量 1126 用例 0 失败；Flyway v73
+- 现状：8 个场景、13 个工具（1 个写工具 + 1 个记忆读工具）、11 份提示词版本行、69 个 AI 测试类；全量 1154 用例 0 失败；Flyway v77
 
 ---
 
@@ -1069,6 +1069,28 @@ if (updated == 0) { /* 指针已经前进了（别的实例先完成），丢弃
 ```
 
 摘要只往「已摘要到哪条」的指针后面推进，`update ... where context_upto < ?` 保证不会用旧摘要覆盖新摘要——这是多实例部署下唯一安全的写法（进程内单飞管不到另一个实例）。
+
+**「攒够再压」的三道门（V76，批次 3 的 T3.2）**：`maybeSummarizeAsync` 每轮回复后都会被调用，而「窗口外只要多出 1 条消息」就算超阈值，所以早期实现实际上是**每轮都调一次摘要模型**。现在在 `runSummarize` 里、`candidates.isEmpty()` 之后加了一道门（`skipReason(sessionId, candidates)`）：
+
+| 门 | 配置 | 默认 | 语义 |
+| --- | --- | --- | --- |
+| 条数 | `ai.memory.summary-min-pending-messages` | 12 | 待压候选（已扣掉 `keep-recent-messages` 保底）少于 12 条就不压 |
+| 字数 | `ai.memory.summary-min-pending-chars` | 1500 | 候选总字数不到 1500 也不压 |
+| 间隔 | `ai.memory.summary-min-interval-seconds` | 60 | 距上次摘要写入不到 60 秒不压（防抖） |
+
+条数与字数取**或**（任一达标就压），间隔是**与**（还得够久）。`<=0` 表示关掉该门。间隔门的时间戳来自 V76 新增的 `chat_session.summary_updated_at`——刻意不复用 `gmt_modified`（改名会话、结束会话、状态流转都会碰它）。
+
+日志实测（`summary-min-pending-messages=12`）：
+
+```
+暂不摘要（候选 4 条/1167 字，未达 12 条或 1500 字的门）sessionId=181 候选=4条
+暂不摘要（候选 6 条/1435 字，未达 12 条或 1500 字的门）sessionId=181 候选=6条
+会话摘要已更新 userId=27 sessionId=181 压缩消息=6 摘要=800字 覆盖到消息=2031
+```
+
+注意「候选」= 待压条数 − `keep-recent-messages`（6），所以 12 条候选约等于**9 轮对话**（每轮 2 条）才压一次，而不是 6 轮。这一条比阈值本身更容易误读。
+
+**为什么顺带把 `SUMMARY` 绑到便宜模型（V77）**：摘要的输入是「已有摘要 + 待压原文」，实测 600~1800 输入 token、输出 82~550 token，全程关思维链、温度 0.1——这是典型的「格式整理活」，用最贵的文本默认模型（pro）做纯属浪费。V77 在 `ai_scene_config` 里插了一行 `SUMMARY → deepseek-v4-flash`，并把原本停用的 flash 启用（不影响文本默认仍是 pro）。
 
 ### 10.3 `ChatRoundGuard`（92 行）：进程内单飞
 

@@ -1,6 +1,6 @@
 # AI 模块数据表说明（逐列）
 
-> 依据：开发库 `sugar_health`（Flyway v51）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
+> 依据：开发库 `sugar_health`（Flyway v77）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
 > 与 `AI-模块实现说明.md` 配套：那份讲「类怎么协作」，这份讲「数据落在哪、每一列是什么意思」。
 
 - 实测导出方式：`information_schema.COLUMNS / STATISTICS / TABLES`（`TABLE_SCHEMA='sugar_health'`）
@@ -17,7 +17,7 @@
 | --- | --- | --- | --- | --- | --- |
 | 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`）、V48（`capability` 模型能力集合，取代 V45 的 `model_type`）、V50（逻辑删除 `default_chat` 占位行）、V51（`verify_skipped_reason`：保存时跳过连通性校验的原因） | 3 |
 | 2 | `ai_prompt_template` | AI 提示词模板表 | V1 | V18（管理面：`variables_json`/`change_note`/`config_version`）、V50（逻辑删除 3 条 legacy 行） | 8 |
-| 3 | `ai_scene_config` | 场景 → 模型与场景级参数 | V19 | V49（`MEAL_ANALYSIS` 的 `max_tokens` 从 `ai.meal.max-tokens` 搬入） | 4 |
+| 3 | `ai_scene_config` | 场景 → 模型与场景级参数 | V19 | V49（`MEAL_ANALYSIS` 的 `max_tokens` 从 `ai.meal.max-tokens` 搬入）、V77（新增 `SUMMARY` 行绑 `deepseek-v4-flash`） | 5 |
 | 4 | `chat_session` | 聊天会话（含滚动摘要与窗口参数） | V1 | V11（`active_user_id` 生成列）、V21（生命周期） | 102 |
 | 5 | `chat_message` | 聊天消息（含语音与 token 计量） | V1 | V9（`media_caption`）、V11（幂等/顺序号唯一键） | 937 |
 | 6 | `chat_context` | 上下文分片元数据（替代 `chat_context_snapshot`） | V1 | V28（只留元数据，`content_*` 不再写） | 26 |
@@ -215,6 +215,8 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 > 参数优先级：`ai_scene_config` 非空字段 > yaml `ai.scenes.<scene>.*` > `ai_model_config` 本身。
 >
 > **C2 起 yaml 不再参与选模型**：`ai.scenes.<scene>.model-code` 已废弃（启动时 WARN），场景级的模型来源只剩本表 `model_code` 一列；参数仍可来自 `ai.scenes.*`。
+>
+> **V77 起多了一行 `SUMMARY`**（`model_code = deepseek-v4-flash`、温度 0.10、`max_tokens = 600`、`thinking = 0`）：摘要以前落进「没有绑定行」的默认路径，用的是**最贵的文本默认模型**（pro）；这一行把它钉到便宜模型上。同一迁移顺手把 `deepseek-v4-flash` 的 `is_enabled` 置 1（它原本是停用的），启用不改变文本默认——默认仍是 `deepseek-v4-pro`。
 
 **当前开发库的 4 行**（`model_code` 全为 NULL = 都用通道默认；只有视觉与饮食两个场景调了参数）：
 
@@ -246,19 +248,20 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 7 | `system_prompt_ver` | varchar(32) | YES | — | 本轮/本会话用的提示词版本标签（如 `chat@v1`），用于「这条回复用的是哪版提示词」回溯 |
 | 8 | `context_summary` | mediumtext | YES | — | 滚动摘要正文（超长对话压缩后供模型续用） |
 | 9 | `summary_upto_msg_id` | bigint unsigned | YES | — | 摘要已覆盖至的消息 ID；`updateSummary ... where upto < ?` 的乐观并发指针 |
-| 10 | `memory_extracted_upto_msg_id` | bigint unsigned | YES | — | V61：长期记忆**输入窗口的上界消息 ID**（不是「抽全了」的证明）。只由窗口抽取写入、`upto < ?` 只前进；归档补齐据此判断该会话是否还欠一次抽取 |
-| 11 | `window_msg_count` | smallint unsigned | NO | 20 | **已废弃（V21）**：窗口统一由 `ai.memory.window-messages` 决定，读取侧不再读本列 |
-| 12 | `msg_count` | int unsigned | NO | 0 | 消息条数冗余（`touchOnMessage` 时 +1） |
-| 13 | `last_msg_at` | datetime(3) | YES | — | 最近消息时间；列表排序 + 惰性归档判据 |
-| 14 | `is_pinned` | tinyint unsigned | NO | 0 | 是否置顶 |
-| 15 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
-| 16 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
-| 17 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
-| 18 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
-| 19 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
-| 20 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 21 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
-| 22 | `active_user_id` | bigint unsigned | YES | **生成列** | `STORED GENERATED`：仅「进行中且未删除」的会话等于 `user_id`，其余为 NULL；配合 `uk_user_active` 保证**每用户至多一条进行中会话** |
+| 10 | `summary_updated_at` | datetime(3) | YES | — | V76：最近一次摘要**写入**时间，摘要门控的最小间隔判据（`summary-min-interval-seconds`）。刻意不复用 `gmt_modified`——改名会话、结束会话、状态流转都会碰它 |
+| 11 | `memory_extracted_upto_msg_id` | bigint unsigned | YES | — | V61：长期记忆**输入窗口的上界消息 ID**（不是「抽全了」的证明）。只由窗口抽取写入、`upto < ?` 只前进；归档补齐据此判断该会话是否还欠一次抽取 |
+| 12 | `window_msg_count` | smallint unsigned | NO | 20 | **已废弃（V21）**：窗口统一由 `ai.memory.window-messages` 决定，读取侧不再读本列 |
+| 13 | `msg_count` | int unsigned | NO | 0 | 消息条数冗余（`touchOnMessage` 时 +1） |
+| 14 | `last_msg_at` | datetime(3) | YES | — | 最近消息时间；列表排序 + 惰性归档判据 |
+| 15 | `is_pinned` | tinyint unsigned | NO | 0 | 是否置顶 |
+| 16 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
+| 17 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
+| 18 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
+| 19 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
+| 20 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
+| 21 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
+| 22 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 23 | `active_user_id` | bigint unsigned | YES | **生成列** | `STORED GENERATED`：仅「进行中且未删除」的会话等于 `user_id`，其余为 NULL；配合 `uk_user_active` 保证**每用户至多一条进行中会话** |
 
 > 第 21 列是 V11 用来替代「应用层查一次再插入」的：并发两个「开新会话」请求时，第二个会被唯一键挡住，而不是插出两条进行中会话。
 

@@ -152,6 +152,13 @@ ai:
     summary-input-max-chars: 3000
     # 摘要正文只有几百字，封顶可杜绝"模型长篇发挥"拖长生成时间
     summary-max-tokens: 600
+    # 攒够再压：候选（窗口外且未被摘要覆盖的消息）满足「12 条」或「1500 字」才跑一次摘要；
+    # 另加 60 秒最小间隔（<=0 关闭）。两条不设门的话，每轮新增 2 条消息、保底只留 6 条，
+    # 从第 4 轮起每轮都会触发——摘要调用本身不便宜，它还会把摘要块反复重写、
+    # 连带废掉后面整段历史的前缀缓存（实测：摘要重写那轮命中 24%，下一轮 93%）
+    summary-min-pending-messages: 12
+    summary-min-pending-chars: 1500
+    summary-min-interval-seconds: 60
     # 工具结果回放（B3 后半）：是否把最近工具调用的结果摘要注入上下文，以及条数/字符上限
     tool-replay-enabled: true
     tool-replay-max-items: 3

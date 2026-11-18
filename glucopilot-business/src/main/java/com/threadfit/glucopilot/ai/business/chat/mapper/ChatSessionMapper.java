@@ -174,11 +174,21 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
      * 慢任务可能后完成；没有这个条件的话，一次晚到的写入会把已经覆盖更多的指针拉回去，
      * 下一轮就会把已经压缩过的内容再压一遍（重复且越压越糊）。
      */
-    @Update("UPDATE chat_session SET context_summary = #{summary}, summary_upto_msg_id = #{uptoMsgId} "
+    @Update("UPDATE chat_session SET context_summary = #{summary}, summary_upto_msg_id = #{uptoMsgId}, "
+            + "summary_updated_at = CURRENT_TIMESTAMP(3) "
             + "WHERE id = #{sessionId} AND is_deleted = 0 "
             + "AND (summary_upto_msg_id IS NULL OR summary_upto_msg_id < #{uptoMsgId})")
     int updateSummary(@Param("sessionId") Long sessionId, @Param("summary") String summary,
                       @Param("uptoMsgId") Long uptoMsgId);
+
+    /**
+     * 上次成功写摘要的时间（null = 还没摘要过），供摘要任务的"最小间隔"门使用。
+     * <p>
+     * 为什么不复用 {@code gmt_modified}：这张表还会因为改名、结束会话、状态流转而更新，
+     * 用它当"上次摘要时间"会让间隔门在用户改个标题后被重置。
+     */
+    @Select("SELECT summary_updated_at FROM chat_session WHERE id = #{sessionId} AND is_deleted = 0")
+    java.time.LocalDateTime selectSummaryUpdatedAt(@Param("sessionId") Long sessionId);
 
     /** 账号注销：物理删除该用户全部会话（历史删除态一并清掉）。 */
     @Delete("DELETE FROM chat_session WHERE user_id = #{userId}")

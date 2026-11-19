@@ -1,5 +1,24 @@
 # API 契约
 
+## 2026-11-18 问诊消息按会话提醒
+
+- 信息汇总增加consultationConversations（最多20个有未读消息的问诊，按最新未读消息倒序），每项为consultationId/title/peerName/lastMessageId/unreadCount；同一问诊仅一项，连续消息累计未读数。未读总数consultations不受20项限制。只返回本人患者/有效接诊医生有权访问的会话，不返回消息正文。
+- 小程序主导航页面显示可点击的问诊新消息提醒，问诊页提供固定消息入口；记录页“提醒与回复”按具体会话合并展示并可直达聊天。连续未读消息只更新已有提醒；打开同一会话不另弹提示，查看其他会话不屏蔽新消息。只在具体聊天展示或用户主动标已读时更新已读游标。
+- 用户确认不同问诊仍分开，不跨问诊单合并聊天或已读。提醒显示具体问诊标题，避免同一医生/患者的不同求助看起来像重复会话。
+
+## 2026-11-18 独立问诊聊天与未读提醒
+
+- 小程序问诊详情通过“进入交流”打开独立聊天页，沿用GET/POST `/api/v1/consultations/{id}/messages`的2000字、游标分页和幂等发送；聊天不出具或解锁付费问诊单。GET消息不自动已读。
+- `GET /api/v1/consultation-conversations?pageNum=1&pageSize=20`：仅当前患者本人或审核有效的接诊医生可见，返回PageResult，条目包含consultationId/title/peerName/peerRole/lastContent/lastMessageId/lastMessageAt/unreadCount。仅返回有交流记录的已接诊问诊，列表查看不清除未读。
+- `PUT /api/v1/consultations/{id}/messages/read {throughId}`：加载并展示聊天后，按本次已展示的对方消息ID标为已读。校验当前身份、问诊归属和该消息确属对方；已读游标只增不减，后到的新消息继续未读，重复操作幂等。C端接口均no-store。
+- 原`GET /api/v1/community/information/summary`增加consultations和latestConsultationMessageId，总数包含问诊未读；现有5秒全局轮询复用。记录页“提醒与回复”显示“问诊交流”，点击进入会话列表，再打开具体会话后才已读。`PUT /user-reminders/information/CONSULTATION/read`及顶部read-all支持问诊消息，以本次每个会话的最大未读消息ID为界。
+- V79仅新增consultation_message_read保存每个用户每个问诊的已读游标，不修改历史消息、问诊报告或资金。未接诊和第三方禁止读取聊天；关闭问诊保留历史但不能发送。
+
+## 2026-11-17 管理端文章、评论与标签入口整合
+
+- 管理端文章页顶部提供全部评论/标签管理，文章行右侧“查看评论”跳转评论页并携带newsId。评论与标签独立路由保留且沿用原权限，侧栏统一从文章管理进入，子页提供返回入口。
+- `GET /admin/v1/community/comments`新增可选正整数`newsId`，列表和total在分页前按该文章过滤；未传保持全站评论查询，其他审核/隐藏/关键词条件可组合。保留`content:news:list`读权限和原写权限，不新增表或修改评论内容。
+
 ## 2026-11-16 求助广场隐藏本人求助
 
 - `GET /api/v1/consultations`新增可选布尔参数`hideMine`，默认false；仅普通广场（mine=false且assigned=false）生效，按当前登录用户排除patient_id，不接受客户端指定排除用户。过滤在数据库分页前执行，列表和total使用同一条件。我的问诊及医生已接诊列表保持原有范围。
@@ -913,3 +932,33 @@ snapshot格式：schemaVersion=1；sampledAt为UTC ISO时间；host={cpuPercent(
 # 社区内部结构与持久化统一（2026-10-28）
 
 community 按 `controller / dto / entity / mapper / service / support` 分类；原平铺类的 Java 包引用同步迁移。API 请求路径、HTTP 方法、JSON 字段、鉴权规则、错误码及分页格式不变，小程序与管理端无需改接口调用。原 Service 内的请求/响应 record 移入 dto；数据库访问统一使用现有 MyBatis-Plus 和 Spring 事务，查询参数使用命名绑定，复杂列表条件通过类型化查询对象传递。保留评论/私信请求幂等、回复线程、可见范围、举报通知、事务行锁、审核版本校验及 `FOR UPDATE SKIP LOCKED`。不新增或修改数据库迁移。
+
+## 2026-11-19 小程序按钮打开支付宝沙箱收银台
+
+- 小程序充值入口统一创建PAGE订单，移除扫码选项和二维码展示。付款页提供“前往支付宝沙箱付款”，通过新收银台页面的web-view尝试打开官方签名URL；页面路由只传订单号，由当前账号重新获取本人订单链接，禁止在路由参数中传登录Token、任意外部URL或整条签名URL。
+- 收银台只接受固定支付宝沙箱网关的alipay.trade.page.pay链接。返回付款页后重新读取订单并主动查单，网页加载、网页消息和返回动作不作为付款成功证据。历史QR订单仍能查支付状态，待付款旧单提示重新创建网页订单。
+- 收银台显示期间每5秒调用已有refresh主动查单，同一页面请求互斥，离页停止；网页每次加载也会触发一次查单。仅本人后端订单达到PAID后移除网页、展示到账结果及“返回付款页”按钮，并弹出一键返回提示。订单关闭显示关闭提示；轮询最多持续到订单到期后1分钟且上限16分钟。没有新增接口或支付成功的前端确认参数。
+- 微信业务域名校验同时影响目标页及重定向，开发者工具展示不代表真机可用；遇到web-view加载错误提供返回和重试，真机支付宝页面能否打开尚需实际验证。没有新增后端接口或数据库迁移。
+
+## 2026-11-18 支付宝沙箱网页账号付款
+
+- `POST /api/v1/wallet/recharge-orders` 增加可选 `paymentMode`，取值 `QR` 或 `PAGE`，省略时保持扫码模式。请求编号重试须保持金额和付款方式一致，每笔订单固定一种付款方式。
+- `POST /api/v1/wallet/recharge-orders/{orderNo}/payments` 增加 `paymentMode`、`pageUrl`。PAGE 模式使用支付宝官方 SDK `alipay.trade.page.pay`、`FAST_INSTANT_TRADE_PAY` 生成签名网页收银台 URL，二维码字段为空；QR 模式保持原有返回值。仅订单本人可获取，no-store，已支付或已关闭订单不返回付款链接，过期订单拒绝生成新链接。
+- 小程序提供网页账号付款与扫码付款选择。网页链接复制到电脑浏览器，在支付宝沙箱页面输入买家测试账号和支付密码；项目页面不接收支付宝账号密码。订单详情再次付款仍使用订单原付款方式。
+- 生成或打开链接不代表支付成功。复用原验签通知、主动查单、订单行锁和唯一流水入账流程，金额与商家由服务端确定。V80 为已有充值订单补充默认 QR 付款方式，无余额变更。
+
+## 2026-11-18 提现状态刷新与支付宝沙箱转账
+
+- 提现继续先冻结问诊收入、管理员审核、审核后第5个工作日出款；充值资金不能提现。充值沿用原支付宝沙箱二维码和验签查单闭环。本轮仅固定沙箱环境，不提供正式资金出款。
+- POST /api/v1/wallet/withdrawals 与医生端同名POST请求增加必填 payeeUserId（支付宝沙箱买家UID，2088开头16～32位数字，不能等于付款商家PID），原amountCents至少10分。请求编号重试须与金额、收款UID一致。金额、商家与应用由服务端确定并固化快照。
+- POST /api/v1/wallet/withdrawals/{no}/recipient {payeeUserId}：本人待审核/待发放且尚未开始出款时补充收款账号，兼容旧模拟申请；医生端提供相同本人身份入口。补充账号不修改审核结果、预计日期或冻结金额。
+- POST /api/v1/wallet/withdrawals/refresh：只查询本人已开始出款的沙箱订单，不提交新转账，不提前到期发放；随后GET摘要和记录读取最新状态。医生后台同能力。管理端POST /admin/v1/doctor-withdrawals/{no}/refresh只刷新指定订单；既有/payout改为到期后实际沙箱转账。
+- 原四种主状态保留，增加payeeUserId、transferState（NOT_STARTED/PROCESSING/WAITING/UNKNOWN/SUCCESS/FAILED/LEGACY）、transferErrorCode、transferStartedAt和lastTransferAt字段。COMPLETED结合provider区分历史本地模拟与支付宝沙箱到账，不混淆两者。摘要增加transferEnabled；所有接口鉴权、no-store。
+- 使用alipay.fund.trans.uni.transfer，固定out_biz_no=提现订单号、TRANS_ACCOUNT_NO_PWD、DIRECT_TRANSFER；先查alipay.fund.trans.common.query，未找到才允许到期的发放任务使用同一编号提交。只接受SDK验签的查询结果，核对订单、金额、商家快照、收款UID（响应包含时），SUCCESS才清冻结并写唯一PAYOUT流水。明确FAIL/CLOSED退回冻结款；未知、超时、验签/校验失败保持冻结等待核对，不伪造成功。外部网络调用在数据库事务外。
+- V78新增转账快照、租约/重试信息与仅追加诊断记录；历史已完成模拟记录保留LEGACY，未出款旧单需本人补充收款UID后才能走沙箱。小程序提现页提供刷新状态、下拉刷新和前台恢复刷新；结果从服务端读取。
+
+## 2026-11-18 认证医生筛选未接诊求助
+
+- GET /api/v1/consultations增加可选布尔unclaimedOnly，默认false，兼容旧客户端。仅审核通过的医生可使用true；其他身份返回403。未接诊筛选仅用于求助广场，不与mine/assigned组合。
+- true同时限制status=WAITING与doctor_user_id IS NULL，与topic及hideMine叠加；列表及总数复用MyBatis XML条件，在分页之前过滤。已接诊/已出单/已关闭及异常已绑定医生记录不进入未接诊列表。
+- 小程序求助广场仅为已认证医生显示“全部求助/未接诊”筛选，切换重置分页，加载更多保留条件。返回认证页或详情后重新核对医生身份；换账号或认证失效后清除该筛选，迟到请求不得覆盖新条件。

@@ -12,7 +12,19 @@ public final class SandboxPaymentDtos {
             int amountCents,
             String qrCode,
             String pngBase64,
-            LocalDateTime expiresAt) {}
+            LocalDateTime expiresAt,
+            String paymentMode,
+            String pageUrl) {
+        public Payment(
+                String orderNo,
+                String status,
+                int amountCents,
+                String qrCode,
+                String pngBase64,
+                LocalDateTime expiresAt) {
+            this(orderNo, status, amountCents, qrCode, pngBase64, expiresAt, "QR", null);
+        }
+    }
 
     /** 只由经过SDK验签的支付宝响应/通知生成，不接受前端传入此结构。 */
     public record Proof(

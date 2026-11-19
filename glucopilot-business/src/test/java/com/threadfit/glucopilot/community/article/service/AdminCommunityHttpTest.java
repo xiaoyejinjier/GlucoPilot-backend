@@ -339,4 +339,35 @@ public class AdminCommunityHttpTest {
             RequestContext.clear();
         }
     }
+
+    @Test
+    void commentsBindArticleFilterWithoutChangingReadPermission() throws Exception {
+        try (var context = new AnnotationConfigApplicationContext(Config.class)) {
+            var service = context.getBean(AdminCommunityCommentService.class);
+            when(service.adminComments(isNull(), isNull(), isNull(), isNull(), eq(20L), any()))
+                    .thenReturn(PageResult.of(1, 10, 0, List.of()));
+            SecurityContextHolder.getContext()
+                    .setAuthentication(
+                            new TestingAuthenticationToken("ops", "n/a", "content:news:list"));
+            var response =
+                    MockMvcBuilders.standaloneSetup(
+                                    context.getBean(AdminCommunityCommentController.class))
+                            .build()
+                            .perform(get("/admin/v1/community/comments").param("newsId", "20"))
+                            .andReturn()
+                            .getResponse();
+            assertEquals(200, response.getStatus());
+            verify(service).adminComments(isNull(), isNull(), isNull(), isNull(), eq(20L), any());
+            SecurityContextHolder.getContext()
+                    .setAuthentication(
+                            new TestingAuthenticationToken("ops", "n/a", "unrelated:read"));
+            assertThrows(
+                    AccessDeniedException.class,
+                    () ->
+                            context.getBean(AdminCommunityCommentController.class)
+                                    .comments(null, null, null, null, 20L, new PageQuery()));
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
 }

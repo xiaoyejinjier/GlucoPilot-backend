@@ -56,14 +56,23 @@ class DoctorMethodSecurityTest {
                 adminWithdrawal(
                         com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalService w) {
             return new com.threadfit.glucopilot.wallet.withdrawal.controller
-                    .AdminWithdrawalController(w);
+                    .AdminWithdrawalController(
+                    w,
+                    mock(
+                            com.threadfit.glucopilot.wallet.withdrawal.service
+                                    .WithdrawalTransferService.class));
         }
 
         @Bean
         com.threadfit.glucopilot.doctor.controller.DoctorWithdrawalController doctorWithdrawal(
                 DoctorPortalService d,
                 com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalService w) {
-            return new com.threadfit.glucopilot.doctor.controller.DoctorWithdrawalController(d, w);
+            return new com.threadfit.glucopilot.doctor.controller.DoctorWithdrawalController(
+                    d,
+                    w,
+                    mock(
+                            com.threadfit.glucopilot.wallet.withdrawal.service
+                                    .WithdrawalTransferService.class));
         }
 
         @Bean

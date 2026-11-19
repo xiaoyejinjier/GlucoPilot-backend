@@ -62,6 +62,7 @@ public final class CommunityTestMappers {
                 for (Class<?> mapper :
                         new Class<?>[] {
                             ArticleAccessMapper.class,
+                            com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.class,
                             com.threadfit.glucopilot.community.shared.mapper
                                     .CommunityAccountCleanupMapper.class,
                             com.threadfit.glucopilot.content.mapper.CmsNewsMapper.class,

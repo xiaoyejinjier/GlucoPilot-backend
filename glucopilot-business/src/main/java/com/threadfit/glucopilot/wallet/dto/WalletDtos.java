@@ -34,7 +34,16 @@ public final class WalletDtos {
 
     public record RechargeRequest(
             @NotNull @Min(100) @Max(100000) Integer amountCents,
-            @NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{8,64}") String clientRequestId) {}
+            @NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{8,64}") String clientRequestId,
+            @Pattern(regexp = "QR|PAGE") String paymentMode) {
+        public RechargeRequest(Integer amountCents, String clientRequestId) {
+            this(amountCents, clientRequestId, "QR");
+        }
+
+        public RechargeRequest {
+            if (paymentMode == null) paymentMode = "QR";
+        }
+    }
 
     public record Order(
             String orderNo,

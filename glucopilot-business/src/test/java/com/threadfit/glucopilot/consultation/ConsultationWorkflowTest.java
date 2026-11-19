@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.consultation;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.MybatisSqlSessionFactoryBuilder;
@@ -9,7 +10,12 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.consultation.dto.ConsultationDtos.*;
 import com.threadfit.glucopilot.consultation.mapper.ConsultationMapper;
 import com.threadfit.glucopilot.consultation.service.ConsultationService;
+import com.threadfit.glucopilot.payment.config.AlipaySandboxProperties;
 import com.threadfit.glucopilot.payment.mapper.SandboxPaymentMapper;
+import com.threadfit.glucopilot.payment.service.SandboxTransferGateway;
+import com.threadfit.glucopilot.wallet.withdrawal.mapper.WithdrawalMapper;
+import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalTransferService;
+import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalTransferStore;
 
 import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -59,6 +65,7 @@ class ConsultationWorkflowTest {
             config.setEnvironment(
                     new Environment("test", new SpringManagedTransactionFactory(), ds));
             config.addMapper(ConsultationMapper.class);
+            config.addMapper(com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.class);
             config.addMapper(SandboxPaymentMapper.class);
             config.addMapper(
                     com.threadfit.glucopilot.wallet.withdrawal.mapper.WithdrawalMapper.class);
@@ -81,15 +88,51 @@ class ConsultationWorkflowTest {
         }
 
         @Bean
+        AlipaySandboxProperties sandboxProperties() {
+            var props = new AlipaySandboxProperties();
+            props.setEnabled(true);
+            props.setAppId("2026000000000001");
+            props.setSellerId("2088000000000001");
+            props.setPrivateKey("fixture_not_used_for_network");
+            props.setPublicKey("fixture_not_used_for_network");
+            return props;
+        }
+
+        @Bean
+        SandboxTransferGateway transferGateway() {
+            return mock(SandboxTransferGateway.class);
+        }
+
+        @Bean
+        WithdrawalTransferStore transferStore(
+                SqlSessionFactory f, AlipaySandboxProperties properties) {
+            return new WithdrawalTransferStore(
+                    new SqlSessionTemplate(f).getMapper(WithdrawalMapper.class), properties);
+        }
+
+        @Bean
+        WithdrawalTransferService transfers(
+                SqlSessionFactory f,
+                WithdrawalTransferStore store,
+                SandboxTransferGateway gateway) {
+            return new WithdrawalTransferService(
+                    store, new SqlSessionTemplate(f).getMapper(WithdrawalMapper.class), gateway);
+        }
+
+        @Bean
         com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalService withdrawals(
-                SqlSessionFactory f, ConsultationMapper m, SandboxPaymentMapper w) {
+                SqlSessionFactory f,
+                ConsultationMapper m,
+                SandboxPaymentMapper w,
+                AlipaySandboxProperties properties) {
             return new com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalService(
                     new SqlSessionTemplate(f)
                             .getMapper(
                                     com.threadfit.glucopilot.wallet.withdrawal.mapper
                                             .WithdrawalMapper.class),
                     w,
-                    m);
+                    m,
+                    properties);
         }
     }
 
@@ -125,6 +168,23 @@ class ConsultationWorkflowTest {
                 "wallet_withdrawal_order",
                 "wallet_withdrawal_event",
                 "wallet_work_calendar");
+        ddl("ALTER TABLE wallet_withdrawal_order DROP CONSTRAINT ck_withdrawal_sandbox");
+        ddl(
+                "ALTER TABLE wallet_withdrawal_order ADD CONSTRAINT ck_withdrawal_sandbox"
+                        + " CHECK(provider IN ('SANDBOX_SIMULATION','ALIPAY_SANDBOX_TRANSFER'))");
+        for (String column :
+                new String[] {
+                    "payee_user_id VARCHAR(32)",
+                    "sandbox_app_id VARCHAR(32)",
+                    "sandbox_seller_id VARCHAR(32)",
+                    "transfer_state VARCHAR(16) DEFAULT 'NOT_STARTED' NOT NULL",
+                    "transfer_error_code VARCHAR(64)",
+                    "transfer_started_at TIMESTAMP",
+                    "last_transfer_at TIMESTAMP",
+                    "transfer_lease_until TIMESTAMP"
+                }) ddl("ALTER TABLE wallet_withdrawal_order ADD COLUMN " + column);
+        tables("V78__alipay_sandbox_withdrawal_transfers.sql", "wallet_withdrawal_transfer_log");
+        tables("V79__consultation_message_reads.sql", "consultation_message_read");
         ddl("ALTER TABLE wallet_sandbox_account ADD COLUMN frozen_cents BIGINT DEFAULT 0 NOT NULL");
         ddl(
                 "ALTER TABLE wallet_sandbox_account ADD COLUMN income_available_cents BIGINT"
@@ -207,6 +267,35 @@ class ConsultationWorkflowTest {
 
     int entries() {
         return jdbc.queryForObject("SELECT COUNT(*) FROM consultation_wallet_entry", Integer.class);
+    }
+
+    @Test
+    void consultationInboxIsPrivateAndReadCursorNeverConsumesLaterMessagesOrRewinds() {
+        approve(2);
+        approve(3);
+        var c = publish();
+        service.claim(2,c.id());
+        var incoming=service.sendMessage(2,c.id(),new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos.Send("请补充测量时间","chat_notice_0001"));
+        var mapper=new SqlSessionTemplate(context.getBean(SqlSessionFactory.class)).getMapper(com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.class);
+        var inbox=new com.threadfit.glucopilot.consultation.service.ConsultationConversationService(mapper);
+        var page=new PageQuery();
+        assertEquals(1,inbox.list(1,page).getTotal());
+        assertEquals(1,inbox.list(1,page).getRecords().getFirst().getUnreadCount());
+        assertEquals(0,inbox.list(2,page).getRecords().getFirst().getUnreadCount());
+        assertEquals(0,inbox.list(3,page).getTotal());
+        assertThrows(BizException.class,()->inbox.read(3,c.id(),incoming.getId()));
+        var later=service.sendMessage(2,c.id(),new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos.Send("稍后补充饮食情况","chat_notice_0002"));
+        inbox.read(1,c.id(),incoming.getId());
+        assertEquals(1,inbox.list(1,page).getRecords().getFirst().getUnreadCount());
+        inbox.read(1,c.id(),later.getId());
+        inbox.read(1,c.id(),incoming.getId());
+        assertEquals(0,inbox.list(1,page).getRecords().getFirst().getUnreadCount());
+        var own=service.sendMessage(1,c.id(),new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos.Send("已补充","chat_notice_0003"));
+        assertThrows(BizException.class,()->inbox.read(1,c.id(),own.getId()));
+        jdbc.update("UPDATE consultation_doctor SET status='DISABLED' WHERE user_id=2");
+        assertEquals(0,inbox.list(2,page).getTotal());
+        assertThrows(BizException.class,()->inbox.read(2,c.id(),own.getId()));
+        assertEquals(1,inbox.list(1,page).getTotal());
     }
 
     @Test
@@ -333,7 +422,8 @@ class ConsultationWorkflowTest {
 
     com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.Apply withdrawForm(
             int amount, String key) {
-        return new com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.Apply(amount, key);
+        return new com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.Apply(
+                amount, key, "2088000000000002");
     }
 
     @Test
@@ -394,17 +484,33 @@ class ConsultationWorkflowTest {
                         new com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.Review(
                                 "APPROVED", "测试通过", 0L));
         assertEquals(w.fifthBusinessDay(w.today()), approved.getExpectedPayoutDate());
-        assertThrows(BizException.class, () -> w.complete(order.getOrderNo(), 99L));
+        var transfers = context.getBean(WithdrawalTransferService.class);
+        var gateway = context.getBean(SandboxTransferGateway.class);
+        assertThrows(BizException.class, () -> transfers.payout(order.getOrderNo(), 99L));
+        verifyNoInteractions(gateway);
         jdbc.update(
                 "UPDATE wallet_withdrawal_order SET expected_payout_date=? WHERE order_no=?",
                 w.today(),
                 order.getOrderNo());
-        var paid = w.complete(order.getOrderNo(), 99L);
+        when(gateway.query(any()))
+                .thenReturn(
+                        null,
+                        new SandboxTransferGateway.Proof(
+                                order.getOrderNo(),
+                                "ALIPAY_TRANSFER_1",
+                                "FUND_1",
+                                "SUCCESS",
+                                new java.math.BigDecimal("0.50"),
+                                "2088000000000002",
+                                null));
+        var paid = transfers.payout(order.getOrderNo(), 99L);
         assertEquals("COMPLETED", paid.getStatus());
-        assertTrue(paid.getPayoutReference().startsWith("SIM"));
+        assertEquals("ALIPAY_TRANSFER_1", paid.getPayoutReference());
+        assertEquals("SUCCESS", paid.getTransferState());
         assertEquals(
                 paid.getPayoutReference(),
-                w.complete(order.getOrderNo(), 99L).getPayoutReference());
+                transfers.payout(order.getOrderNo(), 99L).getPayoutReference());
+        verify(gateway, times(1)).transfer(any());
         assertEquals(50, balance(2));
         assertEquals(0, w.summary(2).frozenCents());
         assertEquals(
@@ -412,6 +518,193 @@ class ConsultationWorkflowTest {
                 jdbc.queryForObject(
                         "SELECT COUNT(*) FROM wallet_withdrawal_event WHERE event_type='PAYOUT'",
                         Integer.class));
+    }
+
+    private String dueTransfer() {
+        earn();
+        var order = withdrawals().apply(2, withdrawForm(50, "transfer_fixture_001"));
+        withdrawals()
+                .review(
+                        99,
+                        order.getOrderNo(),
+                        new com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.Review(
+                                "APPROVED", "沙箱审核", 0L));
+        jdbc.update(
+                "UPDATE wallet_withdrawal_order SET expected_payout_date=? WHERE order_no=?",
+                withdrawals().today(),
+                order.getOrderNo());
+        return order.getOrderNo();
+    }
+
+    private SandboxTransferGateway.Proof transferProof(
+            String no, String status, String amount, String receiver) {
+        return new SandboxTransferGateway.Proof(
+                no,
+                "ALIPAY_TRANSFER_1",
+                "FUND_1",
+                status,
+                amount == null ? null : new java.math.BigDecimal(amount),
+                receiver,
+                "TEST_FAILURE");
+    }
+
+    private void retryTransfer(String no) {
+        jdbc.update(
+                "UPDATE wallet_withdrawal_order SET"
+                    + " last_transfer_at=TIMESTAMPADD(SECOND,-6,CURRENT_TIMESTAMP),transfer_lease_until=NULL"
+                    + " WHERE order_no=?",
+                no);
+    }
+
+    @Test
+    void uncertainTransferIsNotPaidOrRefundedAndLaterQuerySettlesWithoutSecondSend() {
+        String no = dueTransfer();
+        var gateway = context.getBean(SandboxTransferGateway.class);
+        var transfers = context.getBean(WithdrawalTransferService.class);
+        when(gateway.query(any())).thenReturn(null);
+        doThrow(
+                        new BizException(
+                                com.threadfit.glucopilot.common.api.ErrorCode
+                                        .PAYMENT_UPSTREAM_ERROR,
+                                "safe",
+                                Map.of("providerSubCode", "SDK_TIMEOUT")))
+                .when(gateway)
+                .transfer(any());
+        var pending = transfers.payout(no, 99L);
+        assertEquals("APPROVED", pending.getStatus());
+        assertEquals("UNKNOWN", pending.getTransferState());
+        assertEquals("SDK_TIMEOUT", pending.getTransferErrorCode());
+        assertEquals(50, withdrawals().summary(2).frozenCents());
+        assertEquals(50, balance(2));
+        retryTransfer(no);
+        when(gateway.query(any()))
+                .thenReturn(transferProof(no, "SUCCESS", "0.50", "2088000000000002"));
+        transfers.refreshOwn(2);
+        assertEquals(0, withdrawals().summary(2).frozenCents());
+        assertEquals(
+                "COMPLETED", context.getBean(WithdrawalTransferStore.class).find(no).getStatus());
+        verify(gateway, times(1)).transfer(any());
+        assertEquals(
+                1,
+                jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM wallet_withdrawal_event WHERE event_type='PAYOUT'",
+                        Integer.class));
+    }
+
+    @Test
+    void signedFailedTransferReturnsFrozenIncomeOnceAndOtherUsersRefreshDoesNothing() {
+        String no = dueTransfer();
+        var gateway = context.getBean(SandboxTransferGateway.class);
+        var transfers = context.getBean(WithdrawalTransferService.class);
+        transfers.refreshOwn(1);
+        verifyNoInteractions(gateway);
+        when(gateway.query(any())).thenReturn(transferProof(no, "FAIL", null, "2088000000000002"));
+        assertEquals("REJECTED", transfers.payout(no, 99L).getStatus());
+        assertEquals(100, balance(2));
+        assertEquals(100, withdrawals().summary(2).availableCents());
+        assertEquals(0, withdrawals().summary(2).frozenCents());
+        transfers.payout(no, 99L);
+        assertEquals(
+                1,
+                jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM wallet_withdrawal_event WHERE event_type='REJECT'",
+                        Integer.class));
+        verify(gateway, never()).transfer(any());
+    }
+
+    @Test
+    void mismatchedProofAndMerchantCannotReleaseFrozenMoney() {
+        String no = dueTransfer();
+        var gateway = context.getBean(SandboxTransferGateway.class);
+        var transfers = context.getBean(WithdrawalTransferService.class);
+        for (var proof :
+                List.of(
+                        transferProof("OTHER_ORDER", "SUCCESS", "0.50", "2088000000000002"),
+                        transferProof(no, "SUCCESS", "0.51", "2088000000000002"),
+                        transferProof(no, "SUCCESS", "0.50", "2088000000000003"))) {
+            retryTransfer(no);
+            when(gateway.query(any())).thenReturn(proof);
+            assertEquals("UNKNOWN", transfers.payout(no, 99L).getTransferState());
+            assertEquals(50, withdrawals().summary(2).frozenCents());
+        }
+        context.getBean(AlipaySandboxProperties.class).setAppId("2026000000000009");
+        retryTransfer(no);
+        assertThrows(BizException.class, () -> transfers.payout(no, 99L));
+        assertEquals(
+                0,
+                jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM wallet_withdrawal_event WHERE event_type='PAYOUT'",
+                        Integer.class));
+    }
+
+    @Test
+    void payeeBindingIsOwnerOnlyAndCannotChangeAfterTransferStarted() {
+        String no = dueTransfer();
+        var form =
+                new com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.Recipient(
+                        "2088000000000003");
+        assertThrows(BizException.class, () -> withdrawals().recipient(1, no, form));
+        assertEquals("2088000000000003", withdrawals().recipient(2, no, form).getPayeeUserId());
+        assertThrows(
+                BizException.class,
+                () ->
+                        withdrawals()
+                                .recipient(
+                                        2,
+                                        no,
+                                        new com.threadfit.glucopilot.wallet.withdrawal.dto
+                                                .WithdrawalDtos.Recipient("2088000000000001")));
+        context.getBean(WithdrawalTransferService.class).payout(no, 99L);
+        assertThrows(BizException.class, () -> withdrawals().recipient(2, no, form));
+    }
+
+    @Test
+    void transferNetworkCallsHoldNoTransactionAndConcurrentClicksDoNotSendTwice() throws Exception {
+        String no = dueTransfer();
+        var gateway = context.getBean(SandboxTransferGateway.class);
+        var transfers = context.getBean(WithdrawalTransferService.class);
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        when(gateway.query(any()))
+                .thenAnswer(
+                        call -> {
+                            assertFalse(
+                                    org.springframework.transaction.support
+                                            .TransactionSynchronizationManager
+                                            .isActualTransactionActive());
+                            started.countDown();
+                            assertTrue(release.await(5, TimeUnit.SECONDS));
+                            return transferProof(no, "SUCCESS", "0.50", "2088000000000002");
+                        });
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var first = executor.submit(() -> transfers.payout(no, 99L));
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertEquals("PROCESSING", transfers.payout(no, 98L).getTransferState());
+            release.countDown();
+            assertEquals("COMPLETED", first.get(5, TimeUnit.SECONDS).getStatus());
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+        verify(gateway, times(1)).query(any());
+        verify(gateway, never()).transfer(any());
+    }
+
+    @Test
+    void refreshingNotStartedOrderNeverSubmitsTransferOrSkipsBusinessDay() {
+        String no = dueTransfer();
+        jdbc.update(
+                "UPDATE wallet_withdrawal_order SET expected_payout_date=? WHERE order_no=?",
+                withdrawals().today().plusDays(5),
+                no);
+        var transfers = context.getBean(WithdrawalTransferService.class);
+        var gateway = context.getBean(SandboxTransferGateway.class);
+        transfers.refreshOwn(2);
+        transfers.refresh(no, 99L);
+        assertThrows(BizException.class, () -> transfers.payout(no, 99L));
+        verifyNoInteractions(gateway);
+        assertEquals(50, withdrawals().summary(2).frozenCents());
     }
 
     @Test
@@ -595,6 +888,81 @@ class ConsultationWorkflowTest {
         assertEquals("其他糖友的求助", others.getRecords().getFirst().title());
         assertEquals(0, service.list(1, false, false, true, "GLUCOSE", page).getTotal());
         assertEquals(2, service.list(1, true, false, true, null, page).getTotal());
+    }
+
+    @Test
+    void unclaimedCasesAreFilteredBeforePaginationAndCombineTopicAndHideMine() {
+        approve(2);
+        for (int i = 0; i < 8; i++) {
+            long patient = i == 3 ? 2 : 1;
+            String topic = i == 2 ? "DIET" : "GLUCOSE";
+            var item =
+                    service.publish(
+                            patient,
+                            new PublishRequest(
+                                    "筛选测试求助" + i,
+                                    topic,
+                                    "仅用于未接诊筛选测试的说明内容。",
+                                    "",
+                                    "",
+                                    false,
+                                    "unclaimed_case_" + i));
+            if (i >= 4) {
+                String status =
+                        switch (i) {
+                            case 4 -> "IN_PROGRESS";
+                            case 5 -> "REPORT_READY";
+                            case 6 -> "CLOSED";
+                            default -> "WAITING";
+                        };
+                jdbc.update(
+                        "UPDATE consultation_request SET status=?,doctor_user_id=? WHERE id=?",
+                        status,
+                        i == 6 ? null : 3,
+                        item.id());
+            }
+        }
+        var all = service.list(2, false, false, false, true, null, new PageQuery());
+        assertEquals(4, all.getTotal());
+        assertEquals(4, all.getRecords().size());
+        assertTrue(all.getRecords().stream().allMatch(row -> "WAITING".equals(row.status())));
+        var page = new PageQuery();
+        page.setPageSize(1);
+        var first = service.list(2, false, false, true, true, "GLUCOSE", page);
+        assertEquals(2, first.getTotal());
+        assertEquals(1, first.getRecords().size());
+        assertFalse(first.getRecords().getFirst().mine());
+        page.setPageNum(2);
+        var second = service.list(2, false, false, true, true, "GLUCOSE", page);
+        assertEquals(2, second.getTotal());
+        assertEquals(1, second.getRecords().size());
+        assertNotEquals(first.getRecords().getFirst().id(), second.getRecords().getFirst().id());
+        service.claim(2, first.getRecords().getFirst().id());
+        page.setPageNum(1);
+        assertEquals(1, service.list(2, false, false, true, true, "GLUCOSE", page).getTotal());
+    }
+
+    @Test
+    void unclaimedFilterRequiresCurrentApprovedDoctorAndOnlyAppliesToSquare() {
+        var page = new PageQuery();
+        var ordinary =
+                assertThrows(
+                        BizException.class,
+                        () -> service.list(1, false, false, false, true, null, page));
+        assertEquals(
+                com.threadfit.glucopilot.common.api.ErrorCode.FORBIDDEN, ordinary.getErrorCode());
+        service.apply(3, new DoctorApplication("测试医生", "机构", "内分泌", "PENDING_TEST", "测试资质"));
+        assertThrows(
+                BizException.class, () -> service.list(3, false, false, false, true, null, page));
+        approve(2);
+        assertThrows(
+                BizException.class, () -> service.list(2, true, false, false, true, null, page));
+        assertThrows(
+                BizException.class, () -> service.list(2, false, true, false, true, null, page));
+        jdbc.update("UPDATE consultation_doctor SET status='DISABLED' WHERE user_id=2");
+        assertThrows(
+                BizException.class, () -> service.list(2, false, false, false, true, null, page));
+        assertDoesNotThrow(() -> service.list(1, false, false, null, page));
     }
 
     @Test

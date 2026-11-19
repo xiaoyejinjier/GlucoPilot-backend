@@ -77,11 +77,26 @@ public class ConsultationService {
             boolean hideMine,
             String topic,
             PageQuery page) {
+        return list(viewer, mine, assigned, hideMine, false, topic, page);
+    }
+
+    public PageResult<CaseView> list(
+            long viewer,
+            boolean mine,
+            boolean assigned,
+            boolean hideMine,
+            boolean unclaimedOnly,
+            String topic,
+            PageQuery page) {
         checkPage(page);
         String filter = filter(topic, Set.of("GLUCOSE", "DIET", "MEDICATION", "CHECKUP"));
         var doctor = mapper.doctor(viewer);
         if (assigned && !approved(doctor))
             throw new BizException(ErrorCode.FORBIDDEN, "请先完成医生身份审核");
+        if (unclaimedOnly && !approved(doctor))
+            throw new BizException(ErrorCode.FORBIDDEN, "请先完成医生身份审核");
+        if (unclaimedOnly && (mine || assigned))
+            throw new BizException(ErrorCode.BAD_REQUEST, "未接诊筛选仅用于求助广场");
         boolean excludeSelf = hideMine && !mine && !assigned;
         var rows =
                 mapper.list(
@@ -89,6 +104,7 @@ public class ConsultationService {
                         mine,
                         assigned,
                         excludeSelf,
+                        unclaimedOnly,
                         filter,
                         page.getPageSize(),
                         page.offset());
@@ -96,7 +112,7 @@ public class ConsultationService {
         return PageResult.of(
                 page.getPageNum(),
                 page.getPageSize(),
-                mapper.count(viewer, mine, assigned, excludeSelf, filter),
+                mapper.count(viewer, mine, assigned, excludeSelf, unclaimedOnly, filter),
                 items);
     }
 

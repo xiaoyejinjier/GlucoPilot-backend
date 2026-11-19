@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.*;
 import com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalOrder;
 import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalService;
+import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalTransferService;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
@@ -26,6 +27,7 @@ import java.util.*;
 @PreAuthorize("@ss.hasRole('admin') and @ss.hasPermi('doctor:withdrawal:manage')")
 public class AdminWithdrawalController {
     private final WithdrawalService service;
+    private final WithdrawalTransferService transfers;
 
     @GetMapping
     public ResponseEntity<ApiResponse<PageResult<WithdrawalOrder>>> list(
@@ -43,7 +45,13 @@ public class AdminWithdrawalController {
     @PostMapping("/{no}/payout")
     public ResponseEntity<ApiResponse<WithdrawalOrder>> payout(
             @PathVariable @Pattern(regexp = "[A-Za-z0-9_-]{1,64}") String no) {
-        return ok(service.complete(no, RequestContext.requireOpsId()));
+        return ok(transfers.payout(no, RequestContext.requireOpsId()));
+    }
+
+    @PostMapping("/{no}/refresh")
+    public ResponseEntity<ApiResponse<WithdrawalOrder>> refresh(
+            @PathVariable @Pattern(regexp = "[A-Za-z0-9_-]{1,64}") String no) {
+        return ok(transfers.refresh(no, RequestContext.requireOpsId()));
     }
 
     @GetMapping("/calendar")

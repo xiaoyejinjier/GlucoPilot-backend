@@ -11,6 +11,7 @@ public class SandboxRecharge {
     private int amountCents;
     private String status;
     private String paymentProvider;
+    private String paymentMode;
     private String clientRequestId;
     private String providerTradeNo;
     private String sandboxAppId;

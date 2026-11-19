@@ -31,12 +31,15 @@ public class SandboxRechargeService {
     @Transactional
     public SandboxRecharge create(long userId, WalletDtos.RechargeRequest request) {
         requireReady();
+        if (!"QR".equals(request.paymentMode()) && !"PAGE".equals(request.paymentMode()))
+            throw new BizException(ErrorCode.BAD_REQUEST, "付款方式不正确");
         if (mapper.lockActivatedUser(userId) == null)
             throw new BizException(ErrorCode.BAD_REQUEST, "请先开通钱包");
         var previous = mapper.byRequest(userId, request.clientRequestId());
         if (previous != null) {
-            if (previous.getAmountCents() != request.amountCents())
-                throw new BizException(ErrorCode.CONFLICT, "同一充值请求不能修改金额");
+            if (previous.getAmountCents() != request.amountCents()
+                    || !Objects.equals(previous.getPaymentMode(), request.paymentMode()))
+                throw new BizException(ErrorCode.CONFLICT, "同一充值请求不能修改金额或付款方式");
             return previous;
         }
         var order = new SandboxRecharge();
@@ -44,6 +47,7 @@ public class SandboxRechargeService {
         order.setUserId(userId);
         order.setAmountCents(request.amountCents());
         order.setClientRequestId(request.clientRequestId());
+        order.setPaymentMode(request.paymentMode());
         order.setSandboxAppId(properties.getAppId());
         order.setSandboxSellerId(properties.getSellerId());
         order.setExpiresAt(LocalDateTime.now().plusMinutes(15));

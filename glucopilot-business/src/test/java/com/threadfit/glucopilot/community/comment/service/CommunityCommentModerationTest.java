@@ -8,14 +8,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
+import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
+import com.threadfit.glucopilot.ai.business.moderation.support.ModerationCategories;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.community.article.mapper.CommunityPublicationMapper;
 import com.threadfit.glucopilot.community.article.service.CommunityPublicationService;
 import com.threadfit.glucopilot.community.moderation.mapper.CommunityModerationMapper;
 import com.threadfit.glucopilot.community.moderation.service.CommunityModerationQueue;
-import com.threadfit.glucopilot.ai.business.moderation.support.ModerationCategories;
-import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
 import com.threadfit.glucopilot.community.shared.service.CommunityService;
 import com.threadfit.glucopilot.community.shared.support.CommunityTestMappers;
 import com.threadfit.glucopilot.community.shared.support.CommunityTestSchema;
@@ -544,6 +544,39 @@ class CommunityCommentModerationTest {
                                 .getRecords()
                                 .getFirst()
                                 .id()));
+    }
+
+    @Test
+    void 管理端按文章过滤在分页前执行并保留隐藏评论() {
+        long first = insertComment("第一篇的正常评论", "article_filter_01");
+        long hidden = insertComment("第一篇的隐藏评论", "article_filter_02");
+        jdbc.update("UPDATE community_comment SET is_hidden=1 WHERE id=?", hidden);
+        jdbc.update(
+                "INSERT INTO"
+                    + " cms_news(id,title,summary_text,content_body,channel_code,publish_status,publish_at)"
+                    + " VALUES(21,'另一篇文章','摘要','正文',4,1,CURRENT_TIMESTAMP)");
+        jdbc.update(
+                "INSERT INTO community_comment(news_id,user_id,content,client_request_id)"
+                    + " VALUES(21,3,'另一篇的最新评论','article_filter_03')");
+        var service = CommunityTestMappers.adminComments(jdbc);
+        var q = new PageQuery();
+        q.setPageSize(1);
+        var page = service.adminComments(null, null, null, null, 20L, q);
+        assertEquals(2, page.getTotal());
+        assertEquals(1, page.getRecords().size());
+        assertEquals(20, page.getRecords().getFirst().newsId());
+        assertEquals(Long.toString(hidden), page.getRecords().getFirst().id());
+        q.setPageNum(2);
+        assertEquals(
+                Long.toString(first),
+                service.adminComments(null, null, null, null, 20L, q).getRecords().getFirst().id());
+        q.setPageNum(1);
+        assertEquals(1, service.adminComments(null, null, 1, null, 20L, q).getTotal());
+        assertEquals(0, service.adminComments(null, null, 1, null, 21L, q).getTotal());
+        assertEquals(0, service.adminComments(null, null, null, null, 999L, q).getTotal());
+        assertEquals(3, service.adminComments(null, null, null, null, q).getTotal());
+        assertThrows(
+                BizException.class, () -> service.adminComments(null, null, null, null, 0L, q));
     }
 
     @Test

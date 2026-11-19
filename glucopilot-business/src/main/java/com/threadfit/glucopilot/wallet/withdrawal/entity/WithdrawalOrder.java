@@ -1,5 +1,7 @@
 package com.threadfit.glucopilot.wallet.withdrawal.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import lombok.Data;
 
 import java.time.*;
@@ -21,4 +23,12 @@ public class WithdrawalOrder {
     private LocalDateTime completedAt;
     private LocalDateTime createdAt;
     private Long version;
+    private String payeeUserId;
+    @JsonIgnore private String sandboxAppId;
+    @JsonIgnore private String sandboxSellerId;
+    private String transferState;
+    private String transferErrorCode;
+    private LocalDateTime transferStartedAt;
+    private LocalDateTime lastTransferAt;
+    @JsonIgnore private LocalDateTime transferLeaseUntil;
 }

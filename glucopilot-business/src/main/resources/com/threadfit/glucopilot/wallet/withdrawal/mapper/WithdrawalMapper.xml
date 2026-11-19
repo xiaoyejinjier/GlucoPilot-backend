@@ -14,8 +14,38 @@
         SELECT balance_cents,frozen_cents,income_available_cents FROM wallet_sandbox_account WHERE user_id=#{user} <if test="lock">FOR UPDATE</if>
     </select>
     <insert id="insert">
-        INSERT INTO wallet_withdrawal_order(order_no,user_id,amount_cents,client_request_id) VALUES(#{no},#{user},#{amount},#{key})
+        INSERT INTO wallet_withdrawal_order(order_no,user_id,amount_cents,client_request_id,provider,payee_user_id,sandbox_app_id,sandbox_seller_id,transfer_state)
+        VALUES(#{no},#{user},#{amount},#{key},'ALIPAY_SANDBOX_TRANSFER',#{payee},#{app},#{seller},'NOT_STARTED')
     </insert>
+    <update id="recipient">
+        UPDATE wallet_withdrawal_order SET provider='ALIPAY_SANDBOX_TRANSFER',payee_user_id=#{payee},
+            sandbox_app_id=#{app},sandbox_seller_id=#{seller},transfer_state='NOT_STARTED',transfer_error_code=NULL,version=version+1
+        WHERE order_no=#{no} AND status IN ('PENDING','APPROVED') AND transfer_started_at IS NULL
+    </update>
+    <update id="claimTransfer">
+        UPDATE wallet_withdrawal_order SET transfer_state='PROCESSING',
+            transfer_started_at=COALESCE(transfer_started_at,CURRENT_TIMESTAMP(3)),
+            last_transfer_at=CURRENT_TIMESTAMP(3),transfer_lease_until=TIMESTAMPADD(SECOND,120,CURRENT_TIMESTAMP(3)),version=version+1
+        WHERE order_no=#{no} AND status='APPROVED'
+          AND (transfer_lease_until IS NULL OR transfer_lease_until &lt; CURRENT_TIMESTAMP(3))
+          AND (last_transfer_at IS NULL OR last_transfer_at &lt; TIMESTAMPADD(SECOND,-5,CURRENT_TIMESTAMP(3)))
+    </update>
+    <update id="transferResult">
+        UPDATE wallet_withdrawal_order SET transfer_state=#{state},transfer_error_code=#{code},transfer_lease_until=NULL,version=version+1
+        WHERE order_no=#{no} AND status='APPROVED'
+    </update>
+    <update id="transferFailed">
+        UPDATE wallet_withdrawal_order SET status='REJECTED',version=version+1 WHERE order_no=#{no} AND status='APPROVED'
+    </update>
+    <insert id="transferLog">
+        INSERT INTO wallet_withdrawal_transfer_log(order_no,action,transfer_state,provider_code,actor_id)
+        VALUES(#{no},#{action},#{state},#{code},#{actor})
+    </insert>
+    <select id="activeTransfers" resultType="string">
+        SELECT order_no FROM wallet_withdrawal_order WHERE user_id=#{user} AND status='APPROVED'
+            AND provider='ALIPAY_SANDBOX_TRANSFER' AND transfer_started_at IS NOT NULL
+        ORDER BY last_transfer_at,order_no LIMIT 3
+    </select>
     <update id="freeze">UPDATE wallet_sandbox_account SET income_available_cents=income_available_cents-#{amount},balance_cents=balance_cents-#{amount},frozen_cents=frozen_cents+#{amount},version=version+1 WHERE user_id=#{user} AND balance_cents&gt;=#{amount} AND income_available_cents&gt;=#{amount}</update>
     <update id="release">
         UPDATE wallet_sandbox_account SET frozen_cents=frozen_cents-#{amount},version=version+1
@@ -37,7 +67,12 @@
         <include refid="filters"/> ORDER BY o.created_at DESC,o.order_no DESC LIMIT #{limit} OFFSET #{offset}
     </select>
     <select id="count" resultType="long">SELECT COUNT(*) FROM wallet_withdrawal_order o <include refid="filters"/></select>
-    <select id="due" resultType="string">SELECT order_no FROM wallet_withdrawal_order WHERE status='APPROVED' AND expected_payout_date&lt;=#{today} ORDER BY expected_payout_date,order_no LIMIT 50</select>
+    <select id="due" resultType="string">
+        SELECT order_no FROM wallet_withdrawal_order WHERE status='APPROVED' AND expected_payout_date&lt;=#{today}
+            AND provider='ALIPAY_SANDBOX_TRANSFER' AND payee_user_id IS NOT NULL
+            AND (transfer_lease_until IS NULL OR transfer_lease_until &lt; CURRENT_TIMESTAMP(3))
+        ORDER BY last_transfer_at,expected_payout_date,order_no LIMIT 50
+    </select>
     <select id="workingDay" resultType="int">SELECT working_day FROM wallet_work_calendar WHERE calendar_date=#{date}</select>
     <insert id="calendar">INSERT INTO wallet_work_calendar(calendar_date,working_day,note,updated_by) VALUES(#{date},#{working},#{note},#{ops}) ON DUPLICATE KEY UPDATE working_day=#{working},note=#{note},updated_by=#{ops},updated_at=CURRENT_TIMESTAMP(3)</insert>
     <select id="calendarRows" resultType="java.util.HashMap">SELECT calendar_date,working_day,note FROM wallet_work_calendar WHERE calendar_date BETWEEN #{start} AND #{end} ORDER BY calendar_date</select>

@@ -8,6 +8,15 @@ import java.sql.Connection;
 public final class CommunityTestSchema {
     private CommunityTestSchema() {}
 
+    public static void applyConsultationReminderSchema(Connection connection) throws Exception {
+        try (var s = connection.createStatement()) {
+            s.execute("CREATE TABLE IF NOT EXISTS consultation_request(id BIGINT PRIMARY KEY,patient_id BIGINT,doctor_user_id BIGINT,status VARCHAR(24),title VARCHAR(80),anonymous INT DEFAULT 0)");
+            s.execute("CREATE TABLE IF NOT EXISTS consultation_doctor(user_id BIGINT PRIMARY KEY,status VARCHAR(24),real_name VARCHAR(50))");
+            s.execute("CREATE TABLE IF NOT EXISTS consultation_message(id BIGINT PRIMARY KEY,consultation_id BIGINT,sender_id BIGINT)");
+        }
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V79__consultation_message_reads.sql")).populate(connection);
+    }
+
     public static void applyDraftMigration(Connection connection) throws Exception {
         try (var s = connection.createStatement()) {
             s.execute(

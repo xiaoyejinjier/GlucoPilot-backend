@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.payment.service;
 
 import com.alipay.api.*;
 import com.alipay.api.domain.*;
+import com.alipay.api.internal.util.AlipayLogger;
 import com.alipay.api.internal.util.AlipaySignature;
 import com.alipay.api.request.*;
 import com.threadfit.glucopilot.common.api.ErrorCode;
@@ -11,6 +12,7 @@ import com.threadfit.glucopilot.payment.dto.SandboxPaymentDtos.Proof;
 import com.threadfit.glucopilot.payment.entity.SandboxRecharge;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.stereotype.Component;
 
@@ -24,8 +26,33 @@ import java.util.Map;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class AlipaySandboxGateway implements SandboxGateway {
+    static {
+        // SDK 默认日志含完整签名请求和响应；改用下方白名单字段定位交易状态。
+        AlipayLogger.setNeedEnableLogger(false);
+    }
+
     private final AlipaySandboxProperties properties;
+
+    private void logResult(
+            String stage, SandboxRecharge order, String code, String subCode, String status) {
+        String safeStatus =
+                switch (status == null ? "" : status) {
+                    case "WAIT_BUYER_PAY", "TRADE_CLOSED", "TRADE_SUCCESS", "TRADE_FINISHED" ->
+                            status;
+                    case "" -> "N/A";
+                    default -> "UNKNOWN";
+                };
+        String orderNo = order.getOrderNo();
+        log.info(
+                "Alipay sandbox stage={} orderNo={} code={} subCode={} tradeStatus={}",
+                stage,
+                orderNo != null && orderNo.matches("[A-Za-z0-9_-]{1,64}") ? orderNo : "INVALID",
+                safeCode(code),
+                subCode == null || subCode.isBlank() ? "N/A" : safeCode(subCode),
+                safeStatus);
+    }
 
     protected AlipayClient client() throws AlipayApiException {
         if (!properties.ready()) throw new BizException(ErrorCode.PAYMENT_UNAVAILABLE);
@@ -102,7 +129,12 @@ public class AlipaySandboxGateway implements SandboxGateway {
                     case "SDK_RESPONSE_SIGNATURE" -> "支付宝响应验签失败，请检查支付宝公钥";
                     case "CHECK_ALIPAY_PUBLIC_KEY_ERROR" ->
                             "ALIPAY_SANDBOX_PUBLIC_KEY 实际为应用公钥，请替换为沙箱平台支付宝公钥";
-                    default -> ("PRECREATE".equals(stage) ? "支付宝沙箱预下单失败：" : "支付宝沙箱查单失败：") + safe;
+                    default ->
+                            switch (stage) {
+                                case "PRECREATE" -> "支付宝沙箱预下单失败：" + safe;
+                                case "PAGE_PAY" -> "支付宝沙箱网页付款链接生成失败：" + safe;
+                                default -> "支付宝沙箱查单失败：" + safe;
+                            };
                 };
         return new BizException(
                 ErrorCode.PAYMENT_UPSTREAM_ERROR,
@@ -110,7 +142,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
                 Map.of("stage", stage, "providerCode", safeCode(code), "providerSubCode", safe));
     }
 
-    private BizException sdkFailure(String stage, AlipayApiException exception) {
+    BizException sdkFailure(String stage, AlipayApiException exception) {
         Throwable cause = exception;
         for (int depth = 0; cause != null && depth < 8; depth++, cause = cause.getCause()) {
             if (cause instanceof java.net.SocketTimeoutException)
@@ -165,6 +197,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
         if (!properties.getNotifyUrl().isBlank()) request.setNotifyUrl(properties.getNotifyUrl());
         try {
             var response = client().execute(request);
+            logResult("PRECREATE", order, response.getCode(), response.getSubCode(), null);
             if (!response.isSuccess()
                     || response.getQrCode() == null
                     || response.getQrCode().isBlank())
@@ -176,6 +209,35 @@ public class AlipaySandboxGateway implements SandboxGateway {
         }
     }
 
+    /** 在支付宝官方页面输入账号与支付密码，服务端仅签名订单参数。 */
+    @Override
+    public String pagePay(SandboxRecharge order) {
+        var model = new AlipayTradePagePayModel();
+        model.setOutTradeNo(order.getOrderNo());
+        model.setTotalAmount(BigDecimal.valueOf(order.getAmountCents(), 2).toPlainString());
+        model.setSubject("GlucoPilot沙箱钱包充值（测试资金）");
+        model.setProductCode("FAST_INSTANT_TRADE_PAY");
+        model.setIntegrationType("PCWEB");
+        model.setTimeExpire(
+                order.getExpiresAt()
+                        .format(
+                                java.time.format.DateTimeFormatter.ofPattern(
+                                        "yyyy-MM-dd HH:mm:ss")));
+        var request = new AlipayTradePagePayRequest();
+        request.setBizModel(model);
+        if (!properties.getNotifyUrl().isBlank()) request.setNotifyUrl(properties.getNotifyUrl());
+        try {
+            // GET返回完整签名URL，生成链接不调用交易创建接口，也不采信浏览器回跳。
+            String url = client().pageExecute(request, "GET").getBody();
+            if (url == null || !url.startsWith(AlipaySandboxProperties.GATEWAY + "?"))
+                throw upstream("PAGE_PAY", "SDK_INVALID_RESPONSE", null);
+            logResult("PAGE_PAY", order, null, null, null);
+            return url;
+        } catch (AlipayApiException ex) {
+            throw sdkFailure("PAGE_PAY", ex);
+        }
+    }
+
     @Override
     public Proof query(SandboxRecharge order) {
         var model = new AlipayTradeQueryModel();
@@ -184,6 +246,13 @@ public class AlipaySandboxGateway implements SandboxGateway {
         request.setBizModel(model);
         try {
             var response = client().execute(request);
+            // code=10000 仅代表查单成功；是否付款必须看 trade_status，再由 settle 校验入账。
+            logResult(
+                    "QUERY",
+                    order,
+                    response.getCode(),
+                    response.getSubCode(),
+                    response.getTradeStatus());
             if (!response.isSuccess()) {
                 if ("ACQ.TRADE_NOT_EXIST".equals(response.getSubCode())) return null;
                 throw upstream("QUERY", response.getCode(), response.getSubCode());

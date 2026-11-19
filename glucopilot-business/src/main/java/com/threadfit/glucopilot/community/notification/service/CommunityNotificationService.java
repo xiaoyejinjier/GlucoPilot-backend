@@ -48,6 +48,8 @@ public class CommunityNotificationService {
                 follows = counts.getOrDefault("FOLLOW", 0L);
         var feedback = mapper.selectReportFeedbackCounts(viewer);
         long reports = ((Number) feedback.get("total")).longValue();
+        var consultation = mapper.selectConsultationCounts(viewer);
+        long consultations = ((Number) consultation.get("total")).longValue();
         return new Summary(
                 direct.unreadCount(),
                 likes,
@@ -55,11 +57,20 @@ public class CommunityNotificationService {
                 comments,
                 follows,
                 reports,
-                direct.unreadCount() + likes + collections + comments + follows + reports,
+                direct.unreadCount()
+                        + likes
+                        + collections
+                        + comments
+                        + follows
+                        + reports
+                        + consultations,
                 direct.latestMessageId(),
                 direct.latestSenderId(),
                 latest == 0 ? null : Long.toString(latest),
-                feedback.get("latest") == null ? null : feedback.get("latest").toString());
+                feedback.get("latest") == null ? null : feedback.get("latest").toString(),
+                consultations,
+                consultation.get("latest") == null ? null : consultation.get("latest").toString(),
+                mapper.selectConsultationNotices(viewer));
     }
 
     public PageResult<Notice> list(long viewer, String kind, PageQuery q) {

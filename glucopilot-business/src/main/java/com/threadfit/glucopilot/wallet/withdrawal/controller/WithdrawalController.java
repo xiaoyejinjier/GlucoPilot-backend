@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.*;
 import com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalOrder;
 import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalService;
+import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalTransferService;
 
 import jakarta.validation.Valid;
 
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/v1/wallet/withdrawals")
 public class WithdrawalController {
     private final WithdrawalService service;
+    private final WithdrawalTransferService transfers;
 
     @GetMapping("/summary")
     public ResponseEntity<ApiResponse<Summary>> summary() {
@@ -33,6 +35,18 @@ public class WithdrawalController {
     @PostMapping
     public ResponseEntity<ApiResponse<WithdrawalOrder>> apply(@Valid @RequestBody Apply form) {
         return ok(service.apply(RequestContext.requireUserId(), form));
+    }
+
+    @PostMapping("/{no}/recipient")
+    public ResponseEntity<ApiResponse<WithdrawalOrder>> recipient(
+            @PathVariable String no, @Valid @RequestBody Recipient form) {
+        return ok(service.recipient(RequestContext.requireUserId(), no, form));
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<ApiResponse<Void>> refresh() {
+        transfers.refreshOwn(RequestContext.requireUserId());
+        return ok(null);
     }
 
     private <T> ResponseEntity<ApiResponse<T>> ok(T data) {

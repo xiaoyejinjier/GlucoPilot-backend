@@ -103,6 +103,12 @@ public class UserReminderService {
         if ("MESSAGE".equals(kind)) {
             Long through = mapper.messageCursor(userId);
             if (through != null) mapper.readMessages(userId, through);
+        } else if ("CONSULTATION".equals(kind)) {
+            var cursors = mapper.consultationCursors(userId);
+            for (int offset = 0; offset < cursors.size(); offset += 200) {
+                mapper.readConsultations(
+                        userId, cursors.subList(offset, Math.min(offset + 200, cursors.size())));
+            }
         } else if (SOCIAL.contains(kind)) {
             Long through = mapper.noticeCursor(userId, kind);
             if (through != null) mapper.readNotices(userId, kind, through);
@@ -154,7 +160,9 @@ public class UserReminderService {
             }
         }
         for (String kind :
-                new String[] {"MESSAGE", "LIKE", "COLLECT", "COMMENT", "FOLLOW", "REPORT"}) {
+                new String[] {
+                    "MESSAGE", "LIKE", "COLLECT", "COMMENT", "FOLLOW", "REPORT", "CONSULTATION"
+                }) {
             readInformation(userId, kind);
         }
     }

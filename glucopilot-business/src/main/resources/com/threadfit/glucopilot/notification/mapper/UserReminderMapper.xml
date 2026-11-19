@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.threadfit.glucopilot.notification.mapper.UserReminderMapper">
+    <select id="consultationCursors" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationReadCursor">
+        SELECT c.id consultation_id,MAX(m.id) through_id
+        <include refid="com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.unreadScope"/>
+        GROUP BY c.id
+    </select>
+    <insert id="readConsultations">
+        INSERT INTO consultation_message_read(user_id,consultation_id,through_id) VALUES
+        <foreach collection="cursors" item="cursor" separator=",">
+            (#{user},#{cursor.consultationId},#{cursor.throughId})
+        </foreach>
+        ON DUPLICATE KEY UPDATE through_id=GREATEST(through_id,VALUES(through_id)),read_at=CURRENT_TIMESTAMP(3)
+    </insert>
     <select id="countUser" resultType="long">
         SELECT COUNT(*) FROM user_account WHERE id = #{userId} AND is_deleted = 0 AND account_status = 1
     </select>

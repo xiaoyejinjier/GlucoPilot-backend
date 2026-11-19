@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper">
+    <!-- 聊天、汇总、全部已读共用权限范围，避免第三方或失效医生读取健康交流。 -->
+    <sql id="scope">
+        FROM consultation_request c
+        JOIN user_account patient ON patient.id=c.patient_id AND patient.is_deleted=0 AND patient.account_status=1
+        LEFT JOIN consultation_doctor d ON d.user_id=c.doctor_user_id
+        WHERE c.doctor_user_id IS NOT NULL AND c.status IN ('IN_PROGRESS','REPORT_READY','CLOSED')
+          AND EXISTS(SELECT 1 FROM user_account viewer WHERE viewer.id=#{user} AND viewer.is_deleted=0 AND viewer.account_status=1)
+          AND (c.patient_id=#{user} OR (c.doctor_user_id=#{user} AND d.status='APPROVED'))
+    </sql>
+    <sql id="unreadScope">
+        FROM consultation_message m
+        JOIN consultation_request c ON c.id=m.consultation_id
+        JOIN user_account patient ON patient.id=c.patient_id AND patient.is_deleted=0 AND patient.account_status=1
+        LEFT JOIN consultation_doctor d ON d.user_id=c.doctor_user_id
+        LEFT JOIN consultation_message_read r ON r.user_id=#{user} AND r.consultation_id=c.id
+        WHERE c.doctor_user_id IS NOT NULL AND c.status IN ('IN_PROGRESS','REPORT_READY','CLOSED')
+          AND EXISTS(SELECT 1 FROM user_account viewer WHERE viewer.id=#{user} AND viewer.is_deleted=0 AND viewer.account_status=1)
+          AND (c.patient_id=#{user} OR (c.doctor_user_id=#{user} AND d.status='APPROVED'))
+          AND m.sender_id&lt;&gt;#{user} AND m.sender_id IN (c.patient_id,c.doctor_user_id)
+          AND m.id&gt;COALESCE(r.through_id,0)
+    </sql>
+    <select id="count" resultType="long">
+        SELECT COUNT(*) <include refid="scope"/>
+          AND EXISTS(SELECT 1 FROM consultation_message m WHERE m.consultation_id=c.id)
+    </select>
+    <select id="list" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationConversation">
+        SELECT c.id consultation_id,c.title,
+          CASE WHEN c.patient_id=#{user} THEN COALESCE(d.real_name,'接诊医生')
+               WHEN c.anonymous=1 THEN '匿名糖友'
+               ELSE COALESCE((SELECT p.nickname FROM user_profile p WHERE p.user_id=c.patient_id AND p.is_deleted=0),'患者') END peer_name,
+          CASE WHEN c.patient_id=#{user} THEN 'DOCTOR' ELSE 'PATIENT' END peer_role,
+          (SELECT m.content FROM consultation_message m WHERE m.consultation_id=c.id ORDER BY m.id DESC LIMIT 1) last_content,
+          (SELECT MAX(m.id) FROM consultation_message m WHERE m.consultation_id=c.id) last_message_id,
+          (SELECT m.created_at FROM consultation_message m WHERE m.consultation_id=c.id ORDER BY m.id DESC LIMIT 1) last_message_at,
+          (SELECT COUNT(*) FROM consultation_message m WHERE m.consultation_id=c.id AND m.sender_id&lt;&gt;#{user}
+            AND m.sender_id IN (c.patient_id,c.doctor_user_id)
+            AND m.id&gt;COALESCE((SELECT r.through_id FROM consultation_message_read r WHERE r.user_id=#{user} AND r.consultation_id=c.id),0)) unread_count
+        <include refid="scope"/>
+          AND EXISTS(SELECT 1 FROM consultation_message m WHERE m.consultation_id=c.id)
+        ORDER BY last_message_id DESC,c.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="countIncoming" resultType="long">
+        SELECT COUNT(*) <include refid="scope"/>
+          AND c.id=#{id} AND EXISTS(SELECT 1 FROM consultation_message m
+            WHERE m.consultation_id=c.id AND m.id=#{through} AND m.sender_id&lt;&gt;#{user}
+              AND m.sender_id IN (c.patient_id,c.doctor_user_id))
+    </select>
+    <!-- GREATEST保证旧窗口、重试请求不能将已读游标倒退。 -->
+    <insert id="read">
+        INSERT INTO consultation_message_read(user_id,consultation_id,through_id)
+        VALUES(#{user},#{id},#{through})
+        ON DUPLICATE KEY UPDATE through_id=GREATEST(through_id,VALUES(through_id)),read_at=CURRENT_TIMESTAMP(3)
+    </insert>
+</mapper>

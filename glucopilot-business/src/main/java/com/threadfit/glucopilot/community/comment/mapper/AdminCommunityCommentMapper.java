@@ -15,13 +15,15 @@ public interface AdminCommunityCommentMapper {
             @Param("status") String status,
             @Param("verdict") String verdict,
             @Param("hidden") Integer hidden,
-            @Param("keyword") String keyword);
+            @Param("keyword") String keyword,
+            @Param("newsId") Long newsId);
 
     List<Map<String, Object>> selectAdminComments(
             @Param("status") String status,
             @Param("verdict") String verdict,
             @Param("hidden") Integer hidden,
             @Param("keyword") String keyword,
+            @Param("newsId") Long newsId,
             @Param("limit") int limit,
             @Param("offset") long offset);
 }

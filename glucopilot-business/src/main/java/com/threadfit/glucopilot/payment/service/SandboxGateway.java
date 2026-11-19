@@ -8,6 +8,8 @@ import java.util.Map;
 public interface SandboxGateway {
     String precreate(SandboxRecharge order);
 
+    String pagePay(SandboxRecharge order);
+
     Proof query(SandboxRecharge order);
 
     boolean verify(Map<String, String> parameters);

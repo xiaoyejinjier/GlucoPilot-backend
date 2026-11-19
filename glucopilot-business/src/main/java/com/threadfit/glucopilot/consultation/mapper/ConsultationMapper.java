@@ -57,6 +57,7 @@ public interface ConsultationMapper {
             @Param("mine") boolean mine,
             @Param("assigned") boolean assigned,
             @Param("hideMine") boolean hideMine,
+            @Param("unclaimedOnly") boolean unclaimedOnly,
             @Param("topic") String topic);
 
     List<ConsultationRow> list(
@@ -64,6 +65,7 @@ public interface ConsultationMapper {
             @Param("mine") boolean mine,
             @Param("assigned") boolean assigned,
             @Param("hideMine") boolean hideMine,
+            @Param("unclaimedOnly") boolean unclaimedOnly,
             @Param("topic") String topic,
             @Param("limit") int limit,
             @Param("offset") long offset);

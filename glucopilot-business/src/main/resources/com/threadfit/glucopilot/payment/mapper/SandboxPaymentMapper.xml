@@ -16,8 +16,14 @@
         SELECT * FROM wallet_recharge_order WHERE order_no=#{orderNo} FOR UPDATE
     </select>
     <insert id="insert">
-        INSERT INTO wallet_recharge_order(order_no,user_id,amount_cents,client_request_id,sandbox_app_id,sandbox_seller_id,expires_at)
-        VALUES(#{order.orderNo},#{order.userId},#{order.amountCents},#{order.clientRequestId},#{order.sandboxAppId},#{order.sandboxSellerId},#{order.expiresAt})
+        INSERT INTO wallet_recharge_order(
+            order_no, user_id, amount_cents, client_request_id,
+            sandbox_app_id, sandbox_seller_id, expires_at, payment_mode
+        )
+        VALUES(
+            #{order.orderNo}, #{order.userId}, #{order.amountCents}, #{order.clientRequestId},
+            #{order.sandboxAppId}, #{order.sandboxSellerId}, #{order.expiresAt}, #{order.paymentMode}
+        )
     </insert>
     <update id="saveQr">
         UPDATE wallet_recharge_order SET qr_code=#{qr}

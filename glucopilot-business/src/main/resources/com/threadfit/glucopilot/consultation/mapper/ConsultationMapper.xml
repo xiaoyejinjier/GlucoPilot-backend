@@ -63,6 +63,7 @@
         <if test="mine">AND c.patient_id=#{viewer}</if>
         <if test="assigned">AND c.doctor_user_id=#{viewer}</if>
         <if test="hideMine">AND c.patient_id&lt;&gt;#{viewer}</if>
+        <if test="unclaimedOnly">AND c.status='WAITING' AND c.doctor_user_id IS NULL</if>
         <if test="topic != null">AND c.topic=#{topic}</if>
     </sql>
     <select id="count" resultType="long">SELECT COUNT(*) <include refid="caseScope"/></select>

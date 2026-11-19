@@ -107,10 +107,27 @@ class ConsultationControllerTest {
                         .andReturn()
                         .getResponse()
                         .getStatus());
-        verify(service).list(eq(1L), eq(false), eq(false), eq(true), isNull(), any());
+        verify(service).list(eq(1L), eq(false), eq(false), eq(true), eq(false), isNull(), any());
         assertEquals(
                 200,
                 web.perform(get("/api/v1/consultations")).andReturn().getResponse().getStatus());
-        verify(service).list(eq(1L), eq(false), eq(false), eq(false), isNull(), any());
+        verify(service).list(eq(1L), eq(false), eq(false), eq(false), eq(false), isNull(), any());
+    }
+
+    @Test
+    void unclaimedFilterUsesAuthenticatedIdentityAndCanCombineTopicAndHideMine() throws Exception {
+        RequestContext.setUserId(2L);
+        assertEquals(
+                200,
+                web.perform(
+                                get("/api/v1/consultations")
+                                        .param("unclaimedOnly", "true")
+                                        .param("hideMine", "true")
+                                        .param("topic", "DIET")
+                                        .param("viewer", "999"))
+                        .andReturn()
+                        .getResponse()
+                        .getStatus());
+        verify(service).list(eq(2L), eq(false), eq(false), eq(true), eq(true), eq("DIET"), any());
     }
 }

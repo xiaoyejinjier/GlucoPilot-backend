@@ -130,7 +130,8 @@ class SandboxRechargeTest {
                     "sandbox_seller_id VARCHAR(32)",
                     "qr_code VARCHAR(2048)",
                     "expires_at TIMESTAMP",
-                    "last_query_at TIMESTAMP"
+                    "last_query_at TIMESTAMP",
+                    "payment_mode VARCHAR(8) NOT NULL DEFAULT 'QR'"
                 }) ddl("ALTER TABLE wallet_recharge_order ADD " + column);
         orders = context.getBean(SandboxRechargeService.class);
         payments = context.getBean(SandboxPaymentService.class);
@@ -192,6 +193,61 @@ class SandboxRechargeTest {
                 BizException.class,
                 () -> orders.create(2, new WalletDtos.RechargeRequest(1000, "request_002")));
         assertThrows(BizException.class, () -> orders.owned(2, no));
+    }
+
+    @Test
+    void pageOrdersKeepTheirModeAndGenerateLinksWithoutQrOrCrediting() {
+        var request = new WalletDtos.RechargeRequest(1000, "page_request_001", "PAGE");
+        var order = orders.create(1, request);
+        String no = order.getOrderNo();
+        assertEquals("PAGE", order.getPaymentMode());
+        assertEquals(no, orders.create(1, request).getOrderNo());
+        assertThrows(
+                BizException.class,
+                () ->
+                        orders.create(
+                                1, new WalletDtos.RechargeRequest(1000, "page_request_001", "QR")));
+        assertThrows(BizException.class, () -> payments.pay(2, no));
+        when(gateway.pagePay(any())).thenReturn("https://sandbox.example.test/payment");
+        var payment = payments.pay(1, no);
+        assertEquals("PAGE", payment.paymentMode());
+        assertEquals("https://sandbox.example.test/payment", payment.pageUrl());
+        assertNull(payment.qrCode());
+        assertNull(payment.pngBase64());
+        assertEquals(0, balance());
+        payments.pay(1, no);
+        verify(gateway, times(2)).pagePay(any());
+        verify(gateway, never()).precreate(any());
+        orders.settle(paid(no, "page_trade_001"));
+        orders.settle(paid(no, "page_trade_001"));
+        assertEquals(1000, balance());
+        var paid = payments.pay(1, no);
+        assertEquals("PAID", paid.status());
+        assertEquals("PAGE", paid.paymentMode());
+        assertNull(paid.pageUrl());
+        verify(gateway, times(2)).pagePay(any());
+    }
+
+    @Test
+    void expiredClosedAndInvalidModeCannotGeneratePagePayment() {
+        var order =
+                orders.create(1, new WalletDtos.RechargeRequest(1000, "page_expired_001", "PAGE"));
+        jdbc.update(
+                "UPDATE wallet_recharge_order SET expires_at=TIMESTAMP '2020-01-01 00:00:00' WHERE"
+                    + " order_no=?",
+                order.getOrderNo());
+        assertThrows(BizException.class, () -> payments.pay(1, order.getOrderNo()));
+        jdbc.update(
+                "UPDATE wallet_recharge_order SET status='CLOSED' WHERE order_no=?",
+                order.getOrderNo());
+        assertNull(payments.pay(1, order.getOrderNo()).pageUrl());
+        assertThrows(
+                BizException.class,
+                () ->
+                        orders.create(
+                                1,
+                                new WalletDtos.RechargeRequest(1000, "page_invalid_001", "OTHER")));
+        verifyNoInteractions(gateway);
     }
 
     @Test
@@ -294,6 +350,27 @@ class SandboxRechargeTest {
         payments.pay(1, no);
         verify(gateway, times(1)).precreate(any());
         assertThrows(BizException.class, () -> payments.pay(2, no));
+    }
+
+    @Test
+    void successfulQueryWithWaitingStatusDoesNotCreditWallet() {
+        String no = create("waiting_query_001");
+        when(gateway.query(any()))
+                .thenReturn(
+                        new Proof(
+                                no,
+                                "trade_waiting",
+                                "WAIT_BUYER_PAY",
+                                new BigDecimal("10.00"),
+                                "2026000000000001",
+                                "2088000000000001"));
+        payments.refresh(1, no);
+        assertEquals("PENDING", orders.owned(1, no).getStatus());
+        assertEquals(0, balance());
+        assertEquals(
+                0,
+                jdbc.queryForObject("SELECT COUNT(*) FROM wallet_sandbox_ledger", Integer.class));
+        assertNull(orders.owned(1, no).getProviderTradeNo());
     }
 
     @Test

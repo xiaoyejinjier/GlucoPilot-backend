@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.wallet.withdrawal.service;
 import com.threadfit.glucopilot.common.api.*;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.consultation.mapper.ConsultationMapper;
+import com.threadfit.glucopilot.payment.config.AlipaySandboxProperties;
 import com.threadfit.glucopilot.payment.mapper.SandboxPaymentMapper;
 import com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.*;
 import com.threadfit.glucopilot.wallet.withdrawal.entity.*;
@@ -22,6 +23,7 @@ public class WithdrawalService {
     private final WithdrawalMapper mapper;
     private final SandboxPaymentMapper wallets;
     private final ConsultationMapper consultations;
+    private final AlipaySandboxProperties sandbox;
 
     public LocalDate today() {
         return LocalDate.now(ZoneId.of("Asia/Shanghai"));
@@ -41,13 +43,14 @@ public class WithdrawalService {
                 eligible ? available : 0,
                 balance == null ? 0 : balance.getFrozenCents(),
                 5,
-                "配置的节假日/调休优先，未配置按周一至周五");
+                "配置的节假日/调休优先，未配置按周一至周五",
+                sandbox.transferReady());
     }
 
     @Transactional
     public WithdrawalOrder apply(long user, Apply form) {
         if (form.amountCents() == null
-                || form.amountCents() < 1
+                || form.amountCents() < 10
                 || form.amountCents() > 100000000
                 || form.clientRequestId() == null
                 || !form.clientRequestId().matches("[A-Za-z0-9_-]{8,64}"))
@@ -55,9 +58,12 @@ public class WithdrawalService {
         if (wallets.lockActivatedUser(user) == null) throw bad("请先开通钱包");
         var previous = mapper.byRequest(user, form.clientRequestId());
         if (previous != null) {
-            if (!previous.getAmountCents().equals(form.amountCents())) throw conflict();
+            if (!previous.getAmountCents().equals(form.amountCents())
+                    || !Objects.equals(previous.getPayeeUserId(), form.payeeUserId()))
+                throw conflict();
             return previous;
         }
+        validatePayee(form.payeeUserId());
         var doctor = consultations.doctor(user);
         if (doctor == null || !"APPROVED".equals(doctor.getStatus()))
             throw new BizException(ErrorCode.FORBIDDEN, "仅审核通过的医生可申请提现");
@@ -67,7 +73,14 @@ public class WithdrawalService {
         if (form.amountCents() > available) throw bad("可提现问诊收入不足");
         String no = "WD" + UUID.randomUUID().toString().replace("-", "");
         // 先创建包含服务端金额和身份的订单，再冻结资金；任一步失败整体回滚。
-        mapper.insert(no, user, form.amountCents(), form.clientRequestId());
+        mapper.insert(
+                no,
+                user,
+                form.amountCents(),
+                form.clientRequestId(),
+                form.payeeUserId(),
+                sandbox.getAppId(),
+                sandbox.getSellerId());
         if (mapper.freeze(user, form.amountCents()) != 1) throw conflict();
         mapper.event(no, "FREEZE", form.amountCents(), mapper.balance(user, true), user);
         return mapper.find(no);
@@ -131,22 +144,23 @@ public class WithdrawalService {
         throw bad("工作日历配置异常，请联系管理员");
     }
 
+    private void validatePayee(String payee) {
+        if (!sandbox.transferReady()) throw bad("支付宝沙箱转账尚未配置");
+        if (payee == null
+                || !payee.matches("2088[0-9]{12,28}")
+                || payee.equals(sandbox.getSellerId())) throw bad("请填写不同于付款商家的支付宝沙箱买家UID");
+    }
+
     @Transactional
-    public WithdrawalOrder complete(String no, Long ops) {
+    public WithdrawalOrder recipient(long user, String no, Recipient form) {
         var order = mapper.lock(no);
-        if (order == null) throw new BizException(ErrorCode.NOT_FOUND);
-        if ("COMPLETED".equals(order.getStatus())) return order;
-        if (!"APPROVED".equals(order.getStatus())
-                || order.getExpectedPayoutDate() == null
-                || order.getExpectedPayoutDate().isAfter(today())) throw bad("尚未到达审核后的预计发放日期");
-        var balance = mapper.balance(order.getUserId(), true);
-        if (balance == null || balance.getFrozenCents() < order.getAmountCents()) throw conflict();
-        // 仅扣减沙箱冻结额并生成明确的模拟流水；不调用真实支付宝转账。
-        if (mapper.release(order.getUserId(), order.getAmountCents(), false) != 1
-                || mapper.complete(no, "SIM" + UUID.randomUUID().toString().replace("-", "")) != 1)
-            throw conflict();
-        mapper.event(
-                no, "PAYOUT", order.getAmountCents(), mapper.balance(order.getUserId(), true), ops);
+        if (order == null || order.getUserId() != user) throw new BizException(ErrorCode.NOT_FOUND);
+        if (!Set.of("PENDING", "APPROVED").contains(order.getStatus())
+                || order.getTransferStartedAt() != null) throw bad("该提现已开始出款或已结束，不能修改收款账号");
+        validatePayee(form.payeeUserId());
+        if (mapper.recipient(no, form.payeeUserId(), sandbox.getAppId(), sandbox.getSellerId())
+                != 1) throw conflict();
+        mapper.transferLog(no, "RECIPIENT", "NOT_STARTED", null, user);
         return mapper.find(no);
     }
 

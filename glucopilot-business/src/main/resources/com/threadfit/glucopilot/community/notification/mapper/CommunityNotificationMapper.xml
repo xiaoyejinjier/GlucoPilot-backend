@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.threadfit.glucopilot.community.notification.mapper.CommunityNotificationMapper">
+    <!-- 连续发送的多条消息聚合为一个问诊提醒，COUNT仅用于未读角标。 -->
+    <select id="selectConsultationNotices" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationUnreadNotice">
+        SELECT c.id consultation_id,c.title,
+          CASE WHEN c.patient_id=#{user} THEN COALESCE(d.real_name,'接诊医生')
+               WHEN c.anonymous=1 THEN '匿名糖友'
+               ELSE COALESCE((SELECT p.nickname FROM user_profile p WHERE p.user_id=c.patient_id AND p.is_deleted=0),'患者') END peer_name,
+          MAX(m.id) last_message_id,COUNT(*) unread_count
+        <include refid="com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.unreadScope"/>
+        GROUP BY c.id,c.title,c.patient_id,c.anonymous,d.real_name
+        ORDER BY last_message_id DESC,c.id DESC LIMIT 20
+    </select>
+    <select id="selectConsultationCounts" resultType="map">
+        SELECT COUNT(*) total,MAX(m.id) latest
+        <include refid="com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.unreadScope"/>
+    </select>
     <select id="countOwnedNoticeId" resultType="long">
         SELECT COUNT(*) FROM community_notification WHERE recipient_id = #{viewer} AND id = #{id}
     </select>

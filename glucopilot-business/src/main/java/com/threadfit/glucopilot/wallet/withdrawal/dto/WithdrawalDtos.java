@@ -8,8 +8,11 @@ public final class WithdrawalDtos {
     private WithdrawalDtos() {}
 
     public record Apply(
-            @NotNull @Min(1) @Max(100000000) Integer amountCents,
-            @NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{8,64}") String clientRequestId) {}
+            @NotNull @Min(10) @Max(100000000) Integer amountCents,
+            @NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{8,64}") String clientRequestId,
+            @NotBlank @Pattern(regexp = "2088[0-9]{12,28}") String payeeUserId) {}
+
+    public record Recipient(@NotBlank @Pattern(regexp = "2088[0-9]{12,28}") String payeeUserId) {}
 
     public record Review(
             @NotBlank @Pattern(regexp = "APPROVED|REJECTED") String status,
@@ -22,7 +25,8 @@ public final class WithdrawalDtos {
             long availableCents,
             long frozenCents,
             int businessDays,
-            String calendarRule) {}
+            String calendarRule,
+            boolean transferEnabled) {}
 
     public record CalendarDay(
             @NotNull LocalDate date, @NotNull Boolean workingDay, @Size(max = 100) String note) {}

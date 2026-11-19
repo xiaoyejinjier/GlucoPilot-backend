@@ -36,11 +36,18 @@ public class ConsultationController {
             @RequestParam(defaultValue = "false") boolean mine,
             @RequestParam(defaultValue = "false") boolean assigned,
             @RequestParam(defaultValue = "false") boolean hideMine,
+            @RequestParam(defaultValue = "false") boolean unclaimedOnly,
             @RequestParam(required = false) String topic,
             @Valid PageQuery page) {
         return ok(
                 service.list(
-                        RequestContext.requireUserId(), mine, assigned, hideMine, topic, page));
+                        RequestContext.requireUserId(),
+                        mine,
+                        assigned,
+                        hideMine,
+                        unclaimedOnly,
+                        topic,
+                        page));
     }
 
     @GetMapping("/consultations/{id}")

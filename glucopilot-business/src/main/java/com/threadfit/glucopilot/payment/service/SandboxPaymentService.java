@@ -37,9 +37,23 @@ public class SandboxPaymentService {
                     order.getAmountCents(),
                     null,
                     null,
-                    order.getExpiresAt());
+                    order.getExpiresAt(),
+                    order.getPaymentMode(),
+                    null);
         if (order.getExpiresAt() == null || !order.getExpiresAt().isAfter(LocalDateTime.now()))
             throw new BizException(ErrorCode.CONFLICT, "支付码已过期，请先查询付款结果后重新下单");
+        if ("PAGE".equals(order.getPaymentMode())) {
+            // SDK只生成签名跳转链接。网页是否打开、是否付款均不作为入账依据。
+            return new Payment(
+                    orderNo,
+                    order.getStatus(),
+                    order.getAmountCents(),
+                    null,
+                    null,
+                    order.getExpiresAt(),
+                    "PAGE",
+                    gateway.pagePay(order));
+        }
         if (order.getQrCode() == null) {
             String qr = gateway.precreate(order);
             mapper.saveQr(orderNo, qr);

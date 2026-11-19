@@ -38,7 +38,19 @@ public class AdminCommunityCommentService {
      */
     public PageResult<AdminComment> adminComments(
             String status, String verdict, Integer hidden, String keyword, PageQuery q) {
+        return adminComments(status, verdict, hidden, keyword, null, q);
+    }
+
+    public PageResult<AdminComment> adminComments(
+            String status,
+            String verdict,
+            Integer hidden,
+            String keyword,
+            Long newsId,
+            PageQuery q) {
         page(q);
+        if (newsId != null && newsId <= 0)
+            throw new BizException(ErrorCode.BAD_REQUEST, "文章编号必须为正整数");
         if (status != null && !status.isBlank()) {
             if (!Set.of("SKIPPED", "PENDING", "REVIEWING", "DONE").contains(status))
                 throw new BizException(ErrorCode.BAD_REQUEST, "审核状态不合法");
@@ -57,7 +69,7 @@ public class AdminCommunityCommentService {
         }
         long total =
                 mapper.countAdminComments(
-                        status, verdict, hidden, keyword == null ? null : keyword.trim());
+                        status, verdict, hidden, keyword == null ? null : keyword.trim(), newsId);
 
         var rows =
                 mapper
@@ -66,6 +78,7 @@ public class AdminCommunityCommentService {
                                 verdict,
                                 hidden,
                                 keyword == null ? null : keyword.trim(),
+                                newsId,
                                 q.getPageSize(),
                                 q.offset())
                         .stream()

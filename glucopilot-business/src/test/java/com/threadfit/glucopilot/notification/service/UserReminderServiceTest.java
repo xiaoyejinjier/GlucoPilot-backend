@@ -76,6 +76,7 @@ public class UserReminderServiceTest {
                                 "db/migration/V63__admin_reminder_reads_and_measurement_snapshots.sql"));
         migrationConnection = ds.getConnection();
         migration.populate(migrationConnection);
+        com.threadfit.glucopilot.community.shared.support.CommunityTestSchema.applyConsultationReminderSchema(migrationConnection);
         jdbc.update("INSERT INTO user_account(id) VALUES(1),(2)");
         jdbc.update(
                 "INSERT INTO glucose_record"
@@ -89,6 +90,7 @@ public class UserReminderServiceTest {
         var config = new MybatisConfiguration();
         config.setMapUnderscoreToCamelCase(true);
         config.addMapper(UserReminderMapper.class);
+        config.addMapper(com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.class);
         var factory = new MybatisSqlSessionFactoryBean();
         factory.setDataSource(ds);
         factory.setConfiguration(config);
@@ -110,6 +112,25 @@ public class UserReminderServiceTest {
         var page = new PageQuery();
         page.setPageSize(3);
         return page;
+    }
+
+    @Test
+    void consultationBulkReadUsesPerConversationSnapshotAndDoesNotConsumeLaterMessages() {
+        jdbc.update("INSERT INTO consultation_doctor(user_id,status) VALUES(2,'APPROVED')");
+        jdbc.update("INSERT INTO consultation_request(id,patient_id,doctor_user_id,status) VALUES(1,1,2,'IN_PROGRESS'),(2,2,1,'WAITING')");
+        jdbc.update("INSERT INTO consultation_message(id,consultation_id,sender_id) VALUES(1,1,2),(2,1,1),(3,2,2)");
+        var snapshot=mapper.consultationCursors(1);
+        assertEquals(1,snapshot.size());
+        jdbc.update("INSERT INTO consultation_message(id,consultation_id,sender_id) VALUES(4,1,2)");
+        mapper.readConsultations(1,snapshot);
+        assertEquals(4L,mapper.consultationCursors(1).getFirst().getThroughId());
+        tx.executeWithoutResult(status->service.readInformation(1,"CONSULTATION"));
+        assertTrue(mapper.consultationCursors(1).isEmpty());
+        assertEquals(1,mapper.consultationCursors(2).size());
+        jdbc.update("INSERT INTO consultation_message(id,consultation_id,sender_id) VALUES(5,1,2)");
+        tx.executeWithoutResult(status->service.readAll(1,DAY));
+        assertTrue(mapper.consultationCursors(1).isEmpty());
+        assertEquals(1,mapper.consultationCursors(2).size());
     }
 
     @Test

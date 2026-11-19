@@ -11,14 +11,15 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class WithdrawalPayoutJob {
     private final WithdrawalService service;
+    private final WithdrawalTransferService transfers;
 
     @Scheduled(initialDelay = 60000, fixedDelay = 60000)
     public void run() {
         for (String no : service.due()) {
             try {
-                service.complete(no, null);
+                transfers.payout(no, null);
             } catch (RuntimeException error) {
-                log.warn("沙箱提现发放未完成，将在下一轮重试：{}", error.getClass().getSimpleName());
+                log.warn("支付宝沙箱提现待核对，将在下一轮查单：{}", error.getClass().getSimpleName());
             }
         }
     }

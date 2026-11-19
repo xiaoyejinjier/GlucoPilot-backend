@@ -10,6 +10,15 @@ import java.util.List;
 
 @Mapper
 public interface UserReminderMapper {
+    List<com.threadfit.glucopilot.consultation.entity.ConsultationReadCursor> consultationCursors(
+            @Param("user") long user);
+
+    int readConsultations(
+            @Param("user") long user,
+            @Param("cursors")
+                    List<com.threadfit.glucopilot.consultation.entity.ConsultationReadCursor>
+                            cursors);
+
     long countUser(@Param("userId") long userId);
 
     List<UserReminderRow> alerts(@Param("userId") long userId, @Param("date") LocalDate date);

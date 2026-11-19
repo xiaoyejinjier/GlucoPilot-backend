@@ -21,6 +21,12 @@ public class AlipaySandboxProperties {
     private String publicKey = "";
     private String sellerId = "";
     private String notifyUrl = "";
+    private String transferSceneName = "业务结算";
+    private String transferSceneInfoType = "结算款项名称";
+
+    public boolean transferReady() {
+        return ready() && !transferSceneName.isBlank() && !transferSceneInfoType.isBlank();
+    }
 
     public boolean ready() {
         return enabled

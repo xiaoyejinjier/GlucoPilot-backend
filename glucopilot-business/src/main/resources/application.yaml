@@ -433,3 +433,5 @@ payments:
       public-key: ${ALIPAY_SANDBOX_PUBLIC_KEY:}
       seller-id: ${ALIPAY_SANDBOX_SELLER_ID:}
       notify-url: ${ALIPAY_SANDBOX_NOTIFY_URL:}
+      transfer-scene-name: ${ALIPAY_SANDBOX_TRANSFER_SCENE_NAME:业务结算}
+      transfer-scene-info-type: ${ALIPAY_SANDBOX_TRANSFER_SCENE_INFO_TYPE:结算款项名称}

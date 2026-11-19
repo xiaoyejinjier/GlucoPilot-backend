@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.doctor.service.DoctorPortalService;
 import com.threadfit.glucopilot.wallet.withdrawal.dto.WithdrawalDtos.*;
 import com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalOrder;
 import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalService;
+import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalTransferService;
 
 import jakarta.validation.Valid;
 
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 public class DoctorWithdrawalController {
     private final DoctorPortalService doctors;
     private final WithdrawalService service;
+    private final WithdrawalTransferService transfers;
 
     private long viewer() {
         return doctors.doctorId(RequestContext.requireOpsId());
@@ -41,6 +43,17 @@ public class DoctorWithdrawalController {
     @PostMapping
     public ResponseEntity<ApiResponse<WithdrawalOrder>> apply(@Valid @RequestBody Apply form) {
         return ok(service.apply(viewer(), form));
+    }
+
+    @PostMapping("/{no}/recipient")
+    public ResponseEntity<ApiResponse<WithdrawalOrder>> recipient(@PathVariable String no,@Valid @RequestBody Recipient form) {
+        return ok(service.recipient(viewer(),no,form));
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<ApiResponse<Void>> refresh() {
+        transfers.refreshOwn(viewer());
+        return ok(null);
     }
 
     private <T> ResponseEntity<ApiResponse<T>> ok(T data) {

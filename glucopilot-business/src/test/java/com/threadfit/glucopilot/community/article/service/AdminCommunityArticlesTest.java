@@ -102,6 +102,7 @@ class AdminCommunityArticlesTest {
         }
         CommunityTestSchema.applyDraftMigration(migrationConnection);
         CommunityTestSchema.applyModerationMigration(migrationConnection);
+        CommunityTestSchema.applyConsultationReminderSchema(migrationConnection);
         jdbc.update("INSERT INTO user_account(id) VALUES(2)");
         jdbc.update("INSERT INTO user_profile(user_id,nickname) VALUES(2,'用户小明')");
         article(10, "官方已发布", 0, 1);

@@ -77,6 +77,7 @@ class CommunityServiceTest {
         replyMigration.populate(migrationConnection);
         CommunityTestSchema.applyDraftMigration(migrationConnection);
         CommunityTestSchema.applyModerationMigration(migrationConnection);
+        CommunityTestSchema.applyConsultationReminderSchema(migrationConnection);
         jdbc.execute("ALTER TABLE cms_news ADD community_managed INT DEFAULT 0");
         for (long id = 1; id <= 4; id++) {
             jdbc.update(
@@ -102,6 +103,24 @@ class CommunityServiceTest {
 
     private PageQuery page() {
         return new PageQuery();
+    }
+
+    @Test
+    void consultationMessagesContributeToGlobalSummaryAndDisappearOnlyForTheirReader() {
+        jdbc.update("INSERT INTO consultation_request(id,patient_id,doctor_user_id,status) VALUES(7,1,2,'IN_PROGRESS')");
+        jdbc.update("INSERT INTO consultation_doctor(user_id,status) VALUES(2,'APPROVED')");
+        jdbc.update("INSERT INTO consultation_message(id,consultation_id,sender_id) VALUES(10,7,2),(11,7,1)");
+        var notices=new CommunityNotificationService(CommunityTestMappers.mapper(jdbc,CommunityNotificationMapper.class),service);
+        assertEquals(1,notices.summary(1).consultations());
+        assertEquals("10",notices.summary(1).latestConsultationMessageId());
+        assertEquals(1,notices.summary(1).consultationConversations().size());
+        assertEquals(7L,notices.summary(1).consultationConversations().getFirst().getConsultationId());
+        assertEquals(1,notices.summary(1).total());
+        assertEquals(1,notices.summary(2).consultations());
+        assertEquals(0,notices.summary(3).consultations());
+        jdbc.update("INSERT INTO consultation_message_read(user_id,consultation_id,through_id) VALUES(1,7,10)");
+        assertEquals(0,notices.summary(1).consultations());
+        assertEquals(1,notices.summary(2).consultations());
     }
 
     @Test

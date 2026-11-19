@@ -32,7 +32,11 @@ public final class CommunityNotificationDtos {
             String latestMessageId,
             String latestSenderId,
             String latestNotificationId,
-            String latestReportId) {}
+            String latestReportId,
+            long consultations,
+            String latestConsultationMessageId,
+            java.util.List<com.threadfit.glucopilot.consultation.entity.ConsultationUnreadNotice>
+                    consultationConversations) {}
 
     public record Read(String kind, String throughId) {}
 }

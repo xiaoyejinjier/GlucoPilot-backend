@@ -21,7 +21,32 @@ public interface WithdrawalMapper {
             @Param("no") String no,
             @Param("user") long user,
             @Param("amount") int amount,
-            @Param("key") String key);
+            @Param("key") String key,
+            @Param("payee") String payee,
+            @Param("app") String app,
+            @Param("seller") String seller);
+
+    int recipient(
+            @Param("no") String no,
+            @Param("payee") String payee,
+            @Param("app") String app,
+            @Param("seller") String seller);
+
+    int claimTransfer(@Param("no") String no);
+
+    int transferResult(
+            @Param("no") String no, @Param("state") String state, @Param("code") String code);
+
+    int transferFailed(@Param("no") String no);
+
+    int transferLog(
+            @Param("no") String no,
+            @Param("action") String action,
+            @Param("state") String state,
+            @Param("code") String code,
+            @Param("actor") Long actor);
+
+    List<String> activeTransfers(@Param("user") long user);
 
     int freeze(@Param("user") long user, @Param("amount") int amount);
 

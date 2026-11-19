@@ -83,6 +83,16 @@ public class ChatContextRecorderImpl implements ChatContextRecorder {
                 row.setTokenEstimate(Math.max(shard.tokenEstimate(), 0));
                 row.setModelCode(model);
                 row.setSortNo(shard.sortNo());
+                // V78：窗口账本只挂在历史分片上（其余分片的这两个字段是 null，落库也保持 NULL）。
+                // 明确写 null 而不是依赖默认值：将来若有人给这两列加默认值，这里的语义是"不适用"，
+                // 不该被默认值污染成 false/0
+                if (shard.windowShifted() != null) {
+                    row.setWindowShifted(shard.windowShifted());
+                    row.setWindowMessages(shard.windowMessages());
+                } else {
+                    row.setWindowShifted(null);
+                    row.setWindowMessages(null);
+                }
                 // created_by / updated_by 由 MetaObjectHandler 统一填充（ops 优先、其次 C 端用户），
                 // 但这条链路上拿不到 RequestContext（响应式回调线程），所以显式写 userId，
                 // 否则会落成 0，分片行就无法回答"这一轮是谁的"

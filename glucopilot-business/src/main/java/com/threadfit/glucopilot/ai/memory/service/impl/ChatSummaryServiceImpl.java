@@ -241,7 +241,12 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
                     + minMessages + " 条或 " + minChars + " 字的门";
         }
         int minIntervalSeconds = memory.getSummaryMinIntervalSeconds();
-        if (minIntervalSeconds > 0) {
+        // 窗口即将溢出让位（2026-11-19 与需求方确认）：装配器给"摘要指针之后的未摘要消息"留了必留带，
+        // 但它自身受 window-messages 与预算两道上限约束。一旦 pending 逼近窗口容量，
+        // 再守 60 秒间隔就会让必留带被挤掉（= 空洞）。此时按"数据优先"立刻摘要：
+        // 代价只是突发连发时摘要调用比 60 秒一次更频繁，比丢消息便宜得多。
+        boolean urgent = isWindowAboutToOverflow(candidates.size(), memory);
+        if (minIntervalSeconds > 0 && !urgent) {
             java.time.LocalDateTime last = chatSessionMapper.selectSummaryUpdatedAt(sessionId);
             if (last != null) {
                 long elapsed = java.time.Duration.between(last, java.time.LocalDateTime.now()).getSeconds();
@@ -252,6 +257,24 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
             }
         }
         return null;
+    }
+
+    /**
+     * 候选条数是否已经逼近窗口容量（逼近即让间隔门让位）。
+     *
+     * <p>判据推导：「未摘要条数 = 候选 + keep-recent」必须装得进 {@code window-messages}，
+     * 否则装配器就要么丢必留带（空洞）、要么超条数上限。留 1 条余量给"这一轮刚进来的消息"，
+     * 因此阈值取 {@code windowMessages − keepRecent − 1}。
+     *
+     * <p>配置本身不自洽时（阈值 ≤0，例如 window 比 keep 还小）返回 true：宁可多调一次摘要，
+     * 也不要在自相矛盾的配置下持续丢消息。
+     */
+    private static boolean isWindowAboutToOverflow(int pendingMessages, AIProperties.MemoryProperties memory) {
+        int threshold = memory.getWindowMessages() - memory.getKeepRecentMessages() - 1;
+        if (threshold <= 0) {
+            return true;
+        }
+        return pendingMessages >= threshold;
     }
 
     /**

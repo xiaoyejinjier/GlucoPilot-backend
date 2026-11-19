@@ -63,6 +63,7 @@ class ChatHistoryAssemblerTest {
     @Test
     void 条数上限生效时保留最近若干条() {
         properties.getMemory().setWindowMessages(5);
+        properties.getMemory().setKeepRecentMessages(2);
         properties.getMemory().setMaxPromptTokens(1_000_000);
 
         ChatHistoryAssembler.Assembled result = assembler.assemble(
@@ -72,6 +73,42 @@ class ChatHistoryAssemblerTest {
         assertEquals("m15", result.messages().get(0).getText().substring(0, 3));
         assertEquals(15, result.stats().droppedHistory());
         assertFalse(result.stats().budgetExceeded());
+    }
+
+    @Test
+    void 必留带可以突破条数上限() {
+        // 摘要指针之后还有 8 条没进摘要，而窗口只允许 5 条：
+        // 必留带优先——宁可发 8 条，也不让这 8 条既不在摘要也不在窗口（"空洞"）
+        properties.getMemory().setWindowMessages(5);
+        properties.getMemory().setKeepRecentMessages(2);
+        properties.getMemory().setMaxPromptTokens(1_000_000);
+
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                history(20, 2), List.of(new UserMessage("本轮")), null, List.of(), List.of(), 0, 8);
+
+        assertEquals(9, result.messages().size(), "8 条必留历史 + 本轮 1 条");
+        assertEquals(8, result.stats().keptHistory());
+        assertEquals(8, result.stats().protectedHistory());
+        assertEquals(0, result.stats().protectedDropped());
+        assertFalse(result.stats().budgetExceeded());
+    }
+
+    @Test
+    void 预算不足时必留带也会被截断并计数() {
+        // 预算优先：必留带（8 条）装不下时按预算截断，并把丢掉的条数交给调用方打 WARN。
+        // 这里把固定开销设到几乎吃满预算，保证连必留带都装不下。
+        properties.getMemory().setWindowMessages(50);
+        properties.getMemory().setKeepRecentMessages(2);
+        properties.getMemory().setMaxPromptTokens(120);
+
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                history(20, 2), List.of(new UserMessage("本轮")), null, List.of(), List.of(), 118, 8);
+
+        assertTrue(result.stats().protectedDropped() > 0, "预算装不下 8 条必留消息时应记下丢弃条数");
+        // protectedHistory 记的是「要求的必留带条数」，被预算吃掉的部分单独计数
+        assertEquals(8, result.stats().protectedHistory());
+        assertEquals(8, result.stats().keptHistory() + result.stats().protectedDropped());
+        assertTrue(result.stats().keptHistory() < 8);
     }
 
     @Test

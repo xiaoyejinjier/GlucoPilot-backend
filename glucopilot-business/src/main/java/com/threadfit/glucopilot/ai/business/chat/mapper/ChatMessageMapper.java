@@ -118,6 +118,20 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
     List<ChatMessage> selectRecentBySession(@Param("sessionId") Long sessionId, @Param("limit") Integer limit);
 
     /**
+     * 统计"摘要指针之后还有多少条可回放消息"——装配器的必留带条数。
+     *
+     * <p>为什么单独一条 COUNT：装配时 {@code history} 来自 {@code ChatMemory}（纯透传、无 id），
+     * 判断"哪些还没被摘要覆盖"只能回到库里按 id 数。这条查询走 {@code idx_cm_session_seq}
+     * 的区间扫描，代价与"多送几条原文"比起来可以忽略。
+     *
+     * <p>{@code uptoMsgId} 为 null（还没有任何摘要）时由调用方传 0，这里不必特判——
+     * 消息 id 恒为正，{@code id > 0} 就是全部。
+     */
+    @Select("SELECT COUNT(*) FROM chat_message WHERE session_id = #{sessionId} AND is_deleted = 0 "
+            + "AND msg_role IN (1, 2) AND id > #{uptoMsgId}")
+    int countUnsummarized(@Param("sessionId") Long sessionId, @Param("uptoMsgId") Long uptoMsgId);
+
+    /**
      * 回填图片内容摘要（多模态阶段 1 的产物）。
      * <p>
      * 这是 chat_message 上<b>唯一</b>的 UPDATE。该表设计为「只追加」，此处是受控例外：

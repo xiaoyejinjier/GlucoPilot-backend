@@ -74,4 +74,21 @@ public class ChatContextEntity extends BaseEntity {
 
     /** 本轮内各分片的展示顺序（越小越基础）。 */
     private Integer sortNo;
+
+    /**
+     * 本轮历史窗口是否<b>滑动</b>（丢弃了窗口外的旧消息）：只有历史分片带值（V81）。
+     *
+     * <p>为什么值得单独落一列：命中率从 90% 掉到 20% 的两个原因——摘要被重写、窗口滑了——
+     * 只有这一列能把它们区分开；不落表就只能 grep 日志，而日志会被轮转掉。
+     */
+    private Boolean windowShifted;
+
+    /**
+     * 本轮<b>实际回放进 prompt</b> 的历史条数（kept_history）：只有历史分片带值（V81）。
+     *
+     * <p>为什么不存"窗口上限"：上限是配置项 `ai.memory.window-messages`（恒为 20），
+     * 落表没有信息量；实际条数才能回答「这一轮是真发了 20 条，还是上限 20 但只装了 3 条」——
+     * 配合 {@link #windowShifted}，就能把「命中率为什么突然掉」拆成"窗口滑了"与"摘要被重写"两种原因。
+     */
+    private Integer windowMessages;
 }

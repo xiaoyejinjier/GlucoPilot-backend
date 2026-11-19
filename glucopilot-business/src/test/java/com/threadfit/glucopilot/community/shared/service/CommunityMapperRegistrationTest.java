@@ -46,7 +46,8 @@ class CommunityMapperRegistrationTest {
                     () -> {
                         var scanner = new MapperScannerConfigurer();
                         scanner.setBasePackage(
-                                "com.threadfit.glucopilot.community,com.threadfit.glucopilot.export.mapper");
+                                "com.threadfit.glucopilot.community,com.threadfit.glucopilot.export.mapper,"
+                                        + "com.threadfit.glucopilot.consultation.mapper");
                         scanner.setMarkerInterface(scan.markerInterface());
                         scanner.setAnnotationClass(scan.annotationClass());
                         scanner.setSqlSessionFactoryBeanName("sqlSessionFactory");

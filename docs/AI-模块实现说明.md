@@ -3,9 +3,9 @@
 > 面向「要读懂/要接手/要改」的人：逐层讲清 `com.threadfit.glucopilot.ai` 下 236 个类的职责、彼此依赖、关键方法，全部对照真实代码。
 > 与 `AI对话-简单接入方案.md`（设计动机与取舍）、`AI-社区内容审核设计.md`（审核专项）互补：那两份讲「为什么这么做」，这份讲「现在到底是怎么写的」。
 
-- 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（236 个 java 文件），审核工人在 `…/community/`
+- 代码位置：`glucopilot-business/src/main/java/com/threadfit/glucopilot/ai/`（239 个 java 文件），审核工人在 `…/community/`
 - 技术栈：Spring Boot 4.1 / Spring AI 2.0.1 / Java 21 / MyBatis-Plus / Flyway
-- 现状：8 个场景、12 个工具（其中 1 个写工具）、10 份提示词、60 个 AI 测试类；全量 1024 用例 0 失败；Flyway v62
+- 现状：8 个场景、13 个工具（1 个写工具 + 1 个记忆读工具）、11 份提示词版本行、69 个 AI 测试类；全量 1154 用例 0 失败；Flyway v77
 
 ---
 
@@ -156,7 +156,7 @@ public ChatClient utilityChatClient(@Qualifier("glucopilotTextChatModel") ChatMo
 | `business/meal/controller/MealAnalysisController` | `POST /api/v1/meal-analysis` | 拍照识别饮食 |
 | `business/ocr/controller/OcrTaskController` | `/api/v1/ocr-tasks` | 创建任务 / 查任务 |
 | `business/speech/controller/SpeechTranscriptionController` | `POST /api/v1/speech-transcriptions` | 语音转写（直连百炼 ASR） |
-| `memory/controller/UserChatMemoryController` | `/api/v1/users/me/ai-memories` | 用户自助查看/清空长期记忆 |
+| `memory/controller/UserChatMemoryController` | `/api/v1/users/me/ai-memories` | 用户自助查看长期记忆、按 `memoryKey` 删除单条 / 清空全部 |
 | `memory/controller/AdminChatMemoryController` | `/admin/v1/users/{id}/chat-memories` | 管理端查看/删除 |
 | `model/controller/AdminAiModelController` | `/admin/v1/ai/models` | 模型目录 CRUD + 连通性测试 |
 | `prompt/controller/AdminAiPromptController` | `/admin/v1/ai-prompt-templates` | 提示词 CRUD / 发布 |
@@ -503,18 +503,19 @@ AiPromptTemplateService.validateRenderable(text, config.getVariables(), "classpa
 ```
 而不是 `{"verdict": "REJECT"}`。解析侧 `ContentModerationParser` 因此写成逐行 `key：value`，容忍中英文冒号、`=`、Markdown。
 
-### 7.3 版本演进：CHAT 从 v1 到 v3
+### 7.3 版本演进：CHAT 从 v1 到 v4
 
-对话主提示词已经历三次播种，`ai_prompt_template` 里 v1/v2 都保留着（`is_enabled=0`），随时可在后台切回：
+对话主提示词已经历四次播种，`ai_prompt_template` 里旧版本都保留着（`is_enabled=0`），随时可在后台切回：
 
 | 版本 | 来源 | 变化 |
 | --- | --- | --- |
 | v1 | V18 | 首版：角色、安全规则、工具规范 |
 | v2 | （历史版本，已停用） | 草稿/回滚点 |
 | v3 | V62 | 新增 `save_long_term_memory` 的使用边界：只记长期事实、一次性安排与用药细节不记、同键覆盖不要重复调用 |
-| 兜底 | `resources/prompts/chat/system.md` | 与 v3 逐字一致，DB 不可用时用它 |
+| v4 | V72 | 工具清单加 `list_long_term_memory`，并补两条规则：什么时候该去查记忆、查到几条就以 `total` 为准不要谎称全部 |
+| 兜底 | `resources/prompts/chat/system.md` | 与 v4 逐字一致，DB 不可用时用它 |
 
-**为什么加版本而不是改 v1**：`chat_session.system_prompt_ver` 记的是 `chat@vN`，原地改会让「这条回复用的是哪版提示词」失去意义，也让历史会话无法复现；后台按 `is_enabled` 切换版本，是我们唯一可回滚的手段。
+**为什么加版本而不是改上一版**：`chat_session.system_prompt_ver` 记的是 `chat@vN`，原地改会让「这条回复用的是哪版提示词」失去意义，也让历史会话无法复现；后台按 `is_enabled` 切换版本，是我们唯一可回滚的手段。
 
 ### 7.4 注入点：调用点请求级，而不是 advisor
 
@@ -587,7 +588,7 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 
 `CALL_COUNTER` 放在 `toolContext` 里而不是类字段，是刻意的：并发两轮各数各的，天然隔离。
 
-### 8.3 现有 12 个工具（11 个类）
+### 8.3 现有 13 个工具（12 个类）
 
 第一批（明细类，回答「具体是哪条」）：
 
@@ -606,15 +607,22 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
 | --- | --- | --- |
 | `GlucoseStatsTools` | `query_glucose_stats` | 只给聚合：达标率/偏高偏低计数/均值/极值/变异系数/按时段与周的走势（≤92 天，**不返回明细**） |
 | `ChatHistoryTools` | `search_chat_history` | 在本人历史会话里按关键词找片段（≤365 天、按会话给结果、按「一问一答」去重、每会话 ≤2 处、可带 `sessionId` 续查） |
-| `SessionStateTools` | `get_session_state` | 当前会话的状态：摘要、已调用过的工具及结论摘要 |
+| `SessionStateTools` | `get_session_state` | 当前会话的状态：摘要覆盖到哪一条、已调用过的工具及结论摘要（**不回摘要正文**，它已在系统提示里） |
 | `ReminderTools` | `list_reminders` | 今日提醒（服药/测糖等）与待回复的回访 |
 | `ArticleSearchTools` | `search_community_articles` | 检索社区文章（与 feed 同一套可见性过滤，只给摘要与作者） |
 
-第三批（写入类，唯一一个写工具）：
+第三批（记忆读写，唯一一个写工具 + 配对的读工具）：
 
 | 类 | 工具名 | 用途 |
 | --- | --- | --- |
-| `MemoryTools` | `save_long_term_memory` | 把用户当轮陈述的长期事实写进跨会话记忆（键限五类、≤200 字、置信度服务端固定 85） |
+| `MemoryTools` | `save_long_term_memory` | 把用户当轮陈述的长期事实写进跨会话记忆（键限五类、一条只写一件事、≤200 字、置信度服务端固定 85） |
+| `MemoryQueryTools` | `list_long_term_memory` | 查小语记住了什么（可按类/关键词收窄，返回 `total`/`shown`/`truncated`，**没有分页游标**） |
+
+**为什么还需要一个「读记忆」的工具**：每轮自动注入的长期记忆只有最可信的十几条（`inject-max-items` × 每类 3 条合并成一行），而存储不设上限、条目会随会话累积。没有读工具时，第 N 名以后的事实在模型眼里**根本不存在**——用户问「你还记得我有什么忌口吗」，它只能拿看到的那几条笃定回答，表现为"记性差"。读工具按需付费：不查不花 token，查一次几百 token。
+
+**读工具刻意不返回什么**：主键与 `item_hash`（模型拿到 id 只会想删，而删除是用户的权利）、置信度数值（界面已决定不显示百分比）、来源会话、分页游标（给了 `page` 就会翻页找记忆，几轮下来吃光 `max-total-tool-calls`）。要更多应当**收窄条件**而不是往后翻。
+
+**写成功要作废读工具的缓存**：`ToolRepeatGuard` 的前提是「同样入参、底层数据没变」，写记忆恰好打破它——同一轮里"先查、发现没有、写一条、再查确认"很常见，不作废的话第二次读会拿到写之前的空结果，模型就会说"没记住"。只作废 `list_long_term_memory` 这一个工具（血糖/社区检索不受影响）。
 
 **为什么敢开一个写工具**：它写的是「系统对用户的记忆」，可撤销（记忆页可删）、有界（5 键 × 每键 1 条 × 200 字）、不触碰任何业务单据；而"这句话是不是长期事实"本质是语义判断——旧的关键词判定（「记住 / 记一下 / 帮我记」）对「我最近不能吃辣了」「医生让我少油少盐」完全失效。写血糖、写饮食这类动作**不可照抄**，必须走用户显式确认。
 
@@ -633,7 +641,7 @@ chatToolCallMapper.insert(new ChatToolCall(... ok ? 1 : 0, durationMs, errorType
    `RepeatAwareToolCallback` 用 `sessionId + 工具名 + 规范化入参` 做键，命中就**直接返回上次的 JSON**（debug 日志写明命中），未命中才执行并记住。没有 `sessionId`（后台任务）时直接透传，不做去重。
    `ToolRepeatGuard` 的护栏：TTL 30 分钟、每会话最多 16 条、最多 512 个会话、单条结果 ≤8000 字符（过大不缓存），双层 LRU。
    注意包装顺序：`TracingToolCallback` 在**外层**，所以命中缓存的那次调用照样会写 `chat_tool_call` 记账——审计看到的是「模型确实调了」，而不是「被拦掉了」。
-2. **提示层**（首选）：`get_session_state` 会把「已调用过的工具 + 结论摘要」交给模型，并在 `hint` 里明确要求「已调用过的直接复用，别重复调」；各工具返回体也带 `hint` 说明还能拿到什么。让模型一开始就别调第二次，比事后拦更好。
+2. **提示层**（首选）：`get_session_state` 会把「已调用过的工具 + 结论摘要」交给模型，并在 `hint` 里明确要求「已调用过的直接复用，别重复调」；各工具返回体也带 `hint` 说明还能拿到什么。让模型一开始就别调第二次，比事后拦更好。这里回放的摘要**按工具去重**（`selectRecentDigests` 里的 `GROUP BY tool_name` + `MAX(id)`），而不是「最近 N 条记录」——否则连查三次血糖就把「体检档案」「饮食记录」挤出窗口，模型下一轮又会去调它们。
 
 **这不是限流**：调用次数上限仍由框架的 `spring.ai.tools.limits.max-total-tool-calls`（当前 8）负责，超了按 `on-limit-exceeded: throw` 抛错。去重只解决「同样的输入重复问」。
 
@@ -878,6 +886,34 @@ P1 之前，后台保存模型配置只做**格式**校验：编码非空、能�
 
 维度只能是「天 × 模型」：摘要、记忆抽取、内容审核、饮食识别、OCR 这些内部调用都只取 `.content()`，没有用量记录。所以接口返回一个固定 `note`，前端原样展示——让所有人看到同一句口径说明，而不是各自写一句不同的解释。
 
+> 这段是 V73 之前的形态，**已被 9.8.2 取代**：V75 之后报表读 `ai_call_log`，维度是「天 × 场景 × 模型」且覆盖全部调用。保留这段是为了记住"为什么当初只能看对话链路"——不是没想到，而是没有账本。
+
+### 9.8.1 缓存命中：`ModelCallUsage` + `V73` 两列（观测，不改行为）
+
+`prompt_tokens` 回答不了"这一轮到底花了多少钱"：DeepSeek/OpenAI 的上下文缓存把**命中部分**按约 1/10 计价，而原来的用量只记总数，等于把省下来的钱又按全价算了一遍。V73 给 `chat_message` 加 `cache_hit_tokens` / `cache_miss_tokens`，取数收口到 `ModelCallUsage` 这一个值对象：
+
+- `from(Usage)` 先问框架（Spring AI 2.0 的 `Usage.getCacheReadInputTokens()`），拿不到再从 `getNativeUsage()` 里捞厂商字段（DeepSeek 的 `prompt_cache_hit_tokens`、OpenAI 的嵌套 `prompt_tokens_details.cached_tokens`、`cached_tokens`）。两套命名必须都认：我们走 OpenAI 兼容通道、底座却是 DeepSeek，谁都不保证另一个的名字。
+- `cache_miss_tokens = prompt − hit`，且只在 `hit <= prompt` 时推算；**取不到就是 NULL，绝不写 0**——0 在报表里等于"确实一次没命中"，会把"没解析出来"伪装成"缓存没用上"。
+- `StreamState.usage` 用 `merge()` 逐字段非空覆盖，**不是累加**：同一轮多个 chunk 带的是同一份累计值，累加会翻倍。原来的 `aggregate()` 是赋值，工具回环里会只剩最后一次 usage，这里顺带修掉。
+
+`UsageProbe.logOnce(usage)` 在首次拿到 usage 时打一条 INFO（`AtomicBoolean` 保证进程内只一条），把 `prompt/completion/cacheRead/cacheWrite/nativeUsage` 原样印出来。存在的意义只有一个：**用一条真实日志回答"这个通道到底给不给缓存字段"**，而不是靠读源码猜。它是一次性探针，不是长期日志——每请求打会把日志淹掉，DEBUG 级线上又看不到。
+
+工具顺序也在这条线上（`AiToolRegistry.callbacks()`）：工具定义是 prompt 静态前缀里最大的一段，顺序一变整段缓存作废。现在按 `allow-list` 的下标排序、同名再按名字兜底，**不再跟 Spring 的 Bean 注入顺序**——那个顺序会随扫描与框架升级悄悄改变，症状只会是"成本涨了"，几乎无法归因。
+
+### 9.8.2 账单：`ai_call_log`（V75）——一次模型调用一行
+
+9.8 那个出口只能统计对话链路（数据来自 `chat_message`），而摘要、记忆抽取、内容审核、翻译、图片识别全都只取 `.content()` 就丢掉用量。V75 新建 `ai_call_log`，把**每次模型调用**记成一行：
+
+- **写在唯一漏斗上**：`DynamicChatModel.call()` / `stream()`。全仓所有模型请求都要经过这两个方法（`textChatClient`、`utilityChatClient`、`visionChatClient` 底层都是同一个 `DynamicChatModel`），在这里记账，新加场景不需要再改一处。**不写在 ChatClient 层**：那层有 advisor/工具回环，一次请求会过多次，记出来的是"请求"不是"模型调用"。
+- **场景靠 `AiCallContext`（ThreadLocal）带下来**：`DynamicChatModel` 不该知道业务，所以调用方用 `AiCallContext.run(new Call(SceneCode.CHAT, userId, sessionId), () -> ...)` 把归属压在**发起调用的那个线程**上。两个必须记住的坑：①流式必须在 `Flux.defer(() -> AiCallContext.run(...))` 里压（ChatClient 惰性，订阅时线程已经换了）；②`Mono.fromCallable(...).subscribeOn(boundedElastic)` 要把 `run` 放在 `fromCallable` **内部**，放在外面等于在请求线程上压、在别的线程上读。
+- **流式只记一行**：`stream()` 在方法入口取一次上下文（Reactor 链上 `ThreadLocal` 早已不可靠），用 `AtomicReference<ModelCallUsage>` 合并 chunk、`AtomicBoolean` 守住 `doOnError`/`doFinally`/`doOnComplete` 三个出口只落一次账。
+- **失败也入账**（`ok=0` + `error_code` = 异常类名，不存消息正文）：超时与 4xx 同样消耗配额，剔掉会让账单偏低，而"账单偏低"是最难发现的错。
+- **异步、有界、丢得掉**：`AsyncAiCallRecorder` 单线程 + `ArrayBlockingQueue(2000)` + `AbortPolicy`（**故意不用 CallerRunsPolicy**：那样队列满时会把 DB 写搬回用户请求线程，一次 DB 抖动就变成响应变慢）。丢弃只计数 + 60 秒节流 WARN——账单是观测数据，不值得为它影响回复。
+- **注销必须清**：`ai_call_log` 带 `user_id`，是第五张含用户标识的表。`ChatSessionServiceImpl.purgeAccountData` 已补 `purgeByUserId`，漏掉就是"注销后仍可查某人何时用了什么场景"。
+- **保留期 90 天**：`AiCallLogCleanupJob`（`@Scheduled` 3:30）按 `ai.call-log.retention-days` 分批删（每批 `cleanup-batch-size` = 5000 行），`retention-days <= 0` 视为关闭。
+
+口径上它与 `chat_message.prompt_tokens` **不可相加**：后者"按轮"（一次回答最终落库的用量，工具回环里只剩最后一次），前者"按调用"（每个模型请求一行）。报表（接口文档 4.28）已切到账本口径，并在 `note` 里明写这句。
+
 ### 9.9 记忆抽取的结构化输出试点
 
 记忆抽取原本靠"模型自由输出 JSON + 手写宽松解析"。改成 `call().entity(MemoryPayload.class)` 之后：
@@ -896,7 +932,7 @@ P1 之前，后台保存模型配置只做**格式**校验：编码非空、能�
 
 ## 10. 记忆与摘要
 
-### 10.1 `UserChatMemoryServiceImpl`（576 行）：抽取长期记忆
+### 10.1 `UserChatMemoryServiceImpl`：抽取长期记忆（分类 + 多条目）
 
 ```java
 public void extractAsync(Long userId, Long sessionId, String reason) {
@@ -935,7 +971,7 @@ String raw = memoryClient.prompt()
 parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memories[]，同 key 取置信度高者
 ```
 
-对外三个方法：`forInjection(userId)`（按置信度取前 N 条注入系统提示词）、`listOwnForUser`、`deleteAllForUser`（用户自助清空）。`FORBIDDEN_MARKERS` 是一层兜底：即使模型抽出了像密钥/身份证的内容，也不入库。
+对外方法：`forInjection(userId)`（按类分组合并后注入）、`listOwnForUser(userId, pageQuery)`（用户自助查看，分页）、`deleteByIdForUser`（删一个条目）、`deleteByKeyForUser`（清空一类）、`deleteAllForUser`（清空全部）。`FORBIDDEN_MARKERS` 是一层兜底：即使模型抽出了像密钥/身份证的内容，也不入库。
 
 **写入入口有三个，写库通道只有一个**：工具 `save_long_term_memory`（用户当轮亲口说的）、会话结束（`openNew` 对上一段会话复盘）、归档补齐（`archiveIdleSessions` 顺带补抽）。三者窗口与冲突策略不同，但都落到同一个 `write(...)`：
 
@@ -944,7 +980,36 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 | `WriteSource.EXPLICIT`（工具） | 当轮一句 | 服务端固定 85 | **无条件覆盖**：用户刚说的应当盖掉历史推断 |
 | `WriteSource.BATCH`（结束/归档） | 整段会话（有界多窗） | 模型自评（≥60 才收） | **只升不降**：`score < 既有置信度` 时拒绝覆盖，避免老会话的迟到抽取盖掉今天的新事实 |
 
+**V71：从「槽位」到「条目」**。改造前 `(user_id, memory_key)` 唯一，一类只能有一条记录，三个后果都踩到了：
+
+1. 删除粒度只能到「类」——用户想删记错的那半句，只能把整类（含对的那半句）删掉；
+2. 模型被迫合并句子——「不吃香菜、不吃辣、海鲜过敏」越拼越长，一次抽错整类报废；
+3. **新事实被旧事实挡住**——BATCH「只升不降」的保护会把置信度更低的新忌口挡在门外，过敏信息反而进不来。
+
+现在的身份是「这句话」：`item_hash = SHA-256(规范化正文)` 参与唯一键 `uk_user_key_item(user_id, memory_key, item_hash, is_deleted)`。
+
+| 行为 | 改造前 | 改造后 |
+| --- | --- | --- |
+| 写入同一类的新说法 | 覆盖旧记录 | 新增条目（同文则视为同一条，只在置信度提高时刷新） |
+| 删除 | 按 key 删整类 | 按 `id` 删一条 / 按 key 清一类 / 清空全部 |
+| 冷却（挡自动重建） | 键级 | **条目级**：删「不吃香菜」不连累「海鲜过敏」 |
+| 注入 | 每类一条，最多 5 行 | 每类最多 3 条**合并成一行**，仍是 ≤5 行 |
+| 列表 | 一次性返回 | 分页（存储不设硬上限，但列表必须分页） |
+
+**「来源会话」的语义**：记「哪一次最确信地说过它」，不是「最近一次提到」。所以只有置信度提高时才刷新 `source_session_id` 与 `gmt_modified`——否则每轮闲聊都会刷新，「最近更新」会变成噪声。
+
+**为什么删除前先清墓碑**：唯一键含只有 0/1 的 `is_deleted`，每个 `(user, key, item_hash)` 至多留一条已删行；删→重建→再删必然撞唯一键（实测 `ERROR 1062`）。三个删除入口都先按同范围物理清墓碑，但只在**确实有生效行**时清，避免幂等重复删除抹掉审计证据。
+
 `write(...)` 返回 `SaveOutcome(saved, reason)`，四道闸（键 ∈ 五类 / 非空且 ≤200 字 / 置信度 ≥60 / 不含剂量与诊断词）各自给出**可执行**的拒绝原因——工具回执会进上下文，模型据此换键或放弃，重试同样内容没有意义。
+
+**读取有两个出口，读的是同一张表**：
+
+| 出口 | 入口方法 | 条数上限 | 失败策略 | 谁在用 |
+| --- | --- | --- | --- | --- |
+| 每轮注入 | `forInjection(userId)` | `inject-max-items`（8）× 每类 3 条合并一行 → ≤15 条 | 读失败返回空（不打断对话） | `ChatHistoryAssembler` |
+| 读工具 | `overviewForModel(userId, key, keyword, limit)` | `limit` 1~30（默认 15），可按类/关键词收窄 | 抛给工具层转成 `{"error":…}` | 模型调 `list_long_term_memory` |
+
+两者排序口径必须一致（置信度降序 → 最近更新降序 → id 降序），否则模型先读工具、再看到注入内容，会对「哪条更重要」得出矛盾结论。`overviewForModel` 多查一次 `countActiveFiltered`：读工具的价值一半在「一共记了多少条」，只给条目会让模型把「我看到 15 条」说成「你一共 15 条」。
 
 **归档补齐（V61 `memory_extracted_upto_msg_id`）**：会话闲置归档时，`ChatSessionServiceImpl.archiveIdleSessions` 先挑出「即将归档、且长期记忆还没覆盖到最后一条消息」的 **1 个**会话（`selectIdleSessionNeedingMemory`），归档后再为它提交一次 `extractAsync(..., "session-archived")`。
 
@@ -955,13 +1020,33 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 
 **关键词兜底（默认关闭）**：`ai.memory.keyword-trigger-fallback=false`。没有 tool calling 的部署可以打开它，用「记住 / 记一下 / 帮我记 / 要记得 / 别忘了」猜意图；打开后窗口收窄到 `ai.memory.keyword-fallback-window-messages`（默认 6）条、只跑 1 窗，因为它是聊天主链路顺带触发的，不能像终局复盘那样一次回看 80 条。开关判定放在 `extractAsync` 里（属于「这条抽取要不要做」的策略），而不是调用点。
 
+**用户删除与「删了又回来」（`deleted-key-cooldown-days`）**：删除是逻辑删除（`is_deleted=1` + `deleted_at`，`chk_cum_del_consistent` 要求两者同时非空），所以库里能查到「这条被删过」。问题在于**自动抽取读的是会话原文**：同一段对话里那个事实还在，下一次 `session-ended` / `session-archived` 就会把它重新抽出来、又 insert 一条生效行（`uk_user_key_item` 带 `is_deleted`，不与已删行撞键），用户会看到「我明明删了」。
+
+因此 `write(...)` 的 insert 分支加了第五道闸：`WriteSource.BATCH && 最近 deleted_at 在 ai.memory.deleted-key-cooldown-days（默认 30，0=关闭）之内` → 拒绝重建，日志留痕。
+
+- **只挡 BATCH**：`EXPLICIT`（工具 `save_long_term_memory`）不受限——用户主动说「记住…」时，他自己就是最新意图，被冷却挡住反而像坏了。
+- **按条目不按类**：V71 之后冷却查的是 `(user, key, item_hash)`，删掉「不吃香菜」不会连累「海鲜过敏」在 30 天内记不进来。代价是拦不住「同一个事实换了说法」的近似重复（同一句话换成同义词），这点已在代码注释里声明，不做文本相似度匹配。
+- **为什么不用新表**：`deleted_at` 本来就在，冷却判定一次单行查询即可；建墓碑表要多一张表、多一处一致性问题，收益不匹配。
+- **页面**：小程序 `pages/ai-memory/ai-memory` 最上方是「全部 + 五类」的分类入口（数字来自列表接口的 `counts`，点某一类带 `memoryKey` 重取），下面按当前筛选平铺条目（不显示置信度百分比，只显示「最近更新」时间）；删除有三级粒度——单条、清空本类、清空全部，都要二次确认。接口见接口文档 2.40 / 2.41。
+
+**分类入口的数字为什么放在列表接口里**：`GET /api/v1/users/me/ai-memories` 每次加载都顺带返回 `counts`（五类各自的有效条数，零值也出现）。一次聚合查询（`countActiveGroupByKey`）胜过页面为五个入口各发一次请求；换类时也只发一次列表请求，`counts` 随之刷新。统计失败只 WARN 并按 0 返回，不让"入口数字拿不到"把整个列表拖成失败态。
+
 **观测：日志里的「记忆=N」**。`ChatMemoryReadAdvisor` 的装配日志现在长这样：
 
 ```
-会话记忆装配 sessionId=164 记忆=1 保留历史=4 裁剪=0 估算token=7369 预算=4096 摘要=false 工具摘要=true（超预算：保底条数优先）
+会话记忆装配 sessionId=164 记忆=1 保留历史=4 裁剪=12 估算token=7369 预算=4096 摘要=120字 覆盖到#128 空洞=0 工具摘要=true（超预算：保底条数优先）
 ```
 
 `记忆=N` 是**真正写进 prompt 的条数**，不是"库里查到几条"——空白条目会被丢掉、每条约 120 字截断（`ChatHistoryAssembler.appendMemories` 返回的就是这个计数，落在 `Stats.memoryItems()`）。排查"用户说它记不住"时先看这个数：N=0 说明一条都没进 prompt（没抽到 / userId 没传到 advisor 参数 / 被过滤），N>0 才说明注入到位、问题在别处（提示词措辞或模型忽略）。E2E `memory-tool-e2e.ps1` 的第 2 组断言就是按这个数判断注入的。
+
+**摘要的三个字段与「空洞」**（③ 期）：`摘要=120字 覆盖到#128` 来自一次主键点查（`ChatSessionMapper.selectSummaryState` 同时取回 `context_summary` 与 `summary_upto_msg_id`，省掉第二次查询）。`空洞` 指的是**既没被摘要覆盖、也没进本轮窗口**的那几条消息：
+
+- 摘要覆盖到 `#128`、窗口装的是最近 `#141~#160` → `#129~#140` 谁也没装，模型看不到。
+- 计算方式：把「窗口里最老那条」定位出来（`ORDER BY id ASC LIMIT 1 OFFSET 裁剪条数`），再数 `upto < id < 窗口起点` 的条数——一条聚合查询，且**只在真的裁剪过历史（`裁剪 > 0`）时才查**。
+- 输出三种形态：`空洞=0（未裁剪）`（没裁就不可能漏）、`空洞=未知`（聚合查询失败，不影响回答）、`空洞=N 起于#M`（除了日志，还会额外打一条 WARN）。
+- 出现 `空洞 > 0` 说明 `ai.memory.window-messages` / `keep-recent-messages` 与摘要频率不匹配：要么调大窗口，要么让摘要更勤。这是"模型忘了刚才聊过什么"最常见的机器可判原因。
+
+**`get_session_state` 不返回摘要正文**（② 期）：CHAT 场景下滚动摘要每轮都由本 advisor 注入系统提示，工具再返回一遍等于同一段文本付两次费（摘要上限 800 字 ≈ 500 token）。所以工具只给 `{uptoMsgId, chars, note}`，`note` 指向 `search_chat_history` 去取摘要之外的原话。
 
 
 ### 10.2 `ChatSummaryServiceImpl`（298 行）：滚动摘要
@@ -984,6 +1069,28 @@ if (updated == 0) { /* 指针已经前进了（别的实例先完成），丢弃
 ```
 
 摘要只往「已摘要到哪条」的指针后面推进，`update ... where context_upto < ?` 保证不会用旧摘要覆盖新摘要——这是多实例部署下唯一安全的写法（进程内单飞管不到另一个实例）。
+
+**「攒够再压」的三道门（V76，批次 3 的 T3.2）**：`maybeSummarizeAsync` 每轮回复后都会被调用，而「窗口外只要多出 1 条消息」就算超阈值，所以早期实现实际上是**每轮都调一次摘要模型**。现在在 `runSummarize` 里、`candidates.isEmpty()` 之后加了一道门（`skipReason(sessionId, candidates)`）：
+
+| 门 | 配置 | 默认 | 语义 |
+| --- | --- | --- | --- |
+| 条数 | `ai.memory.summary-min-pending-messages` | 12 | 待压候选（已扣掉 `keep-recent-messages` 保底）少于 12 条就不压 |
+| 字数 | `ai.memory.summary-min-pending-chars` | 1500 | 候选总字数不到 1500 也不压 |
+| 间隔 | `ai.memory.summary-min-interval-seconds` | 60 | 距上次摘要写入不到 60 秒不压（防抖） |
+
+条数与字数取**或**（任一达标就压），间隔是**与**（还得够久）。`<=0` 表示关掉该门。间隔门的时间戳来自 V76 新增的 `chat_session.summary_updated_at`——刻意不复用 `gmt_modified`（改名会话、结束会话、状态流转都会碰它）。
+
+日志实测（`summary-min-pending-messages=12`）：
+
+```
+暂不摘要（候选 4 条/1167 字，未达 12 条或 1500 字的门）sessionId=181 候选=4条
+暂不摘要（候选 6 条/1435 字，未达 12 条或 1500 字的门）sessionId=181 候选=6条
+会话摘要已更新 userId=27 sessionId=181 压缩消息=6 摘要=800字 覆盖到消息=2031
+```
+
+注意「候选」= 待压条数 − `keep-recent-messages`（6），所以 12 条候选约等于**9 轮对话**（每轮 2 条）才压一次，而不是 6 轮。这一条比阈值本身更容易误读。
+
+**为什么顺带把 `SUMMARY` 绑到便宜模型（V77）**：摘要的输入是「已有摘要 + 待压原文」，实测 600~1800 输入 token、输出 82~550 token，全程关思维链、温度 0.1——这是典型的「格式整理活」，用最贵的文本默认模型（pro）做纯属浪费。V77 在 `ai_scene_config` 里插了一行 `SUMMARY → deepseek-v4-flash`，并把原本停用的 flash 启用（不影响文本默认仍是 pro）。
 
 ### 10.3 `ChatRoundGuard`（92 行）：进程内单飞
 

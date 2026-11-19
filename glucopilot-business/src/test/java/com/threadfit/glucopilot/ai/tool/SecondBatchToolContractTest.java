@@ -275,7 +275,7 @@ class SecondBatchToolContractTest {
     // ---------- get_session_state ----------
 
     @Test
-    void 会话状态应回摘要与已调用的工具清单() {
+    void 会话状态应回摘要覆盖位置与已调用的工具清单() {
         ChatSessionService sessionService = mock(ChatSessionService.class);
         ChatToolCallMapper toolCallMapper = mock(ChatToolCallMapper.class);
 
@@ -299,13 +299,17 @@ class SecondBatchToolContractTest {
                 new SessionStateTools(sessionService, toolCallMapper, json())
                         .getSessionState(CONTEXT);
 
+        // 摘要正文刻意不返回（每轮已注入系统提示），只给覆盖位置、字数与指引
         assertThat(json)
                 .contains("\"statusText\":\"进行中\"")
-                .contains("早餐后血糖偏高")
+                .contains("\"uptoMsgId\":6")
+                .contains("\"chars\":27")
+                .contains("已在系统提示中")
+                .contains("search_chat_history")
                 .contains("query_glucose_range")
                 .contains("avg=8.9")
                 .contains("不要重复调用");
-        assertThat(json).doesNotContain("contentText");
+        assertThat(json).doesNotContain("早餐后血糖偏高").doesNotContain("contentText");
     }
 
     @Test

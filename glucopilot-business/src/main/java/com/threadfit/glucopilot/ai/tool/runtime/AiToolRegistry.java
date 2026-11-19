@@ -32,6 +32,9 @@ import java.util.stream.Collectors;
  *       直接返回上次结果（{@link ToolRepeatGuard}，30 分钟）。这是去重不是限流，两者不要混。</li>
  *   <li><b>越权防护在工具实现里</b>：用户身份必须由服务端通过 {@code toolContext} 注入
  *       （见 {@link AiToolContext}），<b>不能</b>作为模型可见的参数，否则模型可被诱导去查他人数据。</li>
+ *   <li><b>输出顺序必须确定</b>：工具定义是 prompt 静态前缀里最大的一段，顺序一变整段前缀作废
+ *       （DeepSeek/OpenAI 的 KV 缓存都只认前缀完整匹配）。所以最终清单<b>按白名单顺序</b>排，
+ *       而不是按 Spring Bean 的注入顺序——后者跟着扫描顺序、配置类拆分、甚至升级框架都会变。</li>
  * </ul>
  */
 @Slf4j
@@ -73,9 +76,28 @@ public class AiToolRegistry {
         // 里层 RepeatAware 拦「同会话同工具同入参」的重复调用（模型看不到上一轮查过什么，重复很难避免）；
         // 外层 Tracing 记账，保证"模型到底调了几次"仍然如实记录——被去重命中的那次也会留痕，
         // 否则我们就看不见「模型确实想再查一次」这件事。
-        return allowed.stream()
+        return orderByAllowList(allowed, allowList).stream()
                 .map(callback -> (ToolCallback) new TracingToolCallback(
                         new RepeatAwareToolCallback(callback, repeatGuard), traceRecorder))
+                .toList();
+    }
+
+    /**
+     * 按白名单顺序给工具排序（不在白名单里的理论上已被过滤掉，仍按名字兜底排序）。
+     * <p>
+     * 为什么不能直接用 Bean 注入顺序：那份顺序由扫描与配置类拆分决定，加一个工具类、
+     * 换一个 profile、升一次框架都可能变。而对 DeepSeek/OpenAI 来说，工具定义在 prompt 的
+     * 静态前缀里——顺序变了就等于前缀变了，**整段缓存失效**，且现象是"成本悄悄涨"，很难归因。
+     */
+    private static List<ToolCallback> orderByAllowList(List<ToolCallback> callbacks, List<String> allowList) {
+        java.util.Map<String, Integer> rank = new java.util.HashMap<>(allowList.size() * 2);
+        for (int i = 0; i < allowList.size(); i++) {
+            rank.putIfAbsent(allowList.get(i), i);
+        }
+        return callbacks.stream()
+                .sorted(java.util.Comparator
+                        .comparingInt((ToolCallback c) -> rank.getOrDefault(c.getToolDefinition().name(), Integer.MAX_VALUE))
+                        .thenComparing(c -> c.getToolDefinition().name()))
                 .toList();
     }
 

@@ -1,12 +1,15 @@
 package com.threadfit.glucopilot.ai.memory.controller;
 
 import com.threadfit.glucopilot.common.api.ApiResponse;
+import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
@@ -31,10 +34,15 @@ import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
  *       两者语义不同，混用会让审计字段落到错误的人身上。</li>
  * </ul>
  *
- * <h2>为什么删除是"全部"而不是按条删</h2>
- * 与管理端 4.15 同一理由：用户说"把你们记的关于我的东西删掉"时，他要的是"清空"，
- * 而不是在几条记忆里逐条挑；只删一部分还会让用户以为已经清空（见 {@code AdminChatMemoryController} 注释）。
- * 删除是<b>逻辑删除</b>：留痕是为了能解释"系统曾经记过什么"，但用户侧的读取路径已经查不到它们。
+ * <h2>删除的三级粒度</h2>
+ * <ul>
+ *   <li>{@code DELETE /} 清空全部：用户说"把你们记的关于我的东西删掉"时，他要的是这个；</li>
+ *   <li>{@code DELETE /items/{id}} 删一个条目：用户只错记了一条（"我不吃香菜"其实是不吃葱）时用这个——
+ *       这是 V71 之后最主要的路径，因为一条类下可以有多条；</li>
+ *   <li>{@code DELETE /{memoryKey}} 清空本类：用户说"忌口别记了"时用这个，省得一条条点。</li>
+ * </ul>
+ * 三个入口都是<b>逻辑删除</b>：留痕是为了能解释"系统曾经记过什么"，但用户侧的读取路径已经查不到它们。
+ * 删除之后由写入侧的条目级冷却（{@code ai.memory.deleted-key-cooldown-days}）挡住"自动抽取把它记回来"。
  */
 @Slf4j
 @RestController
@@ -44,13 +52,20 @@ public class UserChatMemoryController {
 
     private final UserChatMemoryService userChatMemoryService;
 
-    /** 查我自己的长期记忆（不返回任何内部字段，见 {@link UserChatMemoryDtos}）。 */
+    /**
+     * 分页查我自己的长期记忆，可按类筛选。
+     * <p>
+     * 返回的对象带 {@code records} / {@code total} / {@code pages} 与五类的 {@code counts}：
+     * 条目数不再有界，前端要能"上拉加载更多"；而记忆页顶部的分类入口要显示「各几条」，
+     * 这份统计与"翻到第几页、正在筛哪一类"无关，所以随每次加载一起返回，页面不必多开一次请求。
+     *
+     * @param memoryKey 只看某一类（点开某个分类入口时传）；不传/空白表示全部
+     */
     @GetMapping
-    public ApiResponse<UserChatMemoryDtos.MemoryList> list() {
+    public ApiResponse<UserChatMemoryDtos.MemoryPage> list(@RequestParam(required = false) String memoryKey,
+                                                           PageQuery query) {
         Long userId = RequestContext.requireUserId();
-        return ApiResponse.ok(UserChatMemoryDtos.MemoryList.builder()
-                .records(userChatMemoryService.listOwnForUser(userId))
-                .build());
+        return ApiResponse.ok(userChatMemoryService.listOwnForUser(userId, memoryKey, query));
     }
 
     /**
@@ -64,6 +79,35 @@ public class UserChatMemoryController {
         Long userId = RequestContext.requireUserId();
         int deleted = userChatMemoryService.deleteAllForUser(userId);
         log.info("用户自助删除长期记忆 userId={} 条数={}", userId, deleted);
+        return ApiResponse.ok(UserChatMemoryDtos.DeleteResult.builder().deleted(deleted).build());
+    }
+
+    /**
+     * 删掉一个条目（记忆页每张卡片的「删除」）。
+     * <p>
+     * 幂等：本来就没有这条、或者这个 id 不属于当前用户，都返回 {@code deleted = 0} 的成功响应。
+     * 不区分"不存在"与"不是你的"是刻意的——区分开就等于提供一个探测别人记忆 id 是否存在的接口。
+     */
+    @DeleteMapping("/items/{id}")
+    public ApiResponse<UserChatMemoryDtos.DeleteResult> deleteItem(@PathVariable Long id) {
+        Long userId = RequestContext.requireUserId();
+        int deleted = userChatMemoryService.deleteByIdForUser(userId, id);
+        log.info("用户自助删除单个长期记忆 userId={} id={} 条数={}", userId, id, deleted);
+        return ApiResponse.ok(UserChatMemoryDtos.DeleteResult.builder().deleted(deleted).build());
+    }
+
+    /**
+     * 清空某一类的全部条目（记忆页每类卡片上的「清空本类」）。
+     * <p>
+     * 幂等：这一类本来就没有生效条目也返回 {@code deleted = 0} 的成功响应。
+     * 键不合法（不在五类白名单里）由服务层抛 400——让用户看到"类型不存在"，
+     * 而不是一个"删除成功 0 条"的错觉。
+     */
+    @DeleteMapping("/{memoryKey}")
+    public ApiResponse<UserChatMemoryDtos.DeleteResult> deleteByKey(@PathVariable String memoryKey) {
+        Long userId = RequestContext.requireUserId();
+        int deleted = userChatMemoryService.deleteByKeyForUser(userId, memoryKey);
+        log.info("用户自助清空一类长期记忆 userId={} key={} 条数={}", userId, memoryKey, deleted);
         return ApiResponse.ok(UserChatMemoryDtos.DeleteResult.builder().deleted(deleted).build());
     }
 }

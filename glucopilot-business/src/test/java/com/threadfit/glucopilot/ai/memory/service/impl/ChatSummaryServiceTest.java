@@ -97,6 +97,12 @@ class ChatSummaryServiceTest {
 
         service = new ChatSummaryServiceImpl(clients, chatSessionMapper, chatMessageMapper,
                 promptTemplateService, sceneModelResolver, properties, new ChatRoundGuard(), directExecutor);
+        // 门控（批次 3 / T3.2）默认是关的吗？不是——线上默认 12 条 / 1500 字 / 60 秒。
+        // 但本类的既有用例都在验证"压缩逻辑本身"，用的是 6~12 条的迷你数据，
+        // 所以这里把三道门关掉；门控自己的行为由本类末尾的四个专用用例覆盖。
+        properties.getMemory().setSummaryMinPendingMessages(0);
+        properties.getMemory().setSummaryMinPendingChars(0);
+        properties.getMemory().setSummaryMinIntervalSeconds(0);
     }
 
     private static ChatMessage message(long id, int role, String text) {
@@ -270,5 +276,74 @@ class ChatSummaryServiceTest {
         assertTrue(input.getValue().contains("已有摘要"), "要把已有摘要一起送进去，让模型合并去重：" + input.getValue());
         assertTrue(input.getValue().contains("用户早餐前血糖 6.8"));
         verify(chatClient, times(1)).prompt();
+    }
+
+    // ---------------- 批次 3 / T3.2：攒够再压（条数 / 字数 / 间隔） ----------------
+
+    @Test
+    void 候选不足阈值时不该调摘要模型() {
+        properties.getMemory().setKeepRecentMessages(6);
+        // 线上默认：12 条或 1500 字
+        properties.getMemory().setSummaryMinPendingMessages(12);
+        properties.getMemory().setSummaryMinPendingChars(1500);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+
+        assertFalse(service.runSummarize(USER_ID, SESSION_ID));
+
+        verify(chatClient, never()).prompt();
+        verify(chatSessionMapper, never()).updateSummary(anyLong(), anyString(), anyLong());
+    }
+
+    @Test
+    void 字数达标但条数不足时仍然该压() {
+        properties.getMemory().setKeepRecentMessages(2);
+        properties.getMemory().setSummaryMinPendingMessages(12);
+        properties.getMemory().setSummaryMinPendingChars(1500);
+        // 语音转写的长消息：4 条里窗口外 2 条，但每条 900 字 → 1800 字已过字数门
+        String longText = "血".repeat(900);
+        List<ChatMessage> rows = new ArrayList<>();
+        for (int i = 4; i >= 1; i--) {
+            rows.add(message(i, i % 2 == 0 ? CodeEnum.ChatMsgRole.ASSISTANT.getCode()
+                    : CodeEnum.ChatMsgRole.USER.getCode(), longText));
+        }
+        when(chatMessageMapper.selectRecent(eq(SESSION_ID), anyInt(), anyInt())).thenReturn(rows);
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        when(callSpec.content()).thenReturn("摘要");
+        when(chatSessionMapper.updateSummary(eq(SESSION_ID), anyString(), anyLong())).thenReturn(1);
+
+        assertTrue(service.runSummarize(USER_ID, SESSION_ID), "字数够了就该压，不必等满 12 条");
+    }
+
+    @Test
+    void 距上次摘要不足最小间隔时应跳过() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setSummaryMinPendingMessages(1);
+        properties.getMemory().setSummaryMinPendingChars(0);
+        properties.getMemory().setSummaryMinIntervalSeconds(60);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        when(chatSessionMapper.selectSummaryUpdatedAt(SESSION_ID))
+                .thenReturn(java.time.LocalDateTime.now().minusSeconds(10));
+
+        assertFalse(service.runSummarize(USER_ID, SESSION_ID));
+
+        verify(chatClient, never()).prompt();
+    }
+
+    @Test
+    void 距上次摘要超过最小间隔时照常压缩() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setSummaryMinPendingMessages(1);
+        properties.getMemory().setSummaryMinPendingChars(0);
+        properties.getMemory().setSummaryMinIntervalSeconds(60);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        when(chatSessionMapper.selectSummaryUpdatedAt(SESSION_ID))
+                .thenReturn(java.time.LocalDateTime.now().minusSeconds(120));
+        when(callSpec.content()).thenReturn("摘要");
+        when(chatSessionMapper.updateSummary(eq(SESSION_ID), anyString(), anyLong())).thenReturn(1);
+
+        assertTrue(service.runSummarize(USER_ID, SESSION_ID));
     }
 }

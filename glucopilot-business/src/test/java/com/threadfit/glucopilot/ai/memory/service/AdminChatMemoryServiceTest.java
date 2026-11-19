@@ -425,7 +425,7 @@ class AdminChatMemoryServiceTest {
     }
 
     /**
-     * 建表：字段与约束照搬 V1 迁移（唯一键 {@code uk_user_key_active} + 删除一致性 CHECK）。
+     * 建表：字段与约束照搬 V1 + 迁移 V71（唯一键 {@code uk_user_key_item} 含 {@code item_hash} + 删除一致性 CHECK）。
      * <p>
      * CHECK 一定要带上——真库里它才是"逻辑删除必须同时写 deleted_at"的执行者；
      * 少了它，H2 上的测试会给"只置 is_deleted"这类实现一路绿灯。
@@ -434,7 +434,7 @@ class AdminChatMemoryServiceTest {
         try (var connection = datasource.getConnection(); var sql = connection.createStatement()) {
             sql.execute("CREATE TABLE chat_user_memory ("
                     + "id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, "
-                    + "memory_key VARCHAR(64) NOT NULL, memory_text VARCHAR(512) NOT NULL, "
+                    + "memory_key VARCHAR(64) NOT NULL, memory_text VARCHAR(512) NOT NULL, " + "item_hash VARCHAR(64) NULL, "
                     + "source_session_id BIGINT NULL, confidence TINYINT NOT NULL DEFAULT 100, "
                     + "created_by BIGINT NOT NULL DEFAULT 0, "
                     + "gmt_create TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), "
@@ -442,7 +442,7 @@ class AdminChatMemoryServiceTest {
                     + "gmt_modified TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), "
                     + "deleted_by BIGINT NULL, deleted_at TIMESTAMP(3) NULL, "
                     + "is_deleted TINYINT NOT NULL DEFAULT 0, "
-                    + "CONSTRAINT uk_user_key_active UNIQUE (user_id, memory_key, is_deleted), "
+                    + "CONSTRAINT uk_user_key_item UNIQUE (user_id, memory_key, item_hash, is_deleted), "
                     + "CONSTRAINT chk_cum_del_consistent CHECK ("
                     + "(is_deleted = 0 AND deleted_at IS NULL AND deleted_by IS NULL) "
                     + "OR (is_deleted = 1 AND deleted_at IS NOT NULL)))");

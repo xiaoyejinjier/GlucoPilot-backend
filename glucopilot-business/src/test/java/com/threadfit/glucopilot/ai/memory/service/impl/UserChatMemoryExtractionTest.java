@@ -219,6 +219,41 @@ class UserChatMemoryExtractionTest {
         verify(requestSpec, org.mockito.Mockito.times(1)).user(anyString());
     }
 
+    /**
+     * 防复活：用户删掉某个键之后，<b>自动抽取</b>在冷却期内不许把它重新插回来。
+     *
+     * <p>这条闸门存在的理由：删除是逻辑删除，而终局抽取读的是会话原文——同一段对话还在，
+     * 那个事实就会被重新读出来、再 insert 一条生效行（唯一键带 {@code isDeleted}，不撞键），
+     * 用户看到的就是"删了又回来"。
+     *
+     * <p>同时守住边界：用户当轮亲口说的（EXPLICIT）不受冷却限制，他真改主意时不该被挡住。
+     */
+    @Test
+    @DisplayName("删过的键在冷却期内不被自动抽取重建，但用户当轮亲口说的照记")
+    void cooldownBlocksBatchButNotExplicitWrite() {
+        when(memoryMapper.selectLastDeletedAt(7L, "habit", UserChatMemoryServiceImpl.itemHashOf("每天晚饭后散步30分钟"))).thenReturn(LocalDateTime.now().minusDays(3));
+
+        // 自动抽取（BATCH）：被第五道闸拦下，连 insert 都不发
+        assertThat(service.upsert(7L, "habit", "每天晚饭后散步30分钟", 90, null)).isFalse();
+        verify(memoryMapper, never()).insert(any(ChatUserMemoryEntity.class));
+
+        // 用户当轮亲口说（EXPLICIT）：不挡
+        assertThat(service.saveExplicit(7L, null, "habit", "每天早饭后散步20分钟").saved()).isTrue();
+        verify(memoryMapper).insert(any(ChatUserMemoryEntity.class));
+    }
+
+    /** 冷却天数配成 0 等于关掉这道闸门：连"上次删除时间"都不查。 */
+    @Test
+    @DisplayName("冷却天数设为 0 就关掉这道闸门")
+    void cooldownCanBeDisabled() {
+        aiProperties.getMemory().setDeletedKeyCooldownDays(0);
+
+        assertThat(service.upsert(7L, "habit", "每天晚饭后散步30分钟", 90, null)).isTrue();
+
+        verify(memoryMapper, never()).selectLastDeletedAt(any(), any(), any());
+        verify(memoryMapper).insert(any(ChatUserMemoryEntity.class));
+    }
+
     private static ChatMessage message(Long id, String text) {
         ChatMessage message = new ChatMessage();
         message.setId(id);

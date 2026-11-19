@@ -83,6 +83,36 @@ class AiToolRegistryTest {
                 .containsExactly("a");
     }
 
+    // ---------- 顺序的确定性（KV 缓存前提） ----------
+
+    /**
+     * 工具定义的顺序必须跟白名单走，而不是跟 Spring 的 Bean 注入顺序走。
+     * <p>
+     * 为什么这条要钉死：工具定义是 prompt 静态前缀里最大的一段，顺序一变整段前缀就作废
+     * （DeepSeek/OpenAI 的缓存都只认前缀完整匹配）。而 Bean 顺序会随扫描、配置类拆分、
+     * 框架升级而变——那时候现象只有一个「成本悄悄涨」，几乎无法归因。
+     */
+    @Test
+    void 工具顺序应跟白名单而不是Bean注入顺序() {
+        AiToolRegistry registry = registry(allowList("z", "a", "m"),
+                provider("a"), provider("m"), provider("z"));
+
+        assertThat(registry.callbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("z", "a", "m");
+    }
+
+    /** 同一份白名单、不同的注册顺序，两次输出必须逐位相同。 */
+    @Test
+    void 打乱注册顺序后工具清单应完全一致() {
+        List<String> fromFirst = registry(allowList("a", "b", "c"), provider("a", "b", "c"))
+                .callbacks().stream().map(c -> c.getToolDefinition().name()).toList();
+        List<String> fromSecond = registry(allowList("a", "b", "c"), provider("c"), provider("b"), provider("a"))
+                .callbacks().stream().map(c -> c.getToolDefinition().name()).toList();
+
+        assertThat(fromSecond).isEqualTo(fromFirst).containsExactly("a", "b", "c");
+    }
+
     // ---------- 构造辅助 ----------
 
     private static List<String> allowList(String... names) {

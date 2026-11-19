@@ -10,6 +10,7 @@ import com.threadfit.glucopilot.ai.memory.service.impl.ChatSummaryServiceImpl;
 import com.threadfit.glucopilot.ai.memory.service.impl.UserChatMemoryServiceImpl;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
@@ -26,7 +27,11 @@ class TextAiDisabledServicesTest {
         ChatRoundGuard guard = mock(ChatRoundGuard.class);
         ChatUserMemoryMapper mapper = mock(ChatUserMemoryMapper.class);
         when(mapper.selectList(any())).thenReturn(List.of());
+        // listOwnForUser 走 selectPage：不给桩会拿到 null，getRecords() 直接 NPE
+        when(mapper.selectPage(any(), any())).thenReturn(new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(1, 20));
         when(mapper.logicDeleteAllByUser(42L, null)).thenReturn(2);
+        // 清空入口会先数一遍生效行（0 行就直接早退，不去动墓碑），所以这里必须给数
+        when(mapper.countActiveByUser(42L)).thenReturn(2);
         new ApplicationContextRunner()
             .withPropertyValues("spring.ai.model.chat=none")
             .withBean(AIProperties.class, AIProperties::new)
@@ -53,7 +58,7 @@ class TextAiDisabledServicesTest {
                 UserChatMemoryServiceImpl memory = context.getBean(UserChatMemoryServiceImpl.class);
                 memory.extractAsync(42L, 7L, "session-end");
                 verifyNoInteractions(executor, guard);
-                assertThat(memory.listOwnForUser(42L)).isEmpty();
+                assertThat(memory.listOwnForUser(42L, null, new PageQuery()).getRecords()).isEmpty();
                 assertThat(memory.deleteAllForUser(42L)).isEqualTo(2);
                 verify(mapper).logicDeleteAllByUser(42L, null);
             });

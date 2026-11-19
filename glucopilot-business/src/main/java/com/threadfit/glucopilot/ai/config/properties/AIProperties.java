@@ -198,6 +198,34 @@ public class AIProperties {
         /** 摘要输出的 token 上限：摘要正文只有几百字，封顶可杜绝"模型长篇发挥"拖长生成时间。 */
         private int summaryMaxTokens = 600;
 
+        /**
+         * 攒够多少条"窗口外"的消息才值得跑一次摘要（默认 12）。
+         * <p>
+         * 为什么需要这道门：每轮对话会新增 2 条消息（用户 + 助手），而 {@code keepRecentMessages}
+         * 只保底 6 条——没有门的话，从第 4 轮起**每一轮**都有一两条消息溢出窗口，
+         * 于是每轮都调一次摘要模型。摘要本身不便宜（输入 ≤{@code summaryMaxChars} + ≤{@code summaryInputMaxChars}），
+         * 更贵的是它每轮重写摘要块，把后面整段历史的前缀缓存全部作废。
+         * 12 条 ≈ 6 轮对话压一次：调用次数降到原来的 1/6，而窗口外的内容本来也不进 prompt，
+         * 晚几轮压缩不会丢任何还在窗口里的信息。
+         */
+        private int summaryMinPendingMessages = 12;
+
+        /**
+         * 或者攒够这么多字符也值得压（默认 1500）。与 {@link #summaryMinPendingMessages} 取"或"。
+         * <p>
+         * 语音转写的长消息可能 2 条就到 1500 字，此时等满 12 条太久——两个门取或，
+         * 分别覆盖"消息多但都短"与"消息少但都长"两种真实分布。
+         */
+        private int summaryMinPendingChars = 1500;
+
+        /**
+         * 两次摘要之间的最小间隔（秒，默认 60）；{@code <= 0} 表示不限制。
+         * <p>
+         * 兜住"用户连着发很多条短消息"的情形：条数与字数门可能在几十秒内被连续突破，
+         * 而摘要刚写完的下一轮缓存还没被复用，再写一次纯属浪费。
+         */
+        private int summaryMinIntervalSeconds = 60;
+
         /** 是否把最近的工具结果摘要注入上下文（B3 的后半）。 */
         private boolean toolReplayEnabled = true;
 
@@ -242,6 +270,19 @@ public class AIProperties {
 
         /** 抽取输入的字符上限（超长只取最近的部分）。 */
         private int memoryExtractInputMaxChars = 3000;
+
+        /**
+         * 删除后的冷却天数（默认 30）：用户删掉某个键的记忆后，<b>自动抽取</b>在这段时间内不许把它重新插回来。
+         * <p>
+         * 要解决的问题是"删了又回来"：删除是逻辑删除，而会话结束时的抽取读的是会话原文——
+         * 同一段对话还在，那个事实就还会被读出来、再 insert 一条生效行（唯一键带 {@code is_deleted}，
+         * 不会撞键），用户看到的就是删除没生效。
+         * <p>
+         * 只作用于 {@code WriteSource.BATCH}（会话结束 / 归档补齐）；用户当轮亲口说的
+         * （{@code save_long_term_memory} 工具路径，{@code WriteSource.EXPLICIT}）不受限——
+         * 他真改主意时不该被冷却挡住。{@code 0} 表示关闭该闸门。
+         */
+        private int deletedKeyCooldownDays = 30;
 
         /** 抽取输出的 token 上限（只输出 JSON）。 */
         private int memoryExtractMaxTokens = 500;

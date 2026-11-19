@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.config;
 
 import com.threadfit.glucopilot.ai.model.service.AiRuntimeConfigService;
+import com.threadfit.glucopilot.ai.model.runtime.AiCallRecorder;
 import com.threadfit.glucopilot.ai.model.runtime.ChatModelFactory;
 import com.threadfit.glucopilot.ai.model.runtime.DynamicChatModel;
 import lombok.extern.slf4j.Slf4j;
@@ -49,7 +50,8 @@ public class AiDynamicModelConfig {
     @ConditionalOnExpression("'${spring.ai.model.chat:}' != 'none'")
     public ChatModel glucopilotTextChatModel(AiRuntimeConfigService runtimeConfig,
                                              ChatModelFactory chatModelFactory,
-                                             ObjectProvider<ChatModel> allChatModels) {
+                                             ObjectProvider<ChatModel> allChatModels,
+                                             ObjectProvider<AiCallRecorder> callRecorder) {
         Supplier<ChatModel> yamlFallback = () -> allChatModels.stream()
                 .filter(model -> !(model instanceof DynamicChatModel))
                 .findFirst()
@@ -61,7 +63,8 @@ public class AiDynamicModelConfig {
                 //    后台把它停用、改启用另一个模型后依然解析回 yaml 的旧模型（2026-10-13 的线上反馈）。
                 AiRuntimeConfigService.Snapshot::resolveTextDefault,
                 AiRuntimeConfigService.Snapshot::yamlText,
-                yamlFallback);
+                yamlFallback,
+                callRecorder);
     }
 
     /**
@@ -72,10 +75,12 @@ public class AiDynamicModelConfig {
     @Bean
     @ConditionalOnProperty(prefix = "ai.vision", name = "enabled", havingValue = "true")
     public ChatModel glucopilotVisionChatModel(AiRuntimeConfigService runtimeConfig,
-                                               ChatModelFactory chatModelFactory) {
+                                               ChatModelFactory chatModelFactory,
+                                               ObjectProvider<AiCallRecorder> callRecorder) {
         return new DynamicChatModel("vision", runtimeConfig, chatModelFactory,
                 AiRuntimeConfigService.Snapshot::resolveVisionDefault,
                 AiRuntimeConfigService.Snapshot::yamlVision,
-                null);
+                null,
+                callRecorder);
     }
 }

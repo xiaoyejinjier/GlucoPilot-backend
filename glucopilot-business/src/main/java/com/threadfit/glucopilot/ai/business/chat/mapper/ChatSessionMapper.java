@@ -138,17 +138,57 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
     Long selectSummaryUptoMsgId(@Param("sessionId") Long sessionId);
 
     /**
+     * 一次取回「摘要正文 + 覆盖到哪一条」，供装配日志同时打印两者（③ 期）。
+     * <p>
+     * 为什么合成一条：装配每轮都要读摘要，而"覆盖到 #几"只用于日志与运维判读，
+     * 单独再查一次同一个主键行没有意义；合起来仍然是走主键的一次点查。
+     */
+    @Select("SELECT context_summary AS text, summary_upto_msg_id AS uptoMsgId "
+            + "FROM chat_session WHERE id = #{sessionId} AND is_deleted = 0")
+    SummaryState selectSummaryState(@Param("sessionId") Long sessionId);
+
+    /**
+     * 「摘要与窗口之间的空洞」（③ 期）：既没进摘要、也没进本轮窗口的消息。
+     * <p>
+     * 定义：{@code id > uptoMsgId}（摘要没覆盖）且 {@code id < 窗口里最老那条的 id}
+     * （窗口没装）。窗口最老一条用「从新往旧数第 {@code dropped + 1} 条」定位——
+     * {@code dropped} 就是装配时被裁掉的条数，所以这个偏移量与实际窗口是同一个事实。
+     * <p>
+     * 只在 {@code dropped > 0} 时调用：没有裁剪时窗口从会话开头就装下了，不可能有空洞。
+     * 查不到（例如 offset 越界）返回 {@code missing = 0}。
+     */
+    @Select("SELECT COUNT(*) AS missing, MIN(id) AS firstMissingId FROM chat_message m "
+            + "WHERE m.session_id = #{sessionId} AND m.is_deleted = 0 "
+            + "AND m.id > #{uptoMsgId} "
+            + "AND m.id < (SELECT w.id FROM chat_message w "
+            + "            WHERE w.session_id = #{sessionId} AND w.is_deleted = 0 "
+            + "            ORDER BY w.id ASC LIMIT 1 OFFSET #{dropped})")
+    MessageGap selectMessageGap(@Param("sessionId") Long sessionId,
+                                @Param("uptoMsgId") Long uptoMsgId,
+                                @Param("dropped") int dropped);
+
+    /**
      * 写入滚动摘要并推进"摘要已覆盖到哪条消息"。
      * <p>
      * <b>只允许前进，不允许回退</b>（{@code summary_upto_msg_id < #{uptoMsgId}}）：摘要任务是异步的，
      * 慢任务可能后完成；没有这个条件的话，一次晚到的写入会把已经覆盖更多的指针拉回去，
      * 下一轮就会把已经压缩过的内容再压一遍（重复且越压越糊）。
      */
-    @Update("UPDATE chat_session SET context_summary = #{summary}, summary_upto_msg_id = #{uptoMsgId} "
+    @Update("UPDATE chat_session SET context_summary = #{summary}, summary_upto_msg_id = #{uptoMsgId}, "
+            + "summary_updated_at = CURRENT_TIMESTAMP(3) "
             + "WHERE id = #{sessionId} AND is_deleted = 0 "
             + "AND (summary_upto_msg_id IS NULL OR summary_upto_msg_id < #{uptoMsgId})")
     int updateSummary(@Param("sessionId") Long sessionId, @Param("summary") String summary,
                       @Param("uptoMsgId") Long uptoMsgId);
+
+    /**
+     * 上次成功写摘要的时间（null = 还没摘要过），供摘要任务的"最小间隔"门使用。
+     * <p>
+     * 为什么不复用 {@code gmt_modified}：这张表还会因为改名、结束会话、状态流转而更新，
+     * 用它当"上次摘要时间"会让间隔门在用户改个标题后被重置。
+     */
+    @Select("SELECT summary_updated_at FROM chat_session WHERE id = #{sessionId} AND is_deleted = 0")
+    java.time.LocalDateTime selectSummaryUpdatedAt(@Param("sessionId") Long sessionId);
 
     /** 账号注销：物理删除该用户全部会话（历史删除态一并清掉）。 */
     @Delete("DELETE FROM chat_session WHERE user_id = #{userId}")

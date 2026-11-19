@@ -10,6 +10,7 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.ai.business.chat.support.SqlDuplicateKeys;
+import com.threadfit.glucopilot.ai.model.runtime.ModelCallUsage;
 import com.threadfit.glucopilot.file.entity.MediaFile;
 import com.threadfit.glucopilot.file.service.MediaFileService;
 import lombok.RequiredArgsConstructor;
@@ -257,8 +258,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                                               Long replyToMsgId,
                                               String contentText,
                                               String modelCode,
-                                              Integer promptTokens,
-                                              Integer completionTokens,
+                                              ModelCallUsage usage,
                                               Integer finishReason,
                                               Integer latencyMs) {
         ChatMessage message = new ChatMessage();
@@ -272,8 +272,12 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             message.setClientMsgId(ASSISTANT_CLIENT_MSG_ID_PREFIX + replyToMsgId);
         }
         message.setModelCode(modelCode);
-        message.setPromptTokens(promptTokens);
-        message.setCompletionTokens(completionTokens);
+        // 用量可能整块为空（降级/测试路径）：此时三列都保持 null，而不是写 0
+        ModelCallUsage tokens = usage == null ? ModelCallUsage.empty() : usage;
+        message.setPromptTokens(tokens.promptTokens());
+        message.setCompletionTokens(tokens.completionTokens());
+        message.setCacheHitTokens(tokens.cacheHitTokens());
+        message.setCacheMissTokens(tokens.cacheMissTokens());
         message.setFinishReason(finishReason);
         message.setLatencyMs(latencyMs);
         message.setCreatedBy(userId);

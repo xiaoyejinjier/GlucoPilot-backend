@@ -28,7 +28,7 @@ import java.util.Set;
  * <p><b>它存在的唯一理由是"别再重复查一遍"</b>：会话窗口只保留最近若干条消息，
  * 早几轮查过的血糖/饮食结论可能已经滑出窗口；没有这个工具，模型要么重复调用工具
  * （花掉一次模型往返与一次数据库查询），要么干脆忘了自己查过什么而给出自相矛盾的回答。
- * 这里把「本会话已经调用过哪些工具、各自结论的摘要」和「滚动摘要」一并交给模型。
+ * 这里把「本会话已经调用过哪些工具、各自结论的摘要」和「滚动摘要覆盖到哪一条」一并交给模型。
  *
  * <p>刻意<b>不返回</b>完整消息列表：那等于把窗口又搬一遍，既浪费 token 也没新信息。
  */
@@ -39,9 +39,6 @@ public class SessionStateTools {
 
     /** 最多看最近多少次工具调用。 */
     private static final int TOOL_CALL_LIMIT = 8;
-
-    /** 滚动摘要截断长度：摘要本身已经是压缩过的，再长就不是"状态"了。 */
-    private static final int SUMMARY_MAX_CHARS = 600;
 
     /** 单条工具摘要的截断长度。 */
     private static final int DIGEST_MAX_CHARS = 160;
@@ -55,7 +52,7 @@ public class SessionStateTools {
     @Tool(
             name = "get_session_state",
             description =
-                    "查询当前这次对话的状态：会话标题与进度、已生成的滚动摘要、本次对话已经调用过哪些工具及其结论摘要。"
+                    "查询当前这次对话的状态：会话标题与进度、滚动摘要覆盖到哪一条、本次对话已经调用过哪些工具及其结论摘要。"
                             + "当你不确定「刚才是不是查过这个」「这一轮之前聊到哪儿」，或准备重复调用某个查询工具之前，先调它。"
                             + "无参数。它不会返回聊天原文，也不会新增任何数据。")
     public String getSessionState(ToolContext toolContext) {
@@ -92,9 +89,13 @@ public class SessionStateTools {
             result.put("summary", null);
             result.put("summaryNote", "本次对话还没有滚动摘要（消息数还少，历史消息本身就在上下文窗口里）");
         } else {
+            // 刻意不返回摘要正文：CHAT 场景下滚动摘要每轮都由 ChatMemoryReadAdvisor 注入系统提示，
+            // 这里再返回一遍等于同一段文本付两次费（摘要上限 800 字，每次调用就是 ~500 token）。
+            // 需要摘要之外的原话，引导模型用 search_chat_history 取原文。
             Map<String, Object> summaryMap = new LinkedHashMap<>();
-            summaryMap.put("text", truncate(summary, SUMMARY_MAX_CHARS));
             summaryMap.put("uptoMsgId", session.getSummaryUptoMsgId());
+            summaryMap.put("chars", summary.length());
+            summaryMap.put("note", "摘要正文已在系统提示中（本工具不重复返回）；需要摘要之外的原话请用 search_chat_history");
             result.put("summary", summaryMap);
         }
 

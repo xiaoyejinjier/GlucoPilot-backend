@@ -40,6 +40,16 @@ public class ChatMessage extends BaseEntity {
     private String modelCode;
     private Integer promptTokens;
     private Integer completionTokens;
+    /**
+     * 输入中命中上下文缓存的 token 数（V73）。
+     * <p>
+     * 为什么要单独存：命中部分的计价约为未命中的 1/10，只存总数就无法区分
+     * 「这一轮省了钱」和「这一轮全靠全价」。取不到时落 {@code null} 而不是 0——
+     * 0 会被报表当成「确实没命中」，把「没解析出来」伪装成「缓存没用上」。
+     */
+    private Long cacheHitTokens;
+    /** 输入中未命中缓存的 token 数（= promptTokens - cacheHitTokens），口径同上 */
+    private Long cacheMissTokens;
     /** 1 正常 2 长度截断 3 内容过滤 4 错误 */
     private Integer finishReason;
     private Integer latencyMs;

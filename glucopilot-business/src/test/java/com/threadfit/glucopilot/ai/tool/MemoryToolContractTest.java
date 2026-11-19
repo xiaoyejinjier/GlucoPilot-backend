@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 import com.threadfit.glucopilot.ai.tool.builtin.MemoryTools;
 import com.threadfit.glucopilot.ai.tool.runtime.AiToolContext;
+import com.threadfit.glucopilot.ai.tool.runtime.ToolRepeatGuard;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 
 import org.junit.jupiter.api.Test;
@@ -50,7 +51,7 @@ class MemoryToolContractTest {
         when(memories.saveExplicit(USER_ID, SESSION_ID, "diet_taboo", "用户不吃香菜"))
                 .thenReturn(UserChatMemoryService.SaveOutcome.ok());
 
-        String json = new MemoryTools(memories, json()).saveLongTermMemory(
+        String json = new MemoryTools(memories, json(), new ToolRepeatGuard()).saveLongTermMemory(
                 "diet_taboo", "用户不吃香菜", context(USER_ID, SESSION_ID));
 
         assertThat(json).contains("\"ok\":true").contains("diet_taboo");
@@ -64,7 +65,7 @@ class MemoryToolContractTest {
         when(memories.saveExplicit(any(), any(), any(), any()))
                 .thenReturn(UserChatMemoryService.SaveOutcome.rejected("内容涉及诊断或用药细节，未记录"));
 
-        String json = new MemoryTools(memories, json()).saveLongTermMemory(
+        String json = new MemoryTools(memories, json(), new ToolRepeatGuard()).saveLongTermMemory(
                 "health_context", "用户每天打 12 单位胰岛素", context(USER_ID, SESSION_ID));
 
         assertThat(json).contains("\"ok\":false").contains("用药");
@@ -74,7 +75,7 @@ class MemoryToolContractTest {
     void 缺少用户上下文时返回error而不是抛异常() {
         UserChatMemoryService memories = mock(UserChatMemoryService.class);
 
-        String json = new MemoryTools(memories, json()).saveLongTermMemory(
+        String json = new MemoryTools(memories, json(), new ToolRepeatGuard()).saveLongTermMemory(
                 "habit", "用户通常晚上十一点睡", new ToolContext(Map.of()));
 
         assertThat(json).contains("error");
@@ -87,7 +88,7 @@ class MemoryToolContractTest {
         when(memories.saveExplicit(eq(USER_ID), eq(null), eq("preference"), any()))
                 .thenReturn(UserChatMemoryService.SaveOutcome.ok());
 
-        String json = new MemoryTools(memories, json()).saveLongTermMemory(
+        String json = new MemoryTools(memories, json(), new ToolRepeatGuard()).saveLongTermMemory(
                 "preference", "用户更喜欢简短回答", context(USER_ID, null));
 
         assertThat(json).contains("\"ok\":true");

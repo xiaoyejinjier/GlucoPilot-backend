@@ -1,8 +1,11 @@
 package com.threadfit.glucopilot.ai.memory.service;
 
 import com.threadfit.glucopilot.ai.memory.dto.UserChatMemoryDtos;
+import com.threadfit.glucopilot.common.api.PageQuery;
 
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -86,14 +89,89 @@ public interface UserChatMemoryService {
     List<MemoryItem> forInjection(Long userId);
 
     /**
-     * 用户自己看自己的记忆（C 端合规自助）：返回全部有效记忆，<b>不按注入上限截断</b>、不返回内部字段。
+     * 读工具（{@code list_long_term_memory}）单次最多返回的条数。
+     * <p>
+     * 放在接口上是让「工具层的默认值/上限」与「服务层的硬夹紧」共用同一个数字，
+     * 避免两处各写一个 30、将来改一处漏一处。
+     */
+    int MAX_MODEL_ITEMS = 30;
+
+    /** 给模型看的一条记忆：带更新时间（用于"上次你说"），<b>不带</b>置信度数值与主键。 */
+    record MemoryEntry(String key, String text, LocalDateTime updatedAt) {
+    }
+
+    /**
+     * 读工具的一次性视图。
+     *
+     * <p>为什么把 {@code total} 和 {@code items} 分开：注入侧最大的毛病是模型"看到 15 条就以为总共 15 条"。
+     * 这里显式给出「一共几条、这次给了几条、还有没有更多」，它才能对用户说清"我记着 27 条，最相关的先说"，
+     * 而不是拿 15 条去猜剩下的不存在。
+     *
+     * @param total     当前筛选条件下的有效条数（无筛选时等于五类之和）
+     * @param counts    五类各自的有效条数（不受筛选影响，零值也出现）
+     * @param items     本次返回的条目，已按「置信度降序、最近更新降序」排好
+     * @param truncated 是否还有更多匹配（{@code total > items.size()}）
+     */
+    record MemoryOverview(int total, Map<String, Integer> counts, List<MemoryEntry> items, boolean truncated) {
+    }
+
+    /**
+     * 供读工具使用的总览：可按类与关键词收窄，条数受 {@link #MAX_MODEL_ITEMS} 限制。
+     *
+     * <p>与 {@link #forInjection} 的区别：注入侧要的是"每次都塞进 prompt 的最可信几条"（有预算约束），
+     * 这里要的是"模型主动问了才取"的视图（有筛选、有总量、条数更多）。两者排序口径必须一致，
+     * 否则模型从两条路径看到同一批记忆却得出不同的重要度判断。
+     *
+     * <p>读失败照常抛出：工具会把异常翻译成结构化错误，而不是悄悄返回"你没有任何记忆"。
+     *
+     * @param memoryKey 只看某一类；空白表示不限类，非白名单值抛 400
+     * @param keyword   正文子串（已由调用方 trim 与长度校验）；空白表示不筛
+     * @param limit     本次最多返回几条（调用方负责夹紧，服务端再按 {@link #MAX_MODEL_ITEMS} 兜底）
+     */
+    MemoryOverview overviewForModel(Long userId, String memoryKey, String keyword, int limit);
+
+    /**
+     * 用户自己看自己的记忆（C 端合规自助）：<b>分页</b>返回有效条目，不按注入上限截断。
+     * <p>
+     * 为什么必须分页：类别是有界的（五类），但<b>条目不再有界</b>——「饮食忌口」下可以同时记着
+     * 不吃香菜、不吃辣、海鲜过敏……重度用户一年下来可能攒到几百条。一次全量返回既拖慢首屏，
+     * 也会让"系统到底记了我什么"这个问题变成一屏滚不到底的列表。
      * <p>
      * 读失败<b>照常抛出</b>——"系统到底记住了我什么"这个问题不能用空列表糊弄过去。
+     *
+     * @param memoryKey 只看某一类（记忆页点开某个分类入口时传）；空白表示不限类。
+     *                  不在五类白名单里抛 400——静默当成"不限"会让页面看起来正常、
+     *                  实际显示的是全部记忆，用户以为这一类是空的或乱的。
+     * @return 当前页 + 全局的每类条数（{@code counts} 不受 {@code memoryKey} 影响，
+     *         供顶部分类入口一直显示真实条数）
      */
-    List<UserChatMemoryDtos.MemoryRow> listOwnForUser(Long userId);
+    UserChatMemoryDtos.MemoryPage listOwnForUser(Long userId, String memoryKey, PageQuery query);
 
     /** 用户自助删除全部长期记忆（合规：用户有权清掉系统对他的记忆）。返回删除条数。 */
     int deleteAllForUser(Long userId);
+
+    /**
+     * 用户自助删除<b>某一个类别下的全部条目</b>（记忆页每类卡片上的「清空本类」）。
+     *
+     * <p>与 {@link #deleteByIdForUser} 的分工：用户说"忌口别记了"用这个，说"删掉香菜那条"用那个。
+     * 少了前者，用户要把三类忌口一条条点掉；少了后者，用户点一条却连带删掉另外两条。
+     *
+     * <p>删除是逻辑删除 + 写入侧条目级冷却（{@code ai.memory.deleted-key-cooldown-days}）：
+     * 否则会话结束时的自动抽取会把同一句话从原文里再读出来、再插回去。
+     *
+     * @return 实际删除条数；0 = 这一类本来就没有生效条目（幂等）
+     * @throws com.threadfit.glucopilot.common.exception.BizException 键不在白名单里时抛 400
+     */
+    int deleteByKeyForUser(Long userId, String memoryKey);
+
+    /**
+     * 用户自助删除<b>一个条目</b>（记忆页每张卡片的「删除」）。
+     *
+     * @param id 条目主键（来自 {@link #listOwnForUser}）；服务端仍会带 {@code user_id} 过滤，
+     *           拿到别人的 id 只会删到 0 行
+     * @return 1 = 删掉了；0 = 本来就没有这条（幂等，含"这个 id 不属于你"）
+     */
+    int deleteByIdForUser(Long userId, Long id);
 
     /**
      * 账号注销：物理删除该用户全部长期记忆。

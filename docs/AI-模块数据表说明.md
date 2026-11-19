@@ -1,6 +1,6 @@
 # AI 模块数据表说明（逐列）
 
-> 依据：开发库 `sugar_health`（Flyway v51）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
+> 依据：开发库 `sugar_health`（Flyway v77）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
 > 与 `AI-模块实现说明.md` 配套：那份讲「类怎么协作」，这份讲「数据落在哪、每一列是什么意思」。
 
 - 实测导出方式：`information_schema.COLUMNS / STATISTICS / TABLES`（`TABLE_SCHEMA='sugar_health'`）
@@ -11,19 +11,20 @@
 
 ## 0. 总览
 
-### 0.1 `ai` 包实体直接对应的 9 张表
+### 0.1 `ai` 包实体直接对应的 10 张表
 
 | # | 表 | 中文说明 | 首次创建 | 后续改动 | 开发库行数 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`）、V48（`capability` 模型能力集合，取代 V45 的 `model_type`）、V50（逻辑删除 `default_chat` 占位行）、V51（`verify_skipped_reason`：保存时跳过连通性校验的原因） | 3 |
 | 2 | `ai_prompt_template` | AI 提示词模板表 | V1 | V18（管理面：`variables_json`/`change_note`/`config_version`）、V50（逻辑删除 3 条 legacy 行） | 8 |
-| 3 | `ai_scene_config` | 场景 → 模型与场景级参数 | V19 | V49（`MEAL_ANALYSIS` 的 `max_tokens` 从 `ai.meal.max-tokens` 搬入） | 4 |
+| 3 | `ai_scene_config` | 场景 → 模型与场景级参数 | V19 | V49（`MEAL_ANALYSIS` 的 `max_tokens` 从 `ai.meal.max-tokens` 搬入）、V77（新增 `SUMMARY` 行绑 `deepseek-v4-flash`） | 5 |
 | 4 | `chat_session` | 聊天会话（含滚动摘要与窗口参数） | V1 | V11（`active_user_id` 生成列）、V21（生命周期） | 102 |
 | 5 | `chat_message` | 聊天消息（含语音与 token 计量） | V1 | V9（`media_caption`）、V11（幂等/顺序号唯一键） | 937 |
 | 6 | `chat_context` | 上下文分片元数据（替代 `chat_context_snapshot`） | V1 | V28（只留元数据，`content_*` 不再写） | 26 |
 | 7 | `chat_tool_call` | 会话内工具调用元数据 | V21 | V22（`short` 化 + `result_digest`） | 26 |
 | 8 | `chat_user_memory` | 跨会话长期记忆 | V1 | — | 2 |
 | 9 | `ocr_task` | OCR 识别任务 | V1 | — | 0 |
+| 10 | `ai_call_log` | 模型调用账本（每次 `DynamicChatModel.call/stream` 一行） | V75 | — | 0 |
 
 ### 0.2 AI 相关但不在 `ai` 包的表
 
@@ -165,13 +166,14 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 16 | `change_note` | varchar(255) | YES | — | 改动说明（审计与回溯用，如 `V43：…`） |
 | 17 | `config_version` | bigint unsigned | NO | 1 | 乐观锁版本，任何写操作 +1 |
 
-**当前开发库的 10 行**（正好演示「同场景多版本靠 `is_enabled` 选生效版」）：
+**当前开发库的 11 行**（正好演示「同场景多版本靠 `is_enabled` 选生效版」）：
 
 | scene_code | version | 启用 | 正文长度 |
 | --- | --- | --- | --- |
-| `CHAT` | 1 | ❌（v3 接替，保留回滚点） | 1651 |
+| `CHAT` | 1 | ❌（v3 起接替，保留回滚点） | 1651 |
 | `CHAT` | 2 | ❌（草稿/回滚点） | 1624 |
-| `CHAT` | 3 | ✅ | 1867（V62 播种，加了长期记忆工具边界；正文源在 `resources/prompts/chat/system.md`） |
+| `CHAT` | 3 | ❌（v4 接替，保留回滚点） | 1867（V62 播种，加了长期记忆工具边界） |
+| `CHAT` | 4 | ✅ | 2143（V72 播种，加了 `list_long_term_memory` 的用法；正文源在 `resources/prompts/chat/system.md`） |
 | `CHAT_IMAGE` | 1 | ✅ | 935 |
 | `MEAL_ANALYSIS` | 1 | ✅ | 515 |
 | `MEMORY` | 1 | ✅ | 1220 |
@@ -181,7 +183,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | `TRANSLATION` | 1 | ✅ | 1034（V54 播种，正文源在 `resources/prompts/translation/system.md`） |
 
 > `scene_code` 用的是 `SceneCode` 枚举名（大写），与 yaml 的 `ai.scenes.<小写 key>` 不是一套写法——库里按枚举 `getCode()` 存，比较时用 `BINARY` 区分大小写。
-> `legacy_chat_system` / `legacy_meal_analysis` / `legacy_glucose_advice` 三行是早期场景编码（V16/V18 改名中间产物，不在枚举里、运行时不会命中），V50 已逻辑删除并在 `change_note` 里记了原因；`CHAT` 的 v1/v2 是真实历史版本，保留以便回滚（V62 起 v3 生效）。
+> `legacy_chat_system` / `legacy_meal_analysis` / `legacy_glucose_advice` 三行是早期场景编码（V16/V18 改名中间产物，不在枚举里、运行时不会命中），V50 已逻辑删除并在 `change_note` 里记了原因；`CHAT` 的 v1~v3 是真实历史版本，保留以便回滚（V72 起 v4 生效）。
 
 ---
 
@@ -213,6 +215,8 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 > 参数优先级：`ai_scene_config` 非空字段 > yaml `ai.scenes.<scene>.*` > `ai_model_config` 本身。
 >
 > **C2 起 yaml 不再参与选模型**：`ai.scenes.<scene>.model-code` 已废弃（启动时 WARN），场景级的模型来源只剩本表 `model_code` 一列；参数仍可来自 `ai.scenes.*`。
+>
+> **V77 起多了一行 `SUMMARY`**（`model_code = deepseek-v4-flash`、温度 0.10、`max_tokens = 600`、`thinking = 0`）：摘要以前落进「没有绑定行」的默认路径，用的是**最贵的文本默认模型**（pro）；这一行把它钉到便宜模型上。同一迁移顺手把 `deepseek-v4-flash` 的 `is_enabled` 置 1（它原本是停用的），启用不改变文本默认——默认仍是 `deepseek-v4-pro`。
 
 **当前开发库的 4 行**（`model_code` 全为 NULL = 都用通道默认；只有视觉与饮食两个场景调了参数）：
 
@@ -244,19 +248,20 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 7 | `system_prompt_ver` | varchar(32) | YES | — | 本轮/本会话用的提示词版本标签（如 `chat@v1`），用于「这条回复用的是哪版提示词」回溯 |
 | 8 | `context_summary` | mediumtext | YES | — | 滚动摘要正文（超长对话压缩后供模型续用） |
 | 9 | `summary_upto_msg_id` | bigint unsigned | YES | — | 摘要已覆盖至的消息 ID；`updateSummary ... where upto < ?` 的乐观并发指针 |
-| 10 | `memory_extracted_upto_msg_id` | bigint unsigned | YES | — | V61：长期记忆**输入窗口的上界消息 ID**（不是「抽全了」的证明）。只由窗口抽取写入、`upto < ?` 只前进；归档补齐据此判断该会话是否还欠一次抽取 |
-| 11 | `window_msg_count` | smallint unsigned | NO | 20 | **已废弃（V21）**：窗口统一由 `ai.memory.window-messages` 决定，读取侧不再读本列 |
-| 12 | `msg_count` | int unsigned | NO | 0 | 消息条数冗余（`touchOnMessage` 时 +1） |
-| 13 | `last_msg_at` | datetime(3) | YES | — | 最近消息时间；列表排序 + 惰性归档判据 |
-| 14 | `is_pinned` | tinyint unsigned | NO | 0 | 是否置顶 |
-| 15 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
-| 16 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
-| 17 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
-| 18 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
-| 19 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
-| 20 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 21 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
-| 22 | `active_user_id` | bigint unsigned | YES | **生成列** | `STORED GENERATED`：仅「进行中且未删除」的会话等于 `user_id`，其余为 NULL；配合 `uk_user_active` 保证**每用户至多一条进行中会话** |
+| 10 | `summary_updated_at` | datetime(3) | YES | — | V76：最近一次摘要**写入**时间，摘要门控的最小间隔判据（`summary-min-interval-seconds`）。刻意不复用 `gmt_modified`——改名会话、结束会话、状态流转都会碰它 |
+| 11 | `memory_extracted_upto_msg_id` | bigint unsigned | YES | — | V61：长期记忆**输入窗口的上界消息 ID**（不是「抽全了」的证明）。只由窗口抽取写入、`upto < ?` 只前进；归档补齐据此判断该会话是否还欠一次抽取 |
+| 12 | `window_msg_count` | smallint unsigned | NO | 20 | **已废弃（V21）**：窗口统一由 `ai.memory.window-messages` 决定，读取侧不再读本列 |
+| 13 | `msg_count` | int unsigned | NO | 0 | 消息条数冗余（`touchOnMessage` 时 +1） |
+| 14 | `last_msg_at` | datetime(3) | YES | — | 最近消息时间；列表排序 + 惰性归档判据 |
+| 15 | `is_pinned` | tinyint unsigned | NO | 0 | 是否置顶 |
+| 16 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
+| 17 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
+| 18 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
+| 19 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
+| 20 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
+| 21 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
+| 22 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 23 | `active_user_id` | bigint unsigned | YES | **生成列** | `STORED GENERATED`：仅「进行中且未删除」的会话等于 `user_id`，其余为 NULL；配合 `uk_user_active` 保证**每用户至多一条进行中会话** |
 
 > 第 21 列是 V11 用来替代「应用层查一次再插入」的：并发两个「开新会话」请求时，第二个会被唯一键挡住，而不是插出两条进行中会话。
 
@@ -266,7 +271,9 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 **用途**：对话正文 + 多模态引用 + token 计量。`ChatMessageServiceImpl` 写，`ChatCompletionServiceImpl` 读/写。
 
-**这里也是全库唯一有真实用量数据的地方**：`prompt_tokens` / `completion_tokens` / `model_code` / `latency_ms` 只在助手消息上落库，`GET /admin/v1/ai/usage`（接口文档 4.28）就是按 `CAST(gmt_create AS DATE) × model_code` 聚合这几列。摘要、记忆抽取、内容审核、饮食识别、OCR 都只取 `.content()`，没有用量记录——所以「哪个场景花了多少」目前答不出来，这是数据缺口而不是接口缺失。
+**这里也是全库唯一有真实用量数据的地方**：`prompt_tokens` / `completion_tokens` / `cache_hit_tokens` / `cache_miss_tokens` / `model_code` / `latency_ms` 只在助手消息上落库，`GET /admin/v1/ai/usage`（接口文档 4.28）就是按 `CAST(gmt_create AS DATE) × model_code` 聚合这几列。摘要、记忆抽取、内容审核、饮食识别、OCR 都只取 `.content()`，没有用量记录——所以「哪个场景花了多少」目前答不出来，这是数据缺口而不是接口缺失。
+
+两列缓存字段的读法（V73）：`cache_hit_tokens` 是 `prompt_tokens` 里被上下文缓存命中的那部分，`cache_miss_tokens` 是剩下的部分，**两者之和等于 `prompt_tokens`**；命中部分的单价约为未命中的 1/10（DeepSeek 官方口径），所以「真实成本」不能用 `prompt_tokens × 单价` 直接算。取不到时两列都是 NULL（例如本轮模型没返回 usage、或厂商不带缓存字段），报表要把 NULL 当「未知」而不是「0 命中」。
 
 **索引**：`PRIMARY(id)`、`uk_session_seq(session_id,seq_no)`、`uk_session_client_active(session_id,client_msg_id,is_deleted)`、`idx_session_seq`、`idx_session_time(session_id,gmt_create)`、`idx_reply_to(reply_to_msg_id)`
 
@@ -288,16 +295,18 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 14 | `model_code` | varchar(64) | YES | — | 本条助手回复**实际**用的模型（取响应元数据，不是配置值） |
 | 15 | `prompt_tokens` | int unsigned | YES | — | 提示 token 数（助手消息） |
 | 16 | `completion_tokens` | int unsigned | YES | — | 生成 token 数（助手消息） |
-| 17 | `finish_reason` | tinyint unsigned | YES | — | 1 正常、2 长度截断、3 内容过滤、4 错误 |
-| 18 | `latency_ms` | int unsigned | YES | — | 模型耗时毫秒（首字节到末帧） |
-| 19 | `client_msg_id` | varchar(64) | YES | — | 客户端幂等 ID；重发时应用层捕获 MySQL 1062 当成功返回既有消息 |
-| 20 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
-| 21 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
-| 22 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
-| 23 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
-| 24 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
-| 25 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 26 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 17 | `cache_hit_tokens` | int unsigned | YES | — | 上下文缓存**命中**的 token 数（V73）。取不到就存 NULL，不存 0——0 会被读成「确实一次没命中」，把「没解析出来」伪装成「缓存没用上」 |
+| 18 | `cache_miss_tokens` | int unsigned | YES | — | 未命中的 token 数（= `prompt_tokens` − 命中，V73）。它是 `prompt_tokens` 的**一部分**，两者不可相加 |
+| 19 | `finish_reason` | tinyint unsigned | YES | — | 1 正常、2 长度截断、3 内容过滤、4 错误 |
+| 20 | `latency_ms` | int unsigned | YES | — | 模型耗时毫秒（首字节到末帧） |
+| 21 | `client_msg_id` | varchar(64) | YES | — | 客户端幂等 ID；重发时应用层捕获 MySQL 1062 当成功返回既有消息 |
+| 22 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
+| 23 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
+| 24 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
+| 25 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
+| 26 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
+| 27 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
+| 28 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
 
 > 两个唯一键各管一件事：`uk_session_seq` 保证顺序号不撞（`insertWithSeqNo` 重试的依据）；`uk_session_client_active` 保证前端重试不会插两条。
 
@@ -361,18 +370,48 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 
 ---
 
+## 8.1 `ai_call_log` — 模型调用账本（V75）
+
+**用途**：每次模型调用一行，写在 `DynamicChatModel.call/stream`（全仓唯一的模型调用漏斗），供用量报表、缓存命中率、失败率与「哪个场景在烧钱」使用。异步写入（`AsyncAiCallRecorder`，单线程 + 有界队列，满了丢弃并计数），**宁可少一条账单也不让用户的回复路径做同步 DB 写**。
+
+**索引**：`PRIMARY(id)`、`idx_acl_time(gmt_create)`、`idx_acl_scene_time(scene_code,gmt_create)`、`idx_acl_user(user_id)`、`idx_acl_session(session_id)`、`idx_acl_model(model_code,gmt_create)`、`idx_acl_ok_time(ok,gmt_create)`
+
+| # | 列 | 类型 | 空 | 默认 | 含义 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `id` | bigint unsigned | NO | 自增 | 主键 |
+| 2 | `scene_code` | varchar(32) | NO | '' | 场景编码（`SceneCode.name()`）；空串＝未归属（框架内部调用、启动探活） |
+| 3 | `user_id` | bigint unsigned | YES | — | 归属用户；系统调用（审核节拍器、翻译预生成）为空 |
+| 4 | `session_id` | bigint unsigned | YES | — | 归属会话；对话以外的场景为空 |
+| 5 | `channel` | varchar(16) | YES | — | 通道（`text` / `vision`） |
+| 6 | `provider_code` | int | YES | — | 协议/厂商编码 |
+| 7 | `model_code` | varchar(64) | YES | — | 模型**身份**编码（`ai_model_config.model_code`） |
+| 8 | `model_endpoint` | varchar(128) | YES | — | 实际发给厂商的模型名 |
+| 9 | `prompt_tokens` | int unsigned | YES | — | 输入 token（上游没上报则 NULL） |
+| 10 | `completion_tokens` | int unsigned | YES | — | 输出 token |
+| 11 | `cache_hit_tokens` | int unsigned | YES | — | 缓存命中 token |
+| 12 | `cache_miss_tokens` | int unsigned | YES | — | 缓存未命中 token |
+| 13 | `latency_ms` | int unsigned | YES | — | 本次调用耗时（夹到 int 上限） |
+| 14 | `stream` | tinyint(1) | YES | 0 | 是否流式 |
+| 15 | `ok` | tinyint(1) | YES | 1 | 0 失败、1 成功 |
+| 16 | `error_code` | varchar(64) | YES | — | 失败时的**异常类名**（只记类名不记消息正文） |
+| 17 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 调用完成时间 |
+
+> 三条口径约定：①**只追加**，只有「注销清理」（`purgeByUserId`）与「过期删除」（`AiCallLogCleanupJob`，默认保留 90 天、每批 5000 行）会删它；②**不存正文**（prompt/回答都不落，要复现用 `session_id + gmt_create` 回查 `chat_message`）；③**与 `chat_message.prompt_tokens` 不可相加**——那是「按轮」（一次回答最终落库的用量，工具回环里只保留最后一次），这里是「按调用」（每个模型请求一行）。命中率的分母是 `cache_hit_tokens + cache_miss_tokens`，两者都为 0 表示「上游没上报」，报表里显示为 null 而不是 0%。
+
+---
 ## 9. `chat_user_memory` — 跨会话长期记忆表
 
 **用途**：`UserChatMemoryServiceImpl` 抽取/更新，`forInjection` 读出来注入系统提示词。
 
-**索引**：`PRIMARY(id)`、`uk_user_key_active(user_id,memory_key,is_deleted)`、`idx_user(user_id)`
+**索引**：`PRIMARY(id)`、`uk_user_key_item(user_id,memory_key,item_hash,is_deleted)`（V71 起；原来是不含 item_hash 的 `uk_user_key_active`）、`idx_user(user_id)`
 
 | # | 列 | 类型 | 空 | 默认 | 含义 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `id` | bigint unsigned | NO | 自增 | 记忆 ID |
 | 2 | `user_id` | bigint unsigned | NO | — | 用户账号 ID |
-| 3 | `memory_key` | varchar(64) | NO | — | 记忆键（如 `diet_taboo`、`allergy`）；同用户同 key 唯一（`upsert` 的依据） |
-| 4 | `memory_text` | varchar(512) | NO | — | 记忆内容（自然语言短句，如「不吃香菜」） |
+| 3 | `memory_key` | varchar(64) | NO | — | 记忆**类**（如 `diet_taboo`、`habit`）；一类下可以有多条，不再唯一 |
+| 4 | `memory_text` | varchar(512) | NO | — | 记忆内容（一句话一件事，如「不吃香菜」） |
+| 4.1 | `item_hash` | char(64) | YES | — | V71：`memory_text` 规范化后的 SHA-256，**条目的身份**；`(user_id, memory_key, item_hash)` 才是「同一句话」。为什么不用正文直接做唯一键：varchar(512) 进索引超长，且空白/大小写差异会被判成两条 |
 | 5 | `source_session_id` | bigint unsigned | YES | — | 来源会话，可空（用户手工加的记忆没有来源会话） |
 | 6 | `confidence` | tinyint unsigned | NO | 100 | 置信度 0–100；注入时按它排序取前 N，同 key 冲突时取高的 |
 | 7 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
@@ -381,7 +420,13 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 10 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
 | 11 | `deleted_by` | bigint unsigned | YES | — | 删除人（用户自助删除时写 NULL） |
 | 12 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 13 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 13 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除；与 `deleted_at` 成对写入（`chk_cum_del_consistent`） |
+
+**删除与冷却**：用户在小程序记忆页有三种删除——`logicDeleteById`（删一个条目）、`logicDeleteByKey`（清空一类）、`logicDeleteAllByUser`（清空全部），都只写删除三列。`deleted_at` 还被写入侧当墓碑用：`write(...)` 的 insert 分支查 `selectLastDeletedAt(userId, key, itemHash)`，若 30 天内（`ai.memory.deleted-key-cooldown-days`）删过**同一句话**，则**拒绝自动重建**（只拦 `WriteSource.BATCH`，工具路径不受限）；冷却按条目而不是按键，删掉「不吃香菜」不会连累「海鲜过敏」。
+
+**为什么要清墓碑**：唯一键含 `is_deleted`，而它只有 0/1，所以每个 `(user_id, memory_key, item_hash)` 至多留一条已删行。用户「删除→重新说一遍→再删除」时，第二次删除要写同一个 `(…, 1)`，与既有墓碑撞唯一键（`ERROR 1062`）。因此三个删除入口都会先按同范围**物理清掉墓碑**（`purgeTombstoneOfItem` / `purgeTombstonesByKey` / `purgeTombstonesByUser`），但只在**确实有生效行**时才清——否则幂等重复删除会把审计证据一并抹掉。墓碑的业务价值只有冷却，取 `MAX(deleted_at)` 就够了。
+
+**多条目的代价**：存储不设硬上限（同文去重 + 条目级冷却已经兜住失控），但注入必须按预算裁剪——`forInjection` 每类最多取 3 条并合并成一行，否则五类事实会把历史消息的预算挤没；列表接口因此改为分页。
 
 ---
 

@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.tool.builtin;
 
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 import com.threadfit.glucopilot.ai.tool.runtime.AiToolContext;
+import com.threadfit.glucopilot.ai.tool.runtime.ToolRepeatGuard;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,13 @@ import java.util.Map;
  * 极短回执（{@code {"ok":true}} 或 {@code {"ok":false,"reason":"…"}}）：工具回执会进上下文，
  * 而这里真正需要模型知道的只有"记住没有、为什么没记住"。拒绝原因是可执行的具体说明，
  * 让它知道该换键还是该放弃（例如涉及用药时长记忆一律不写，重试也没用）。
+ *
+ * <h2>写成功为什么要作废读工具的缓存</h2>
+ * {@link ToolRepeatGuard} 的缓存前提是"同样的入参，底层数据没变"。写记忆恰好打破这个前提：
+ * 同一轮里模型可能先 {@code list_long_term_memory} 查一遍、发现没有、于是
+ * {@code save_long_term_memory} 写一条、再查一遍想确认——若不作废，第二次读会拿到写之前的空结果，
+ * 模型就会对用户说"没记住"，而数据库里其实已经有了。
+ * 只作废读记忆这一个工具（不是整个会话）：血糖/社区那几类检索不受这次写入影响，没必要连带清掉。
  */
 @Slf4j
 @Component
@@ -46,6 +54,7 @@ public class MemoryTools {
 
     private final UserChatMemoryService memories;
     private final JsonUtils jsonUtils;
+    private final ToolRepeatGuard repeatGuard;
 
     /**
      * 记录一条用户的长期事实。
@@ -59,13 +68,14 @@ public class MemoryTools {
                     + "仅当用户明确要求记住，或主动陈述长期不变的个人事实时调用："
                     + "忌口/过敏、控糖目标、健康状况、习惯、偏好。"
                     + "不要记一次性事件（今天吃了什么）、临时状态（此刻的感受）、诊断结论或用药细节。"
-                    + "同一个键再次写入会覆盖旧值，用户更正时直接再调一次即可。")
+                    + "一个键下可以有多条记忆，一条只写一件事（例如「不吃香菜」「海鲜过敏」分两条写）；"
+                    + "同样内容重复写不会重复存，用户更正时用更正后的说法再调一次即可。")
     public String saveLongTermMemory(
             @ToolParam(description = "记忆键，只能是以下五个之一："
                     + "diet_taboo（忌口/过敏）、glucose_goal（控糖目标，如空腹<6.1）、"
                     + "health_context（长期健康状况）、habit（作息/运动/饮食等习惯）、"
                     + "preference（沟通与生活偏好）") String key,
-            @ToolParam(description = "用第三人称复述用户的事实，一句话、不超过 200 字，"
+            @ToolParam(description = "用第三人称复述用户的事实，一句话只写一件事、不超过 200 字，"
                     + "例如「用户不吃香菜」「用户希望空腹血糖控制在 6.1 以下」") String text,
             ToolContext toolContext) {
         Long userId;
@@ -79,6 +89,10 @@ public class MemoryTools {
         Long sessionId = AiToolContext.optionalLong(toolContext, AiToolContext.SESSION_ID);
 
         UserChatMemoryService.SaveOutcome outcome = memories.saveExplicit(userId, sessionId, key, text);
+        if (outcome.saved() && sessionId != null) {
+            // 同轮里"先查、再写、再查"很常见：不作废读缓存，第二次读会拿到写之前的空结果
+            repeatGuard.forget(sessionId, MemoryQueryTools.TOOL_NAME);
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", outcome.saved());
         body.put("key", key);

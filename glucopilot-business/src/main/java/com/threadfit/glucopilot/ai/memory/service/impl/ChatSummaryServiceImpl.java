@@ -8,6 +8,7 @@ import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
+import com.threadfit.glucopilot.ai.support.AiCallContext;
 import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import lombok.extern.slf4j.Slf4j;
@@ -136,11 +137,18 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
             if (candidates.isEmpty()) {
                 return false;
             }
+            String skipReason = skipReason(sessionId, candidates);
+            if (skipReason != null) {
+                // 攒不够就该让它继续攒：每一轮都压一次既不省钱，还会把摘要块反复重写、
+                // 连带废掉后面整段历史的前缀缓存（实测：摘要重写的那一轮命中率 24%，下一轮回到 93%）
+                log.debug("暂不摘要（{}）sessionId={} 候选={}条", skipReason, sessionId, candidates.size());
+                return false;
+            }
             String input = buildInput(existing, candidates);
             if (!StringUtils.hasText(input)) {
                 return false;
             }
-            String summary = callModel(input);
+            String summary = callModel(input, userId, sessionId);
             if (!StringUtils.hasText(summary)) {
                 log.warn("摘要模型返回空内容，本次不写库 sessionId={}", sessionId);
                 return false;
@@ -196,6 +204,54 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
         // 因此指针用一个轻量查询单独取（同一行，代价可忽略）。
         Long upto = chatSessionMapper.selectSummaryUptoMsgId(sessionId);
         return upto;
+    }
+
+    /**
+     * 判断"这一轮值不值得跑摘要"；返回 null 表示值得跑，否则返回跳过的原因（用于日志）。
+     *
+     * <p>三道门：</p>
+     * <ol>
+     *   <li><b>条数</b>：候选 ≥ {@code summary-min-pending-messages}（默认 12，≈6 轮对话）；</li>
+     *   <li><b>字数</b>：候选的正文合计 ≥ {@code summary-min-pending-chars}（默认 1500）；</li>
+     *   <li><b>间隔</b>：距上次成功摘要 ≥ {@code summary-min-interval-seconds}（默认 60 秒）。</li>
+     * </ol>
+     *
+     * <p>为什么条数与字数取"或"：语音转写的长消息 2 条就可能过 1500 字，等满 12 条太久；
+     * 反过来纯寒暄的 20 条短消息也压不出什么东西，字数门挡掉它。
+     * 两个门分别对应"消息多但都短"与"消息少但都长"两种真实分布。</p>
+     *
+     * <p>为什么还要间隔门：条数/字数门可能在几十秒内被连续突破（用户连发多条），
+     * 而刚写好的摘要下一轮缓存还没被复用，再写一次纯属浪费。</p>
+     */
+    private String skipReason(Long sessionId, List<ChatMessage> candidates) {
+        AIProperties.MemoryProperties memory = aiProperties.getMemory();
+        int minMessages = memory.getSummaryMinPendingMessages();
+        int minChars = memory.getSummaryMinPendingChars();
+        int pendingChars = 0;
+        for (ChatMessage message : candidates) {
+            String text = replayText(message);
+            if (text != null) {
+                pendingChars += text.length();
+            }
+        }
+        boolean enoughMessages = minMessages <= 0 || candidates.size() >= minMessages;
+        boolean enoughChars = minChars <= 0 || pendingChars >= minChars;
+        if (!enoughMessages && !enoughChars) {
+            return "候选 " + candidates.size() + " 条/" + pendingChars + " 字，未达 "
+                    + minMessages + " 条或 " + minChars + " 字的门";
+        }
+        int minIntervalSeconds = memory.getSummaryMinIntervalSeconds();
+        if (minIntervalSeconds > 0) {
+            java.time.LocalDateTime last = chatSessionMapper.selectSummaryUpdatedAt(sessionId);
+            if (last != null) {
+                long elapsed = java.time.Duration.between(last, java.time.LocalDateTime.now()).getSeconds();
+                // 负数说明库与应用的钟不一致（跨时区/回拨）：这种情况不该把摘要永久卡住，放行
+                if (elapsed >= 0 && elapsed < minIntervalSeconds) {
+                    return "距上次摘要仅 " + elapsed + " 秒（下限 " + minIntervalSeconds + " 秒）";
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -258,15 +314,17 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      * CHAT 提示词，用它做摘要会把整段历史再塞一遍、还会把"控糖助手"人设注入摘要里。
      * 系统提示词按请求取（与视觉链路同一套做法，后台改完立即生效）。
      */
-    private String callModel(String input) {
+    private String callModel(String input, Long userId, Long sessionId) {
         String system = promptTemplateService.systemPrompt(SceneCode.SUMMARY);
-        String content = clients.utilityClient().prompt()
+        // 账单归属：摘要是一轮对话之外的第二笔账，报表要能单独看到它的成本
+        AiCallContext.Call callContext = new AiCallContext.Call(SceneCode.SUMMARY, userId, sessionId);
+        String content = AiCallContext.run(callContext, () -> clients.utilityClient().prompt()
                 .system(system)
                 // 关思维链 + 输出封顶：摘要要"快"而不是"想得多"，详见 SceneModelResolver.summaryOptionsBuilder
                 .options(sceneModelResolver.summaryOptionsBuilder())
                 .user(input)
                 .call()
-                .content();
+                .content());
         if (!StringUtils.hasText(content)) {
             return null;
         }

@@ -33,5 +33,16 @@ public final class SandboxPaymentDtos {
             String status,
             BigDecimal amount,
             String appId,
-            String sellerId) {}
+            String sellerId,
+            String buyerUserId) {
+        public Proof(
+                String orderNo,
+                String tradeNo,
+                String status,
+                BigDecimal amount,
+                String appId,
+                String sellerId) {
+            this(orderNo, tradeNo, status, amount, appId, sellerId, null);
+        }
+    }
 }

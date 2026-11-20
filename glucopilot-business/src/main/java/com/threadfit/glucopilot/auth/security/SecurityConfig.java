@@ -100,7 +100,8 @@ public class SecurityConfig {
                         "/api/v1/dict/**",
                         "/api/v1/app-config",
                         "/api/v1/media-files/avatars/*",
-                        "/api/v1/media-files/local-objects")
+                        "/api/v1/media-files/local-objects",
+                        "/api/v1/devices/cloud/huawei/callback")
                     .permitAll()
                     .anyRequest()
                     .authenticated())

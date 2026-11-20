@@ -1,5 +1,26 @@
 # API 契约
 
+## 2026-11-19 支付返回及提现默认收款账号
+
+- 小程序收银台前台每2秒串行查询本人充值订单，后端同一待付订单查单限频调整为至少1秒；只在服务端确认PAID后卸载网页并直接返回原付款页，不以网页加载、回跳或前端消息作为到账依据。隐藏、卸载、切换账号及订单终态停止查询。
+- 新增`GET /api/v1/wallet/withdrawals/recipient`，本人鉴权、no-store，仅审核通过医生可用。返回`payeeUserId/source`，优先取本人当前沙箱应用及商家下上次使用的提现收款账号（HISTORY），否则查询本人最近一笔已入账充值（RECHARGE），经SDK验签并核对订单号、交易号、金额、商家、应用及成功状态后读取买家UID；无匹配账号返回空（NONE），不创建订单、不入账、不转账。
+- 小程序自动带入收款账号，页面仅展示掩码及来源，可切换到手动填写；识别失败不阻塞提现记录加载。提现申请仍携带经本人确认的UID，后端原有金额、身份、审核和5工作日规则不变。不得使用全局共享买家账号作为所有用户的默认收款账号。
+- “我的问诊”使用现有状态区分等待接诊、接诊中、已出具问诊单及结束；只强化状态展示和详情/交流入口，不在列表泄漏付费问诊单正文。
+
+## 2026-11-19 管理端待办提醒补全
+
+- 复用`GET /admin/v1/work-reminders`和`PUT /admin/v1/work-reminders/read`，新增DOCTOR_REVIEW（doctor:review:manage，待审核医生）、WITHDRAWAL_REVIEW（doctor:withdrawal:manage，待审核提现）、ARTICLE_REVIEW（content:news:list，待管理员终审文章）、GLUCOSE_PENDING（health:alert:view，尚待处理的异常实测记录）。原举报、反馈、食品审核和血糖更新提醒保留。
+- 每类仅返回该权限可见的真实待办数量、未读数量、最新时间及集合快照，不返回医疗正文或收款信息。医生重新提交、文章重新进入终审、血糖测量更新时，旧已读回执不吞掉新版本；提现使用冻结事件ID关联唯一申请。一次已读最多提交8类快照，按当前管理员独立保存，已读不改变审核/处理状态。
+- 管理端前台沿用5秒轮询和顶部信封红点；打开消息跳转对应待审核/待处理列表并重置旧筛选、页码，成功处理后立即刷新汇总。浏览器隐藏暂停轮询，恢复后立即检查；没有相应权限不展示该类提醒。
+
+## 2026-11-19 数据看板真实汇总
+
+- `GET /admin/v1/dashboard`，要求`dashboard:view`，返回统一ApiResponse及no-store。全部指标在只读事务内查询业务库，无模拟数据回退；时间口径为Asia/Shanghai。
+- 返回users(total/today/active)、records(todayGlucose/todayMeal/monthTotal)、content(newsViews/newsCount/feedbackPending)、trend、complianceDist、channelDist、nodeHeat、foodCount，以及generatedAt/rangeStart/rangeEnd。近14天包含今天，按日期升序补足14点，缺数据为0；血糖/饮食按record_date统计，新增用户按注册时间统计。monthTotal为本月实测血糖条数，active为近14天登录的正常用户。
+- 用户总数与记录统计排除逻辑删除和已注销账号，记录排除逻辑删除；血糖只统计glucose_record实测值。资讯统计已发布且发布时间不晚于查询时刻的文章，浏览数沿用community_article_view记录口径；反馈按尚无有效回复统计；食品数量统计未删除食品。
+- 用户达标率分布仅包含近14天有实测值的用户，范围沿用用户管理的`3.9≤值<7.8`，按四舍五入后的达标率分为≥70%、40%～<70%、<40%。九时段记录量合并实测和饮食条数，不将饮食预测值计为实测。
+- 管理端生产模式必须调用真实看板接口，失败显示错误并允许重试。明确开启演示模式时才显示模拟统计，演示趋势日期也按当前近14天生成。
+
 ## 2026-11-18 问诊消息按会话提醒
 
 - 信息汇总增加consultationConversations（最多20个有未读消息的问诊，按最新未读消息倒序），每项为consultationId/title/peerName/lastMessageId/unreadCount；同一问诊仅一项，连续消息累计未读数。未读总数consultations不受20项限制。只返回本人患者/有效接诊医生有权访问的会话，不返回消息正文。
@@ -884,17 +905,34 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
 | GET /api/v1/devices/{id}/sync-logs?limit=10 | C 端登录 | 本人设备近 N 次同步流水（默认 10，最大 50）；按时间倒序；他人设备 id 业务拒绝 |
 
-绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
+绑定请求体：`{ deviceSn, provider, deviceName?, deviceCategory?, deviceModel? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceCategory?, deviceModel?, deviceStatus, lastSyncAt, bound, cloudLinked }`（bound 恒为 true；deviceCategory 闭集 CGM/BGM/PUMP/PEN/BAND/WATCH/RING/HUB/SCALE/BP/OXIMETER/OTHER 可空；deviceModel 可空；cloudLinked 表示已关联有效厂商云授权，首期仅 HUAWEI；响应不含 token）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
+
+## 华为健康云授权与拉取（首期）
+
+服务端持有华为 OAuth 应用凭证与用户 token（表 device_cloud_credential，token 应用层加密）。小程序不持有厂商密钥。HUAWEI_CLOUD_ENABLED 未开启或未配置凭证时，下列接口业务拒绝，不影响 POST /api/v1/device/glucose-sync 演示推送。
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| GET /api/v1/devices/cloud/huawei/authorize-url | C 端登录 | 可选 deviceId；返回 { authorizeUrl, state } |
+| GET /api/v1/devices/cloud/huawei/callback | 匿名（华为回调） | code + state；换 token 后 302 回跳小程序 |
+| GET /api/v1/devices/{id}/cloud-auth | C 端登录 | { linked, expiresAt, scopes? } |
+| DELETE /api/v1/devices/{id}/cloud-auth | C 端登录 | 撤销云授权 |
+| POST /api/v1/devices/cloud-pull | C 端登录 | { deviceId? }；服务端拉 samplePoints 后复用适配器入库；同用户+设备最短间隔 60s |
+
+cloud-pull 成功：{ provider, items, devices? }（items 同 SyncResponse；devices 为按设备汇总可选列表）。
 
 ## 管理端设备档案
 
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
-| GET /admin/v1/devices | device:manage | 分页查询 |
-| POST /admin/v1/devices | device:manage | 创建 |
-| PUT /admin/v1/devices/{id} | device:manage | 更新 |
+| GET /admin/v1/devices | device:manage | 分页；可选 keyword、deviceStatus、provider、deviceCategory、bound、cloudLinked；列表项含 deviceCategory、deviceModel、cloudLinked、syncHealth（OK/NEVER/STALE，48h）、createdAt |
+| POST /admin/v1/devices | device:manage | 创建；可选 deviceCategory、deviceModel |
+| PUT /admin/v1/devices/{id} | device:manage | 更新名称/厂商/类型/型号/绑定用户 |
 | PUT /admin/v1/devices/{id}/status | device:manage | 启用/禁用 |
 | DELETE /admin/v1/devices/{id} | device:manage | 逻辑删除 |
+| GET /admin/v1/devices/{id}/sync-logs?limit=20 | device:manage | 近 N 次同步流水（默认 20，最大 50） |
+| GET /admin/v1/devices/{id}/cloud-auth | device:manage | { linked, expiresAt, scopes?, vendorSubjectMasked? }；无 token |
+| DELETE /admin/v1/devices/{id}/cloud-auth | device:manage | 撤销云授权 |
 
 ## 服务器资源监控（2026-10-22）
 

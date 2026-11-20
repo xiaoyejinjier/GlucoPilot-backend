@@ -6,6 +6,9 @@ import org.apache.ibatis.annotations.*;
 
 @Mapper
 public interface SandboxPaymentMapper {
+    SandboxRecharge latestPaid(
+            @Param("userId") long userId, @Param("app") String app, @Param("seller") String seller);
+
     Long lockActivatedUser(@Param("userId") long userId);
 
     SandboxRecharge byRequest(@Param("userId") long userId, @Param("requestId") String requestId);

@@ -50,13 +50,56 @@ public final class DeviceDtos {
         private String deviceSn;
         private String deviceName;
         private String provider;
+        /** CGM/BGM/PUMP/PEN/BAND/WATCH/RING/HUB/SCALE/BP/OXIMETER/OTHER，可空 */
+        private String deviceCategory;
+        /** 型号，可空 */
+        private String deviceModel;
         private Integer deviceStatus;
         private LocalDateTime lastSyncAt;
         /** 恒为 true：表示归属当前用户 */
         private Boolean bound;
+        /** 是否已关联有效厂商云授权（首期仅 HUAWEI） */
+        private Boolean cloudLinked;
     }
 
-    /** 自助绑定：SN + provider，名称可选。 */
+    @Data
+    @Builder
+    public static class HuaweiAuthorizeUrlResponse {
+        private String authorizeUrl;
+        private String state;
+    }
+
+    @Data
+    @Builder
+    public static class CloudAuthStatus {
+        private Boolean linked;
+        private LocalDateTime expiresAt;
+        private String scopes;
+    }
+
+    @Data
+    public static class CloudPullRequest {
+        /** 可选；为空则拉取当前用户全部已授权华为设备 */
+        private Long deviceId;
+    }
+
+    @Data
+    @Builder
+    public static class CloudPullDeviceSummary {
+        private String deviceId;
+        private String provider;
+        private Integer itemCount;
+    }
+
+    @Data
+    @Builder
+    public static class CloudPullResponse {
+        private String provider;
+        private List<SyncResultItem> items;
+        private List<CloudPullDeviceSummary> devices;
+    }
+
+    /** 自助绑定：SN + provider，名称/类型/型号可选。 */
     @Data
     public static class BindRequest {
         @NotBlank
@@ -67,6 +110,10 @@ public final class DeviceDtos {
         private String provider;
         @Size(max = 64)
         private String deviceName;
+        @Size(max = 32)
+        private String deviceCategory;
+        @Size(max = 64)
+        private String deviceModel;
     }
 
     /** 设备同步流水（近 N 次）。 */

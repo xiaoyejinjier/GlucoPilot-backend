@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.dashboard.mapper.AdminDashboardMapper">
+    <sql id="userScope">u.is_deleted=0 AND u.account_status IN (1,2)</sql>
+    <sql id="glucoseScope">g.is_deleted=0 AND g.glucose_value IS NOT NULL AND <include refid="userScope"/></sql>
+    <sql id="mealScope">m.is_deleted=0 AND <include refid="userScope"/></sql>
+    <sql id="published">n.is_deleted=0 AND n.publish_status=1 AND n.publish_at&lt;=#{asOf}</sql>
+
+    <select id="counts" resultType="com.threadfit.glucopilot.dashboard.dto.DashboardDtos$Counts">
+        SELECT
+            (SELECT COUNT(*) FROM user_account u WHERE <include refid="userScope"/>) users_total,
+            (SELECT COUNT(*) FROM user_account u WHERE <include refid="userScope"/>
+                AND u.gmt_create&gt;=#{today} AND u.gmt_create&lt;#{nextDay}) users_today,
+            (SELECT COUNT(*) FROM user_account u WHERE u.is_deleted=0 AND u.account_status=1
+                AND u.last_login_at&gt;=#{start} AND u.last_login_at&lt;#{nextDay}) users_active,
+            (SELECT COUNT(*) FROM glucose_record g JOIN user_account u ON u.id=g.user_id
+                WHERE <include refid="glucoseScope"/> AND g.record_date=#{today}) today_glucose,
+            (SELECT COUNT(*) FROM meal_record m JOIN user_account u ON u.id=m.user_id
+                WHERE <include refid="mealScope"/> AND m.record_date=#{today}) today_meal,
+            (SELECT COUNT(*) FROM glucose_record g JOIN user_account u ON u.id=g.user_id
+                WHERE <include refid="glucoseScope"/>
+                AND g.record_date&gt;=#{monthStart} AND g.record_date&lt;#{nextDay}) month_total,
+            (SELECT COUNT(*) FROM cms_news n WHERE <include refid="published"/>) news_count,
+            (SELECT COUNT(*) FROM community_article_view v JOIN cms_news n ON n.id=v.news_id
+                WHERE <include refid="published"/> AND v.created_at&lt;=#{asOf}) news_views,
+            (SELECT COUNT(*) FROM feedback f WHERE f.is_deleted=0
+                AND COALESCE(CHAR_LENGTH(TRIM(f.official_reply)),0)=0) feedback_pending,
+            (SELECT COUNT(*) FROM food_nutrition f WHERE f.is_deleted=0) food_count
+    </select>
+
+    <!-- 三种事实分别汇总，避免直接JOIN血糖/饮食明细造成计数相乘。 -->
+    <select id="daily" resultType="com.threadfit.glucopilot.dashboard.dto.DashboardDtos$DailyRow">
+        SELECT record_date, SUM(glucose) glucose, SUM(meal) meal, SUM(users) users
+        FROM (
+            SELECT g.record_date, COUNT(*) glucose, 0 meal, 0 users
+            FROM glucose_record g JOIN user_account u ON u.id=g.user_id
+            WHERE <include refid="glucoseScope"/>
+                AND g.record_date&gt;=#{start} AND g.record_date&lt;#{nextDay}
+            GROUP BY g.record_date
+            UNION ALL
+            SELECT m.record_date, 0 glucose, COUNT(*) meal, 0 users
+            FROM meal_record m JOIN user_account u ON u.id=m.user_id
+            WHERE <include refid="mealScope"/>
+                AND m.record_date&gt;=#{start} AND m.record_date&lt;#{nextDay}
+            GROUP BY m.record_date
+            UNION ALL
+            SELECT CAST(u.gmt_create AS DATE) record_date, 0 glucose, 0 meal, COUNT(*) users
+            FROM user_account u WHERE <include refid="userScope"/>
+                AND u.gmt_create&gt;=#{start} AND u.gmt_create&lt;#{nextDay}
+            GROUP BY CAST(u.gmt_create AS DATE)
+        ) daily_counts
+        GROUP BY record_date
+        ORDER BY record_date
+    </select>
+
+    <select id="compliance" resultType="com.threadfit.glucopilot.dashboard.dto.DashboardDtos$ValueRow">
+        SELECT CASE WHEN target_rate&gt;=70 THEN '达标率≥70%'
+                    WHEN target_rate&gt;=40 THEN '达标率40%～&lt;70%'
+                    ELSE '达标率&lt;40%' END name,
+               COUNT(*) AS `value`
+        FROM (
+            SELECT g.user_id,
+                ROUND(100.0*SUM(CASE WHEN g.glucose_value&gt;=#{low} AND g.glucose_value&lt;#{high}
+                    THEN 1 ELSE 0 END)/COUNT(*),0) target_rate
+            FROM glucose_record g JOIN user_account u ON u.id=g.user_id
+            WHERE <include refid="glucoseScope"/>
+                AND g.record_date&gt;=#{start} AND g.record_date&lt;#{nextDay}
+            GROUP BY g.user_id
+        ) user_rates
+        GROUP BY name
+    </select>
+
+    <select id="channels" resultType="com.threadfit.glucopilot.dashboard.dto.DashboardDtos$ValueRow">
+        SELECT CASE n.channel_code WHEN 1 THEN '企业动态' WHEN 2 THEN '行业快讯'
+            WHEN 3 THEN '设备新知' WHEN 4 THEN '控糖科普' ELSE '其他' END name,
+            COUNT(*) AS `value`
+        FROM cms_news n WHERE <include refid="published"/>
+        GROUP BY n.channel_code
+        ORDER BY n.channel_code
+    </select>
+
+    <select id="nodes" resultType="com.threadfit.glucopilot.dashboard.dto.DashboardDtos$ValueRow">
+        SELECT d.node_name name, COALESCE(h.total,0) AS `value`
+        FROM dict_glucose_node d
+        LEFT JOIN (
+            SELECT node_code, SUM(total) total FROM (
+                SELECT g.node_code, COUNT(*) total
+                FROM glucose_record g JOIN user_account u ON u.id=g.user_id
+                WHERE <include refid="glucoseScope"/>
+                    AND g.record_date&gt;=#{start} AND g.record_date&lt;#{nextDay}
+                GROUP BY g.node_code
+                UNION ALL
+                SELECT m.node_code, COUNT(*) total
+                FROM meal_record m JOIN user_account u ON u.id=m.user_id
+                WHERE <include refid="mealScope"/>
+                    AND m.record_date&gt;=#{start} AND m.record_date&lt;#{nextDay}
+                GROUP BY m.node_code
+            ) node_counts GROUP BY node_code
+        ) h ON h.node_code=d.node_code
+        WHERE d.is_deleted=0
+        ORDER BY d.sort_no,d.id
+    </select>
+</mapper>

@@ -32,6 +32,14 @@ public class AdminWorkReminderService {
                     "FOOD_REVIEW",
                     "food:library:manage",
                     "GLUCOSE_UPDATE",
+                    "health:alert:view",
+                    "DOCTOR_REVIEW",
+                    "doctor:review:manage",
+                    "WITHDRAWAL_REVIEW",
+                    "doctor:withdrawal:manage",
+                    "ARTICLE_REVIEW",
+                    "content:news:list",
+                    "GLUCOSE_PENDING",
                     "health:alert:view");
     private static final Map<String, String> TITLES =
             Map.of(
@@ -42,7 +50,26 @@ public class AdminWorkReminderService {
                     "FOOD_REVIEW",
                     "待审核食品",
                     "GLUCOSE_UPDATE",
-                    "血糖记录已更新");
+                    "血糖记录已更新",
+                    "DOCTOR_REVIEW",
+                    "待审核医生",
+                    "WITHDRAWAL_REVIEW",
+                    "待审核提现",
+                    "ARTICLE_REVIEW",
+                    "待终审文章",
+                    "GLUCOSE_PENDING",
+                    "新异常血糖待处理");
+
+    private static final List<String> KINDS =
+            List.of(
+                    "REPORT",
+                    "FEEDBACK",
+                    "FOOD_REVIEW",
+                    "GLUCOSE_UPDATE",
+                    "DOCTOR_REVIEW",
+                    "WITHDRAWAL_REVIEW",
+                    "ARTICLE_REVIEW",
+                    "GLUCOSE_PENDING");
 
     public record Item(
             String type,
@@ -55,12 +82,12 @@ public class AdminWorkReminderService {
 
     public record Summary(long total, List<Item> items) {}
 
-    public record ReadRequest(@NotEmpty @Size(max = 4) Map<String, String> revisions) {}
+    public record ReadRequest(@NotEmpty @Size(max = 8) Map<String, String> revisions) {}
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Summary summary(long opsId, Set<String> permissions) {
         var items = new ArrayList<Item>();
-        for (String kind : List.of("REPORT", "FEEDBACK", "FOOD_REVIEW", "GLUCOSE_UPDATE")) {
+        for (String kind : KINDS) {
             if (!allowed(permissions, kind)) continue;
             var sources = mapper.sources(opsId, kind);
             if (sources.isEmpty()) continue;
@@ -84,7 +111,7 @@ public class AdminWorkReminderService {
                             latest,
                             sources.size(),
                             revision(sources),
-                            kind.equals("GLUCOSE_UPDATE") ? target.getId().toString() : null));
+                            kind.startsWith("GLUCOSE_") ? target.getId().toString() : null));
         }
         items.sort(
                 Comparator.comparing(
@@ -98,7 +125,7 @@ public class AdminWorkReminderService {
         if (request == null
                 || request.revisions() == null
                 || request.revisions().isEmpty()
-                || request.revisions().size() > 4) {
+                || request.revisions().size() > KINDS.size()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择需要标记的消息");
         }
         var snapshots = new LinkedHashMap<String, List<WorkReminderSource>>();

@@ -34,13 +34,45 @@
                     WHERE g.is_deleted = 0
                       AND (h.glucose_value &lt;&gt; g.glucose_value OR h.recorded_at &lt;&gt; g.recorded_at)
                 </when>
+                <when test="kind == 'DOCTOR_REVIEW'">
+                    SELECT d.user_id id, CONCAT(d.user_id, '|', d.version) revision, d.updated_at latest_at
+                    FROM consultation_doctor d JOIN user_account u ON u.id=d.user_id
+                    WHERE d.status='PENDING' AND u.is_deleted=0 AND u.account_status=1
+                </when>
+                <when test="kind == 'WITHDRAWAL_REVIEW'">
+                    <!-- 冻结事件与申请一一对应，复用其数字主键保存已读。 -->
+                    SELECT e.id, CONCAT(o.order_no, '|', o.version) revision, o.created_at latest_at
+                    FROM wallet_withdrawal_order o
+                    JOIN wallet_withdrawal_event e ON e.order_no=o.order_no AND e.event_type='FREEZE'
+                    WHERE o.status='PENDING'
+                </when>
+                <when test="kind == 'ARTICLE_REVIEW'">
+                    SELECT a.news_id id, CONCAT(a.news_id, '|', a.revision, '|', a.updated_at) revision,
+                           a.updated_at latest_at
+                    FROM community_article a JOIN cms_news n ON n.id=a.news_id
+                    WHERE a.state='PENDING_ADMIN' AND n.community_managed=1 AND n.is_deleted=0
+                </when>
+                <when test="kind == 'GLUCOSE_PENDING'">
+                    SELECT g.id, CONCAT(g.id, '|', g.glucose_value, '|', g.recorded_at) revision,
+                           g.gmt_modified latest_at
+                    FROM glucose_record g JOIN user_account u ON u.id=g.user_id AND u.is_deleted=0
+                    LEFT JOIN gp_glucose_alert_case h ON h.record_id=g.id
+                        AND h.glucose_value=g.glucose_value AND h.recorded_at=g.recorded_at
+                    WHERE g.is_deleted=0 AND g.glucose_value&gt;0 AND g.glucose_value&lt;40
+                      AND (g.glucose_value&lt;3.9 OR g.glucose_value&gt;=10)
+                      AND g.node_code IN ('before_breakfast','after_breakfast','before_lunch',
+                                          'after_lunch','before_dinner','after_dinner')
+                      AND COALESCE(h.status,'PENDING')='PENDING'
+                </when>
                 <otherwise>
                     SELECT id, '' revision, created_at latest_at FROM community_report WHERE 1 = 0
                 </otherwise>
             </choose>
         ) s
         LEFT JOIN admin_work_reminder_read r ON r.ops_id = #{opsId} AND r.kind = #{kind}
-            AND r.source_id = s.id AND r.revision = s.revision
+            AND r.source_id = s.id
+            <!-- 快照只包含ASCII编号/时间；按字节比对，兼容历史表不同的MySQL排序规则。 -->
+            AND CAST(r.revision AS BINARY(255)) = CAST(s.revision AS BINARY(255))
         ORDER BY s.id
     </select>
 

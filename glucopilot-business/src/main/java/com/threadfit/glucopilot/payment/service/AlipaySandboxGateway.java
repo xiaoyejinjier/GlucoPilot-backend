@@ -264,7 +264,8 @@ public class AlipaySandboxGateway implements SandboxGateway {
                     response.getTradeStatus(),
                     new BigDecimal(response.getTotalAmount()),
                     properties.getAppId(),
-                    properties.getSellerId());
+                    properties.getSellerId(),
+                    response.getBuyerUserId());
         } catch (AlipayApiException ex) {
             throw sdkFailure("QUERY", ex);
         } catch (NumberFormatException ex) {

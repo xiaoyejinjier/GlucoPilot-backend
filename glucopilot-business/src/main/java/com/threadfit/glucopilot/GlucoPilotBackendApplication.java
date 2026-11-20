@@ -24,6 +24,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
             "com.threadfit.glucopilot.ruoyi.mapper",
             "com.threadfit.glucopilot.content.mapper",
             "com.threadfit.glucopilot.export.mapper",
+            "com.threadfit.glucopilot.dashboard.mapper",
             "com.threadfit.glucopilot.consultation.mapper",
             "com.threadfit.glucopilot.doctor.mapper",
             "com.threadfit.glucopilot.wallet.mapper",

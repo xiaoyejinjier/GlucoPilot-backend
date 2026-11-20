@@ -10,7 +10,7 @@
 
 微信web-view的目标页和重定向可能受到业务域名校验限制，本次按钮及加载失败返回/重试流程已实现，真机是否能打开支付宝页面尚需实际验证。开发者工具展示不能替代真机验证。页面仅传订单号，按当前身份重新获取本人订单的官方链接；不会把登录Token或整条签名URL放进页面路由。
 
-小程序收银台显示时每5秒主动查单，确认订单PAID后退出网页展示到账结果，弹出返回提示，并提供“返回付款页”按钮。网页加载也会触发查单，返回后原付款页再次读取状态。只有后端确认支付成功才出现到账结果，支付网页消息不能修改钱包余额。
+小程序收银台显示时每2秒串行主动查单，同一订单后端至少间隔1秒查询支付宝。确认订单PAID后卸载网页、提示付款成功并自动返回原付款页，无需再点确认；返回失败时仍可使用“返回付款页”按钮。网页加载也会触发查单，返回后原付款页再次读取状态。只有后端确认支付成功才返回，支付网页消息不能修改钱包余额。
 
 后端使用官方 SDK 的 `alipay.trade.page.pay`，产品码为 `FAST_INSTANT_TRADE_PAY`，通过 `pageExecute(request, "GET")` 返回签名链接。链接绑定服务端订单号、金额和绝对到期时间。网页订单与扫码订单分别保存付款方式，历史订单默认扫码；更换方式须创建新订单。打开链接与生成链接均不会触发余额入账，仍以验签通知或主动查单确认。项目页面不收集支付宝密码。[支付宝官方 SDK 实现](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/AbstractAlipayClient.java)
 
@@ -97,7 +97,7 @@ IDEA 运行配置中直接填写的环境变量也要核对。在“运行 → �
 ## 七、医生提现接入支付宝沙箱转账（V78）
 
 1. 复用本机已有沙箱AppID、应用私钥、支付宝公钥和商家PID，网关仍固定沙箱。沙箱应用需具备转账产品能力，付款商家有可用测试资金；否则按平台错误码处理，不能伪造成功。无需发送密钥。
-2. 在医生提现页面填入当前沙箱控制台提供的买家测试账号UID（2088开头），不能填手机号、登录密码或付款商家自己的PID。新申请会固化金额、收款UID和商家快照。旧的待审核/待发放模拟申请可由本人点击“补充沙箱收款账号”；开始出款后禁止修改收款方。
+2. 医生提现页面优先自动带入本人当前应用/商家下上次使用的收款账号；没有历史账号时，通过SDK查本人最近已入账充值并核对成功交易，识别付款买家UID。页面显示掩码和来源，可点击“更换”手动填写；没有可识别账号时仍需填写一次沙箱买家UID，不能填手机号、密码或商家PID。新申请固化本人确认的金额、收款UID和商家快照，识别账号本身不创建提现或改变余额。旧的待审核/待发放申请可由本人点击“补充沙箱收款账号”；开始出款后禁止修改收款方。
 3. 审核流程和5个工作日保持不变；未到日期不能发放。到期任务或管理端“沙箱转账”使用原提现号作为out_biz_no，先查单，不存在才提交同号转账，再查单核对金额及收款方。接口为alipay.fund.trans.uni.transfer与alipay.fund.trans.common.query，产品TRANS_ACCOUNT_NO_PWD、场景DIRECT_TRANSFER。参考[官方SDK转账参数](https://raw.githubusercontent.com/alipay/alipay-sdk-java-all/master/v2/src/main/java/com/alipay/api/domain/AlipayFundTransUniTransferModel.java)和[查询响应字段](https://raw.githubusercontent.com/alipay/alipay-sdk-java-all/master/v2/src/main/java/com/alipay/api/response/AlipayFundTransCommonQueryResponse.java)。
 4. 转账场景名称和报备类型取当前商家配置。可在本机环境设置ALIPAY_SANDBOX_TRANSFER_SCENE_NAME与ALIPAY_SANDBOX_TRANSFER_SCENE_INFO_TYPE；代码默认“业务结算”与“结算款项名称”。如平台拒绝场景信息，按当前沙箱控制台和[官方字段说明](https://opendocs.alipay.com/open/0iaxid)核对，不修改签名或网关来绕过。
 5. 小程序点击“刷新状态”或下拉刷新，会先查询本人已开始的转账，再读取最新提现记录、可提现额及冻结额；不会新建转账或提前发放。医生后台也支持刷新；管理员可按单查询结果。

@@ -487,3 +487,19 @@ payments:
       notify-url: ${ALIPAY_SANDBOX_NOTIFY_URL:}
       transfer-scene-name: ${ALIPAY_SANDBOX_TRANSFER_SCENE_NAME:业务结算}
       transfer-scene-info-type: ${ALIPAY_SANDBOX_TRANSFER_SCENE_INFO_TYPE:结算款项名称}
+
+# 厂商云拉取（首期华为）。密钥与开关仅来自环境变量，禁止写入真实值到仓库。
+device:
+  cloud:
+    token-aes-key: ${DEVICE_CLOUD_TOKEN_AES_KEY:}
+    pull-min-interval-seconds: ${DEVICE_CLOUD_PULL_MIN_INTERVAL_SECONDS:60}
+    huawei:
+      enabled: ${HUAWEI_CLOUD_ENABLED:false}
+      client-id: ${HUAWEI_HEALTH_CLIENT_ID:}
+      client-secret: ${HUAWEI_HEALTH_CLIENT_SECRET:}
+      redirect-uri: ${HUAWEI_HEALTH_REDIRECT_URI:}
+      authorize-base: ${HUAWEI_HEALTH_AUTHORIZE_BASE:https://oauth-login.cloud.huawei.com/oauth2/v3/authorize}
+      token-url: ${HUAWEI_HEALTH_TOKEN_URL:https://oauth-login.cloud.huawei.com/oauth2/v3/token}
+      api-base: ${HUAWEI_HEALTH_API_BASE:https://health-api.cloud.huawei.com/healthkit/v2}
+      scopes: ${HUAWEI_HEALTH_SCOPES:openid https://www.huawei.com/healthkit/bloodglucose.read}
+      return-url: ${MINIPROGRAM_CLOUD_AUTH_RETURN_URL:}

@@ -17,6 +17,12 @@ public class UserDevice extends BaseEntity {
     private String deviceSn;
     private String deviceName;
     private String provider;
+    /** CGM/BGM/PUMP/PEN/BAND/WATCH/RING/HUB/SCALE/BP/OXIMETER/OTHER；可空 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String deviceCategory;
+    /** 型号/SKU；可空 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String deviceModel;
     /** 解绑时需写 NULL，不能用默认 NOT_NULL 更新策略 */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long userId;

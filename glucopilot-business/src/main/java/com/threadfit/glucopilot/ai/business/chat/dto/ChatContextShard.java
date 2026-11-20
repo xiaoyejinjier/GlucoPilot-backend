@@ -34,8 +34,17 @@ package com.threadfit.glucopilot.ai.business.chat.dto;
  * @param contextKey   分片键（见各工厂方法）
  * @param tokenEstimate 本分片的估算 token（≥0）
  * @param sortNo       本轮内的展示顺序
+ * @param windowShifted 本轮窗口是否发生过滑动（只有历史分片会带值，其余为 null）；
+ *                      与 {@code windowMessages} 一起回答"这一轮为什么突然不命中了"
+ * @param windowMessages 本轮实际送进模型的历史条数（同上，只有历史分片带值）
  */
-public record ChatContextShard(int contextType, String contextKey, int tokenEstimate, int sortNo) {
+public record ChatContextShard(int contextType, String contextKey, int tokenEstimate, int sortNo,
+                               Boolean windowShifted, Integer windowMessages) {
+
+    /** 不带窗口账本字段的构造（系统提示/记忆/摘要/工具摘要四片用）。 */
+    public ChatContextShard(int contextType, String contextKey, int tokenEstimate, int sortNo) {
+        this(contextType, contextKey, tokenEstimate, sortNo, null, null);
+    }
 
     /** DDL：1 系统提示。 */
     public static final int TYPE_SYSTEM_PROMPT = 1;
@@ -85,8 +94,25 @@ public record ChatContextShard(int contextType, String contextKey, int tokenEsti
         return new ChatContextShard(TYPE_TOOL_RESULT, KEY_TOOL_DIGEST, Math.max(tokens, 0), SORT_TOOL_DIGEST);
     }
 
-    /** 回放进 prompt 的历史消息。 */
+    /**
+     * 回放进 prompt 的历史消息（不带窗口账本）。
+     *
+     * <p>不带账本时两个字段是 {@code null} 而不是 {@code false/0}：{@code false} 会被读成
+     * 「这一轮确实完整回放了」，而事实是「这一次没记」——观测字段上的"没记"与"记为否"必须分开。
+     */
     public static ChatContextShard historyMessages(int tokens) {
         return new ChatContextShard(TYPE_OTHER, KEY_HISTORY_MESSAGES, Math.max(tokens, 0), SORT_HISTORY_MESSAGES);
+    }
+
+    /**
+     * 回放进 prompt 的历史消息 + 窗口账本。
+     *
+     * <p>{@code windowShifted}／{@code windowMessages} 只在这一片上带值：历史片是唯一会"被裁剪"的分片，
+     * 「这一轮滑了没有、滑完还剩几条」是排查"为什么命中率突然从 90% 掉到 20%"的第一现场
+     * （答案通常是：摘要重写 + 窗口滑动同时发生）。
+     */
+    public static ChatContextShard historyMessages(int tokens, boolean windowShifted, int windowMessages) {
+        return new ChatContextShard(TYPE_OTHER, KEY_HISTORY_MESSAGES, Math.max(tokens, 0), SORT_HISTORY_MESSAGES,
+                windowShifted, Math.max(windowMessages, 0));
     }
 }

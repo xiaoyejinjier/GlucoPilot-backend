@@ -1092,7 +1092,31 @@ if (updated == 0) { /* 指针已经前进了（别的实例先完成），丢弃
 
 **为什么顺带把 `SUMMARY` 绑到便宜模型（V77）**：摘要的输入是「已有摘要 + 待压原文」，实测 600~1800 输入 token、输出 82~550 token，全程关思维链、温度 0.1——这是典型的「格式整理活」，用最贵的文本默认模型（pro）做纯属浪费。V77 在 `ai_scene_config` 里插了一行 `SUMMARY → deepseek-v4-flash`，并把原本停用的 flash 启用（不影响文本默认仍是 pro）。
 
-### 10.3 `ChatRoundGuard`（92 行）：进程内单飞
+**间隔门的例外：窗口将溢出时立即摘要（2026-11-19）**：`skipReason` 先算 `issueDoc = isWindowAboutToOverflow(candidates.size(), memory)`，阈值 = `window-messages − keep-recent-messages − 1`。一旦待压条数逼近窗口容量，60 秒的间隔门**当场让位**——因为装配器的必留带（见 §10.4）装不下时只能二选一：丢未摘要消息（空洞）或超条数上限，而这两者都比「多调一次 flash」贵。`threshold <= 0`（配置自相矛盾，如 window 比 keep 还小）直接视为 urgent，宁可多压一次也不要在错配置下持续丢消息。
+
+**启动期自洽性校验（V76 同批，只 WARN 不阻断）**：`ai/config/AiMemoryConfigCheck.java` 在 `@PostConstruct` 里检查三条关系并把建议值写进日志——①`keep-recent-messages ≥ window-messages`；②`window-messages < keep + summary-min-pending-messages + 2`（+2 是「摘要晚半拍」的抖动余量）；③`max-prompt-tokens < 8000`（固定开销实测 5444~6700，预算比它小则预算判断永远为假，只有 keep-recent 生效）。这三条都是「配错了不报错、只表现为模型健忘或账单变贵」的那类问题，所以值得在启动日志里吼一声。
+
+### 10.4 `ChatHistoryAssembler`（V81）：必留带 + 窗口滞回
+
+装配顺序是 `[场景提示词, 长期记忆/滚动摘要, 历史消息, 本轮用户消息]`，其中历史消息这一段由本类决定「放哪些、放多少」。到 2026-11-19 为止它有三条规则，**优先级从高到低**：
+
+| 优先级 | 规则 | 依据 |
+| --- | --- | --- |
+| 1 | **必留带**：摘要指针 `summary_upto_msg_id` 之后的所有消息必须进窗口（`protectedTail` = 这些消息的条数，由 `ChatContextReader.countUnsummarized` 回库数） | 摘要永远不覆盖最近 `keep-recent-messages` 条，窗口一旦滑过指针，那几条就既不在摘要也不在窗口 —— 日志里那个「空洞」 |
+| 2 | **条数上限**：`window-messages`（= `maxMessages`）是**上限**不是固定值；重叠带（指针之前的老消息）装到上限就停 | 上限决定「最坏情况下的输入体积」，也决定缓存前缀能有多长 |
+| 3 | **预算**：`max-prompt-tokens` 减去固定开销后还剩多少 | 硬上限，任何规则都不能突破它 |
+
+前两条冲突时必留带赢；第 3 条与必留带冲突时预算赢，且必须留下证据——`Stats.protectedDropped > 0` 时 `ChatMemoryReadAdvisor` 打一条 WARN，写明「丢了 N 条未摘要消息」以及两个可调项。
+
+**典型滞回曲线**（`window-messages=20`、`keep-recent=6`、门控 12 条）：窗口随对话扩张到 20 条上限 → 摘要推进指针、可回收带释放 → 下一轮一次性收缩到 10 条左右 → 再逐轮扩回 20。日志表现为 `窗口滑动=true/false` 交替，而不是每轮恒定 6 条。实测同会话 15 次 CHAT 调用：`cache_hit 51712 / prompt 84754 = 61%`，未滑动轮次命中可达 `6400/9102`，滑动那一轮掉到 `1152`（≈20%）——这正是"每滑一次废一次前缀"的代价，也是为什么上限放大到 20 条比每轮 6 条更省（多送的大多是**命中**部分，1:30 差价下几乎白送）。
+
+**窗口本身也落表（V81/V82）**：`chat_context` 加 `window_shifted`（本轮是否滑动）与 `window_messages`（本轮**实际**回放的历史条数，不是上限——上限恒为 20，落表没有信息量），只有历史分片带值，其余分片为 NULL。审计页每轮标题行显示一句后端拼好的说明（`notice`，如「本轮窗口已滑动 · 历史 16 条」），历史分片图例旁有 `本轮滑动` 与 `历史 N 条` 两个小标签。
+
+> V81 首次落地时这两列的注释误写成"窗口条数上限"，实际写入的是 `kept_count`；V82 只改注释措辞、不动数据，把语义钉在"实际回放条数"上。
+
+`window-messages` 从此不再等于"每轮固定发 20 条"，而是"最多发 20 条"——这也是本轮设计里最容易读错的一个词。
+
+### 10.5 `ChatRoundGuard`（92 行）：进程内单飞
 
 ```java
 static final Duration STALE_AFTER = Duration.ofMinutes(5);
@@ -1107,7 +1131,7 @@ public boolean tryAcquire(String key) {   // 顺便清理超过 5 分钟的僵�
 
 **注意它的边界**：这是 `ConcurrentHashMap`，只在单进程内有效。多实例部署时同一轮仍可能被两个实例同时生成——真正的一致性由 DB 兜底：`selectAssistantReply` 幂等 + `chat_message` 唯一键。摘要靠 `upto` 指针，审核靠 `FOR UPDATE SKIP LOCKED`。
 
-### 10.4 `MyBatisChatMemoryRepository`（164 行）：把 Spring AI 的 `ChatMemory` 接到自家表
+### 10.6 `MyBatisChatMemoryRepository`（164 行）：把 Spring AI 的 `ChatMemory` 接到自家表
 
 ```java
 public class MyBatisChatMemoryRepository implements ChatMemoryRepository {

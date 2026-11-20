@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.ai.business.chat.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextDtos;
+import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatContextEntity;
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatSession;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatContextMapper;
@@ -76,17 +77,46 @@ public class ChatContextQueryServiceImpl implements ChatContextQueryService {
             ChatContextEntity head = shards.get(0);
             List<ChatContextDtos.Shard> shardDtos = new ArrayList<>(shards.size());
             int roundTokens = 0;
+            int historyShards = 0;
+            boolean shifted = false;
+            Integer windowMessages = null;
             for (ChatContextEntity shard : shards) {
                 int tokens = shard.getTokenEstimate() == null ? 0 : shard.getTokenEstimate();
                 roundTokens += tokens;
                 shardDtos.add(new ChatContextDtos.Shard(shard.getContextType(), shard.getContextKey(),
-                        shard.getTokenEstimate(), shard.getSortNo()));
+                        shard.getTokenEstimate(), shard.getSortNo(),
+                        shard.getWindowShifted(), shard.getWindowMessages()));
+                if (ChatContextShard.KEY_HISTORY_MESSAGES.equals(shard.getContextKey())) {
+                    historyShards++;
+                    shifted = Boolean.TRUE.equals(shard.getWindowShifted());
+                    windowMessages = shard.getWindowMessages();
+                }
             }
             total += roundTokens;
+            String notice = describeNotice(historyShards, shifted, windowMessages);
             rounds.add(new ChatContextDtos.ContextRound(entry.getKey(), head.getTriggerMsgId(),
-                    head.getAssistantMsgId(), head.getModelCode(), roundTokens, shardDtos));
+                    head.getAssistantMsgId(), head.getModelCode(), roundTokens, shardDtos, notice));
         }
         log.debug("查询分片审计 sessionId={} round={} 轮次={} token合计={}", sessionId, round, rounds.size(), total);
         return new ChatContextDtos.ContextView(sessionId, rounds, total);
+    }
+
+    /**
+     * 这一轮的一句话说明。
+     *
+     * <p>为什么由后端拼：判断它需要同时理解 {@code dropped_history}（在日志里）与
+     * {@code window_shifted / window_messages}（在表里）的关系，把这段逻辑复制到前端，
+     * 一旦后端改了装配语义，页面就会开始撒谎。而「本轮完整回放」这种事实，前端也无从推断。
+     */
+    private static String describeNotice(int historyShards, boolean shifted, Integer windowMessages) {
+        if (historyShards <= 0) {
+            return "本轮没有回放历史消息";
+        }
+        if (shifted) {
+            return windowMessages == null
+                    ? "本轮窗口已滑动（丢弃了窗口外的旧消息）"
+                    : "本轮窗口已滑动 · 历史 " + windowMessages + " 条";
+        }
+        return windowMessages == null ? "本轮完整回放" : "本轮完整回放 · 历史 " + windowMessages + " 条";
     }
 }

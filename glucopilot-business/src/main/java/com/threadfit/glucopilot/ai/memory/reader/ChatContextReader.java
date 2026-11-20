@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.memory.reader;
 
 import com.threadfit.glucopilot.ai.business.chat.entity.ChatToolCall;
+import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.ChatToolCallMapper;
 import com.threadfit.glucopilot.ai.business.chat.mapper.MessageGap;
@@ -33,6 +34,9 @@ public class ChatContextReader {
     private final ChatSessionMapper chatSessionMapper;
 
     private final ChatToolCallMapper chatToolCallMapper;
+
+    /** 必留带条数要用到「指针之后还有几条消息」，只能回到 chat_message 数。 */
+    private final ChatMessageMapper chatMessageMapper;
 
     private final AIProperties aiProperties;
 
@@ -67,6 +71,27 @@ public class ChatContextReader {
         } catch (RuntimeException e) {
             log.warn("读取会话摘要失败（本轮不使用摘要）sessionId={}", sessionId, e);
             return null;
+        }
+    }
+
+    /**
+     * 摘要指针之后还有多少条可回放消息 —— 装配器的「必留带」条数（2026-11-19）。
+     *
+     * <p>为什么必须算出来再告诉装配器：摘要永远不覆盖最近 {@code keep-recent-messages} 条，
+     * 所以窗口一旦滑过指针，那几条就既不进摘要也不进窗口（日志里的「空洞」），模型直接断片。
+     * 把条数交给装配器，就能让它"必留带不受条数上限约束"，空洞不再取决于摘要跑得快不快。
+     *
+     * <p>读失败返回 0（退回旧行为：只靠 keep-recent 保底），并留一条 WARN。
+     */
+    public int countUnsummarized(Long sessionId, Long uptoMsgId) {
+        if (sessionId == null) {
+            return 0;
+        }
+        try {
+            return Math.max(chatMessageMapper.countUnsummarized(sessionId, uptoMsgId == null ? 0L : uptoMsgId), 0);
+        } catch (RuntimeException e) {
+            log.warn("统计未摘要消息条数失败（本轮退回只留保底条数）sessionId={} upto={}", sessionId, uptoMsgId, e);
+            return 0;
         }
     }
 

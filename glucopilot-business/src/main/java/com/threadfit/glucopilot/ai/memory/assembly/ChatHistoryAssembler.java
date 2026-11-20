@@ -56,19 +56,35 @@ public class ChatHistoryAssembler {
      * 装配统计（用于日志与 E2E 断言）。
      *
      * @param keptHistory      实际送进模型的历史条数
-     * @param droppedHistory   因预算被丢掉的历史条数
+     * @param droppedHistory   因预算/条数上限被丢掉的历史条数（&gt;0 即"本轮窗口发生了滑动"）
      * @param estimatedTokens  本轮 prompt 的估算 token（历史 + 附加上下文 + 本轮消息）
      * @param budgetTokens     预算上限
      * @param summaryUsed      是否用了滚动摘要
      * @param toolDigestUsed   是否注入了工具结果摘要
      * @param memoryItems      实际注入的长期记忆条数（不是"查到几条"：空白与超长的会被丢掉，
      *                         所以排查"用户说记不住"时要看这个数而不是库里有没有行）
+     * @param protectedHistory 必留带条数（摘要指针之后、本轮不允许被条数上限丢掉的条数下限）
+     * @param protectedDropped 必留带里被<b>预算</b>截断的条数（&gt;0 说明这一轮真的漏了未摘要内容，
+     *                         调用方必须打 WARN）
      */
     public record Stats(int keptHistory, int droppedHistory, int estimatedTokens, int budgetTokens,
-                        boolean summaryUsed, boolean toolDigestUsed, int memoryItems) {
+                        boolean summaryUsed, boolean toolDigestUsed, int memoryItems,
+                        int protectedHistory, int protectedDropped) {
+
+        /** 兼容既有调用（旧签名没有必留带的概念）。 */
+        public Stats(int keptHistory, int droppedHistory, int estimatedTokens, int budgetTokens,
+                     boolean summaryUsed, boolean toolDigestUsed, int memoryItems) {
+            this(keptHistory, droppedHistory, estimatedTokens, budgetTokens,
+                    summaryUsed, toolDigestUsed, memoryItems, 0, 0);
+        }
 
         public boolean budgetExceeded() {
             return estimatedTokens > budgetTokens;
+        }
+
+        /** 本轮窗口是否发生过滑动（有历史被丢掉）。 */
+        public boolean windowShifted() {
+            return droppedHistory > 0;
         }
     }
 
@@ -103,6 +119,31 @@ public class ChatHistoryAssembler {
                               List<String> toolDigests,
                               List<UserChatMemoryService.MemoryItem> memories,
                               int fixedOverhead) {
+        return assemble(history, current, summary, toolDigests, memories, fixedOverhead, 0);
+    }
+
+    /**
+     * 装配（含"必留带"：摘要指针之后的消息不允许被条数上限丢掉）。
+     *
+     * <p><b>为什么需要这个参数</b>：滚动摘要永远不覆盖最近 {@code keep-recent-messages} 条
+     * （`summary_upto_msg_id` 只推进到"最新一条 − keep"）。因此窗口一旦滑过指针，那几条既不在摘要里、
+     * 也不在窗口里——模型直接断片，日志会打「空洞&gt;0」。把"指针之后有多少条"传进来，装配时
+     * <b>无条件保留这么多条</b>，空洞就不再取决于"摘要有没来得及跑"。
+     *
+     * <p>两道限制的优先级（2026-11-19 与需求方确认）：
+     * <ol>
+     *   <li>必留带优先于<b>条数上限</b>：{@code window-messages} 只约束"重叠带"（指针之前的老消息）；</li>
+     *   <li>必留带低于<b>预算</b>：预算仍是硬上限，超了就截断必留带并记 {@code protectedDropped}，
+     *       调用方据此打 WARN——宁可漏几条，也不让单轮成本失控。</li>
+     * </ol>
+     */
+    public Assembled assemble(List<Message> history,
+                              List<Message> current,
+                              String summary,
+                              List<String> toolDigests,
+                              List<UserChatMemoryService.MemoryItem> memories,
+                              int fixedOverhead,
+                              int protectedTail) {
         AIProperties.MemoryProperties config = aiProperties.getMemory();
         int budget = Math.max(config.getMaxPromptTokens(), 1);
         List<Message> safeHistory = history == null ? List.of() : history;
@@ -142,26 +183,43 @@ public class ChatHistoryAssembler {
             used += tokenEstimator.estimateMessage(textOf(message));
         }
 
-        // 从最近往回装：只要"再装一条"不超过预算就装（并同时受条数上限约束）
+        // 从最近往回装。两类消息的裁决规则不同（见 assemble 的 javadoc）：
+        //   必留带（kept.size() < mustKeep）：只受预算约束，不受条数上限约束；
+        //   重叠带：预算与条数上限都生效。
         int keepRecent = Math.max(config.getKeepRecentMessages(), 0);
         int maxMessages = Math.max(config.getWindowMessages(), 1);
+        // 必留带 = max(摘要指针之后的消息数, keep-recent-messages)；
+        // 后者是"只留最后一轮会让多轮追问直接断片"的保底，即使一道摘要都还没有也要成立
+        int mustKeep = Math.min(Math.max(Math.max(protectedTail, 0), keepRecent), safeHistory.size());
+        int protectedDropped = 0;
         int historyTokens = 0;
         List<Message> kept = new ArrayList<>();
         for (int i = safeHistory.size() - 1; i >= 0; i--) {
             Message message = safeHistory.get(i);
             int cost = tokenEstimator.estimateMessage(textOf(message));
-            boolean withinCount = kept.size() < maxMessages;
-            if (!withinCount) {
-                break;
-            }
-            // 保底条数之内的消息无条件保留（预算只是安全阀）
-            if (kept.size() < keepRecent || used + cost <= budget) {
+            boolean inProtected = kept.size() < mustKeep;
+            if (inProtected) {
+                // 保底条数（keepRecent）之内无条件保留——预算只是安全阀，宁可超一点也不要断片
+                if (kept.size() >= keepRecent && used + cost > budget) {
+                    // 预算优先：连必留带也装不下了。记下丢了多少条，调用方会打 WARN
+                    protectedDropped = mustKeep - kept.size();
+                    break;
+                }
                 kept.add(message);
                 used += cost;
                 historyTokens += cost;
-            } else {
+                continue;
+            }
+            // 条数上限只约束"指针之前的老消息"：它们已被摘要覆盖，丢掉只是少了原文细节
+            if (kept.size() >= maxMessages) {
                 break;
             }
+            if (used + cost > budget) {
+                break;
+            }
+            kept.add(message);
+            used += cost;
+            historyTokens += cost;
         }
         java.util.Collections.reverse(kept);
 
@@ -191,8 +249,9 @@ public class ChatHistoryAssembler {
             historyTokens -= tokenEstimator.estimateMessage(textOf(removedDuplicate));
         }
         int keptCount = kept.size();
+        int droppedCount = safeHistory.size() - keptCount - droppedDuplicate;
         List<ChatContextShard> shards = buildShards(fixedOverhead, memorySection, summarySection, toolSection,
-                memoryUsed, summaryUsed, toolDigestUsed, historyTokens);
+                memoryUsed, summaryUsed, toolDigestUsed, historyTokens, droppedCount > 0, keptCount);
 
         List<Message> messages = new ArrayList<>(leadingSystems.size() + keptCount + currentBody.size() + 1);
         messages.addAll(leadingSystems);
@@ -202,8 +261,8 @@ public class ChatHistoryAssembler {
         messages.addAll(kept);
         messages.addAll(currentBody);
         return new Assembled(List.copyOf(messages),
-                new Stats(keptCount, safeHistory.size() - keptCount - droppedDuplicate, used, budget,
-                        summaryUsed, toolDigestUsed, memoryItems),
+                new Stats(keptCount, droppedCount, used, budget,
+                        summaryUsed, toolDigestUsed, memoryItems, mustKeep, protectedDropped),
                 shards);
     }
 
@@ -224,7 +283,9 @@ public class ChatHistoryAssembler {
                                                boolean memoryUsed,
                                                boolean summaryUsed,
                                                boolean toolDigestUsed,
-                                               int historyTokens) {
+                                               int historyTokens,
+                                               boolean windowShifted,
+                                               int windowMessages) {
         List<ChatContextShard> shards = new ArrayList<>(5);
         shards.add(ChatContextShard.systemPrompt(fixedOverhead));
         if (memoryUsed) {
@@ -236,7 +297,7 @@ public class ChatHistoryAssembler {
         if (toolDigestUsed) {
             shards.add(ChatContextShard.toolDigest(tokenEstimator.estimate(toolSection.toString())));
         }
-        shards.add(ChatContextShard.historyMessages(historyTokens));
+        shards.add(ChatContextShard.historyMessages(historyTokens, windowShifted, windowMessages));
         return List.copyOf(shards);
     }
 

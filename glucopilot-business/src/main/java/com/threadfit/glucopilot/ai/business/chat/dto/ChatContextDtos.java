@@ -16,8 +16,14 @@ public final class ChatContextDtos {
     private ChatContextDtos() {
     }
 
-    /** 一个分片：类型 + 键 + 估算 token + 顺序。 */
-    public record Shard(Integer contextType, String contextKey, Integer tokenEstimate, Integer sortNo) {
+    /**
+     * 一个分片：类型 + 键 + 估算 token + 顺序（+ 历史分片的窗口账本）。
+     *
+     * @param windowShifted  V81：本轮窗口是否滑动；只有历史分片带值，其余为 null
+     * @param windowMessages V81：本轮实际回放进 prompt 的历史条数；同上，只有历史分片带值
+     */
+    public record Shard(Integer contextType, String contextKey, Integer tokenEstimate, Integer sortNo,
+                        Boolean windowShifted, Integer windowMessages) {
     }
 
     /**
@@ -28,9 +34,11 @@ public final class ChatContextDtos {
      * @param assistantMsgId 本轮生成的助手消息 ID；装配时未知，落库后回填
      * @param modelCode      本轮调用的模型编码
      * @param totalTokens    本轮各分片估算 token 之和（不是厂商返回的 usage，是装配期估算）
+     * @param notice         这一轮的一句话说明（如「本轮窗口已滑动 · 窗口 20 条 · 丢弃 3 条旧消息」）；
+     *                       由后端拼好，页面直接显示——前端不该为了展示再去理解 dropped/window 的组合
      */
     public record ContextRound(Integer contextRound, Long triggerMsgId, Long assistantMsgId,
-                               String modelCode, int totalTokens, List<Shard> shards) {
+                               String modelCode, int totalTokens, List<Shard> shards, String notice) {
     }
 
     /**

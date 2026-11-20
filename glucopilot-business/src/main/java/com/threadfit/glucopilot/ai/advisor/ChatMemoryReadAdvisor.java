@@ -102,19 +102,35 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
         Long userId = userId(request);
         List<UserChatMemoryService.MemoryItem> memories = contextReader.longTermMemory(userId);
         int fixedOverhead = fixedOverhead(request);
+        // 必留带：摘要指针之后的消息在本轮不允许被条数上限丢掉（否则那几条既不在摘要、
+        // 也不在窗口里，模型直接断片）。没有摘要指针时退回 0，仍由 keep-recent 保底——
+        // 那种情况下"空洞"这个概念本身不成立（一条都还没被摘要覆盖）。
+        int protectedTail = 0;
+        if (summaryState != null && summaryState.getUptoMsgId() != null) {
+            protectedTail = contextReader.countUnsummarized(sessionId, summaryState.getUptoMsgId());
+        }
 
-        ChatHistoryAssembler.Assembled assembled = assembler.assemble(history, current, summary, toolDigests, memories, fixedOverhead);
+        ChatHistoryAssembler.Assembled assembled = assembler.assemble(history, current, summary, toolDigests,
+                memories, fixedOverhead, protectedTail);
         ChatHistoryAssembler.Stats stats = assembled.stats();
+        if (stats.protectedDropped() > 0) {
+            // 预算与"不漏消息"撞车时，按约定预算优先（cost 可控优先），但必须留下证据：
+            // 这条 WARN 说明这一轮确实丢了 N 条未摘要内容，用户可能会发现模型"忘了刚才说的"
+            log.warn("预算不足，本轮被迫丢掉 {} 条未摘要消息 sessionId={} 预算={} 估算={}；"
+                            + "可调大 ai.memory.max-prompt-tokens，或调小 summary-min-pending-messages 让摘要更勤",
+                    stats.protectedDropped(), sessionId, stats.budgetTokens(), stats.estimatedTokens());
+        }
         String summaryLog = summaryLog(sessionId, summaryState, stats.droppedHistory());
         if (stats.droppedHistory() > 0 || stats.summaryUsed() || stats.toolDigestUsed() || stats.memoryItems() > 0) {
             // 「记忆=N」是排查"用户说它记不住"的第一现场：N=0 说明一条长期记忆都没进 prompt
             // （没查到 / 被过滤 / userId 没传到 advisor 参数），N>0 才说明注入到位。
             // 「空洞」是排查"模型忘了刚才聊过什么"的现场：摘要覆盖到 #a、窗口从 #b 开始，
             // a 与 b 之间那几条既不在摘要也不在窗口里，模型看不到（见 ai.memory.window-messages）。
-            log.info("会话记忆装配 sessionId={} 记忆={} 保留历史={} 裁剪={} 估算token={} 预算={} {} 工具摘要={}"
+            log.info("会话记忆装配 sessionId={} 记忆={} 保留历史={} 必留={} 裁剪={} 窗口滑动={} 估算token={} 预算={} {} 工具摘要={}"
                             + (stats.budgetExceeded() ? "（超预算：保底条数优先）" : ""),
-                    sessionId, stats.memoryItems(), stats.keptHistory(), stats.droppedHistory(),
-                    stats.estimatedTokens(), stats.budgetTokens(), summaryLog, stats.toolDigestUsed());
+                    sessionId, stats.memoryItems(), stats.keptHistory(), stats.protectedHistory(),
+                    stats.droppedHistory(), stats.windowShifted(), stats.estimatedTokens(),
+                    stats.budgetTokens(), summaryLog, stats.toolDigestUsed());
         } else {
             log.debug("会话记忆装配 sessionId={} 保留历史={} 估算token={}", sessionId,
                     stats.keptHistory(), stats.estimatedTokens());

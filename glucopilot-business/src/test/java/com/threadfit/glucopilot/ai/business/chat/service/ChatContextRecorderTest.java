@@ -177,6 +177,42 @@ class ChatContextRecorderTest {
             assertEquals(2, rows.get(0).getContextRound());
             assertEquals("system_prompt", rows.get(0).getContextKey());
             assertEquals("history_messages", rows.get(4).getContextKey());
+            // 不带窗口账本的历史片：两列必须是 NULL（"没记"≠"记为否"）
+            assertNull(rows.get(4).getWindowShifted());
+            assertNull(rows.get(4).getWindowMessages());
+        }
+    }
+
+    /**
+     * 窗口账本只挂在历史分片上（V81）：带账本时两列有值，其余分片仍为 NULL。
+     *
+     * <p>这条用例的意义不只是"能写进去"——它是「为什么命中率突然掉了」这个问题的第一现场：
+     * 只有 {@code windowShifted=true} 的那一轮才可能命中率骤降，而这个标记只有落表才查得到。
+     */
+    @Test
+    void 窗口账本随历史分片落库其余分片为空() throws Exception {
+        UnpooledDataSource datasource = contextDatasource();
+        SqlSessionFactory sessionFactory = contextSqlSessionFactory(datasource);
+        sessionFactory.getConfiguration().addMapper(ChatContextMapper.class);
+        try (SqlSession session = sessionFactory.openSession(true)) {
+            createContextTable(session.getConnection(), false);
+            ChatContextMapper mapper = session.getMapper(ChatContextMapper.class);
+
+            new ChatContextRecorderImpl(mapper).record(USER_ID, SESSION_ID, TRIGGER_MSG_ID, ASSISTANT_MSG_ID,
+                    "deepseek-v4-pro", 1, List.of(
+                            ChatContextShard.systemPrompt(1500),
+                            ChatContextShard.historyMessages(900, true, 20)));
+
+            List<ChatContextEntity> rows = mapper.selectList(new LambdaQueryWrapper<ChatContextEntity>()
+                    .eq(ChatContextEntity::getSessionId, SESSION_ID)
+                    .orderByAsc(ChatContextEntity::getSortNo));
+            assertEquals(2, rows.size());
+            assertEquals("system_prompt", rows.get(0).getContextKey());
+            assertNull(rows.get(0).getWindowShifted(), "非历史分片不记窗口账本");
+            assertNull(rows.get(0).getWindowMessages());
+            assertEquals("history_messages", rows.get(1).getContextKey());
+            assertEquals(Boolean.TRUE, rows.get(1).getWindowShifted());
+            assertEquals(20, rows.get(1).getWindowMessages());
         }
     }
 
@@ -231,6 +267,7 @@ class ChatContextRecorderTest {
                     + "context_round INT NOT NULL DEFAULT 1, context_type TINYINT NOT NULL, "
                     + "context_key VARCHAR(64) NULL, content_text CLOB NULL, content_json CLOB NULL, "
                     + "token_estimate INT NULL, model_code VARCHAR(64) NULL, sort_no INT NOT NULL DEFAULT 0, "
+                    + "window_shifted BOOLEAN NULL, window_messages INT NULL, "
                     + "created_by BIGINT NOT NULL DEFAULT 0, "
                     + "gmt_create TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), "
                     + "updated_by BIGINT NOT NULL DEFAULT 0, "

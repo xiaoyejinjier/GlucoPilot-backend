@@ -170,12 +170,15 @@ public class AIProperties {
         private int maxFetch = 200;
 
         /**
-         * 一轮 prompt 允许的总 token（默认 4096，含系统提示词与工具定义）。
+         * 一轮 prompt 允许的总 token（默认 16000，含系统提示词与工具定义）。
          * <p>
-         * 保守取值的理由：固定开销实测约 5k（系统提示词 + 工具定义随工具数增长），
-         * 4096 是一个"安全阀"而不是"目标值"；调大只会让摘要更晚触发、单轮更贵。
+         * <b>2026-11-19 从 4096 提到 16000</b>：实测固定开销（CHAT v4 场景提示词 + 13 个工具定义）
+         * 就有 5444~6700 token，预算比固定开销还小 ⇒ {@code used + cost <= budget}
+         * 在装配循环里永远为假，真正生效的只有 {@link #keepRecentMessages}，日志一直在打
+         * 「超预算：保底条数优先」。按 DeepSeek 实测价（命中 $0.022/M vs 未命中 $0.66/M，1:30）
+         * 多送的原文几乎全是<b>命中</b>部分，成本增量很小，换来的是 3 倍原文窗口。
          */
-        private int maxPromptTokens = 4096;
+        private int maxPromptTokens = 16000;
 
         /**
          * 无论预算多紧，都至少保留最近这么多条历史消息。

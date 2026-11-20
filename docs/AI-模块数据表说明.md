@@ -1,6 +1,6 @@
 # AI 模块数据表说明（逐列）
 
-> 依据：开发库 `sugar_health`（Flyway v77）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
+> 依据：开发库 `sugar_health`（Flyway v82）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
 > 与 `AI-模块实现说明.md` 配套：那份讲「类怎么协作」，这份讲「数据落在哪、每一列是什么意思」。
 
 - 实测导出方式：`information_schema.COLUMNS / STATISTICS / TABLES`（`TABLE_SCHEMA='sugar_health'`）
@@ -18,9 +18,9 @@
 | 1 | `ai_model_config` | AI 模型配置表 | V1 | V13（运行期配置：`config_version`/`thinking`/`top_p`/`extra_params`/测试结果列/`cipher_algo`/`key_version`）、V48（`capability` 模型能力集合，取代 V45 的 `model_type`）、V50（逻辑删除 `default_chat` 占位行）、V51（`verify_skipped_reason`：保存时跳过连通性校验的原因） | 3 |
 | 2 | `ai_prompt_template` | AI 提示词模板表 | V1 | V18（管理面：`variables_json`/`change_note`/`config_version`）、V50（逻辑删除 3 条 legacy 行） | 8 |
 | 3 | `ai_scene_config` | 场景 → 模型与场景级参数 | V19 | V49（`MEAL_ANALYSIS` 的 `max_tokens` 从 `ai.meal.max-tokens` 搬入）、V77（新增 `SUMMARY` 行绑 `deepseek-v4-flash`） | 5 |
-| 4 | `chat_session` | 聊天会话（含滚动摘要与窗口参数） | V1 | V11（`active_user_id` 生成列）、V21（生命周期） | 102 |
+| 4 | `chat_session` | 聊天会话（含滚动摘要与窗口参数） | V1 | V11（`active_user_id` 生成列）、V21（生命周期）、V76（`summary_updated_at`：摘要写入时间，间隔门判据） | 102 |
 | 5 | `chat_message` | 聊天消息（含语音与 token 计量） | V1 | V9（`media_caption`）、V11（幂等/顺序号唯一键） | 937 |
-| 6 | `chat_context` | 上下文分片元数据（替代 `chat_context_snapshot`） | V1 | V28（只留元数据，`content_*` 不再写） | 26 |
+| 6 | `chat_context` | 上下文分片元数据（替代 `chat_context_snapshot`） | V1 | V28（只留元数据，`content_*` 不再写）、V81（`window_shifted`/`window_messages`：窗口滑动观测） | 26 |
 | 7 | `chat_tool_call` | 会话内工具调用元数据 | V21 | V22（`short` 化 + `result_digest`） | 26 |
 | 8 | `chat_user_memory` | 跨会话长期记忆 | V1 | — | 2 |
 | 9 | `ocr_task` | OCR 识别任务 | V1 | — | 0 |
@@ -333,13 +333,15 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 11 | `token_estimate` | int unsigned | YES | — | 本分片预估 token |
 | 12 | `model_code` | varchar(64) | YES | — | 本轮调用模型编码 |
 | 13 | `sort_no` | int unsigned | NO | 0 | 同轮内排序；固定顺序「系统提示 → 长期记忆 → 摘要 → 工具摘要 → 历史消息」 |
-| 14 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
-| 15 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
-| 16 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
-| 17 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
-| 18 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
-| 19 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
-| 20 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
+| 14 | `window_shifted` | tinyint(1) | YES | — | V81：本轮历史窗口是否**滑动**（= `dropped_history > 0`）。只有历史分片带值；`-1` 是「只落账、无对应 payload 分片」的哨兵，读侧归零 |
+| 15 | `window_messages` | int unsigned | YES | — | V81：本轮**实际回放**进 prompt 的历史条数（kept_history）。上限是配置项 i.memory.window-messages，落表没有信息量，所以存实际值 |
+| 16 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
+| 17 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |
+| 18 | `updated_by` | bigint unsigned | NO | 0 | 更新人 |
+| 19 | `gmt_modified` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 修改时间 |
+| 20 | `deleted_by` | bigint unsigned | YES | — | 删除人 |
+| 21 | `deleted_at` | datetime(3) | YES | — | 删除时间 |
+| 22 | `is_deleted` | tinyint unsigned | NO | 0 | 逻辑删除 |
 
 > 注意：这一列集说明里**没有**「装了哪几条历史消息」的字段——历史片只记 `token_estimate` 与条数（在 `context_key` 里表达为 `history`），不记具体消息 ID 列表。原因是不想让「上下文快照」变成第二份对话正文。
 

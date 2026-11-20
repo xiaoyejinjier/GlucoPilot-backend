@@ -103,6 +103,36 @@ class ChatContextQueryServiceTest {
         assertThat(view.rounds().get(0).totalTokens()).isZero();
     }
 
+    @Test
+    @DisplayName("历史分片带出窗口账本，并拼出「已滑动」的说明")
+    void windowLedgerIsExposedWithSlidingNotice() {
+        ChatContextEntity history = shard(1, 4, "history_messages", 700, 6, 100L, 101L, "deepseek-v4-pro");
+        history.setWindowShifted(true);
+        history.setWindowMessages(20);
+        when(contextMapper.selectList(any())).thenReturn(List.of(
+                shard(1, 0, "system_prompt", 900, 1, 100L, 101L, "deepseek-v4-pro"), history));
+
+        ChatContextDtos.ContextView view = service.view(9L, null);
+
+        ChatContextDtos.Shard shard = view.rounds().get(0).shards().get(1);
+        assertThat(shard.windowShifted()).isTrue();
+        assertThat(shard.windowMessages()).isEqualTo(20);
+        assertThat(view.rounds().get(0).notice()).contains("已滑动").contains("20");
+    }
+
+    @Test
+    @DisplayName("没有窗口账本时说明是「完整回放」，且非历史分片不带账本字段")
+    void noticeWithoutLedgerSaysFullReplay() {
+        when(contextMapper.selectList(any())).thenReturn(List.of(
+                shard(1, 0, "system_prompt", 900, 1, 100L, 101L, "deepseek-v4-pro"),
+                shard(1, 4, "history_messages", 700, 6, 100L, 101L, "deepseek-v4-pro")));
+
+        ChatContextDtos.ContextView view = service.view(9L, null);
+
+        assertThat(view.rounds().get(0).notice()).contains("完整回放");
+        assertThat(view.rounds().get(0).shards().get(0).windowShifted()).isNull();
+    }
+
     private static ChatContextEntity shard(int round, int sortNo, String key, Integer tokens,
                                            Integer type, Long triggerMsgId, Long assistantMsgId, String model) {
         ChatContextEntity row = new ChatContextEntity();

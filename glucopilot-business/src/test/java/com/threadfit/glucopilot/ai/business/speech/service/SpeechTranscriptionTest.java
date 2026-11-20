@@ -35,7 +35,7 @@ class SpeechTranscriptionTest {
     private final AIProperties ai = new AIProperties();
     private final RestClient.Builder builder = RestClient.builder();
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
-    private final SpeechTranscriptionService service = new SpeechTranscriptionService(properties, ai, builder.build());
+    private final SpeechTranscriptionService service = new SpeechTranscriptionService(properties, ai, com.threadfit.glucopilot.ai.support.lock.AiConcurrencyTestSupport.unlimited(), builder.build());
     private final SpeechDtos.Request request = new SpeechDtos.Request("SUQzBA==", "mp3", 2000);
     private static final String ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
     private static final String RESULT = "{\"choices\":[{\"message\":{\"content\":\"空腹血糖5.2\"}}]}";

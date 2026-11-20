@@ -9,7 +9,7 @@ import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.AiCallContext;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyPolicy;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
 
 /**
@@ -33,7 +34,7 @@ import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
  * <h2>异步、幂等、只前进</h2>
  * <ul>
  *   <li><b>异步</b>：由独立线程池执行，用户不等它（一轮回复已经花了几秒，再串一次模型调用不可接受）；</li>
- *   <li><b>单飞</b>：同一会话同时只跑一个摘要任务（复用 {@link ChatRoundGuard}，与"一轮只生成一次"同一套机制），
+ *   <li><b>合并</b>：同一会话同时只跑一个摘要任务（{@link AiConcurrencyPolicy#markSummaryRunning}），
  *       否则两轮回复后可能同时触发两次压缩，后写的那次会覆盖先写的；</li>
  *   <li><b>只前进</b>：写回时带 {@code summary_upto_msg_id <} 条件（见 Mapper），慢任务不会把指针拉回去
  *       ——那会导致同一段原文被反复压缩，越压越糊。</li>
@@ -48,7 +49,6 @@ import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
 public class ChatSummaryServiceImpl implements ChatSummaryService {
 
     /** 单飞键前缀：与"一轮生成"的 chat-round: 区分开。 */
-    private static final String SUMMARY_KEY_PREFIX = "chat-summary:";
 
     /** 摘要为空时的占位（模型明确表示"无可保留信息"时用），避免反复触发同一个空摘要任务。 */
     private static final String EMPTY_SUMMARY = "无可保留信息";
@@ -67,7 +67,10 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
 
     private final AIProperties aiProperties;
 
-    private final ChatRoundGuard summaryGuard;
+    private final AiConcurrencyPolicy concurrency;
+
+    /** 本实例正在跑的任务数（合并标记是全局的，但"在跑"只有本进程知道）。 */
+    private final AtomicInteger running = new AtomicInteger();
 
     private final Executor summaryExecutor;
 
@@ -77,7 +80,7 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
                               AiPromptTemplateService promptTemplateService,
                               SceneModelResolver sceneModelResolver,
                               AIProperties aiProperties,
-                              ChatRoundGuard roundGuard,
+                              AiConcurrencyPolicy concurrency,
                               @Qualifier("chatSummaryExecutor") Executor summaryExecutor) {
         this.clients = clients;
         this.chatSessionMapper = chatSessionMapper;
@@ -86,10 +89,10 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
         this.sceneModelResolver = sceneModelResolver;
         this.aiProperties = aiProperties;
         this.summaryExecutor = summaryExecutor;
-        // 直接用容器里那个 ChatRoundGuard（5 分钟过期接管）：它的语义就是"同一件事同时只跑一个"。
+        // 用合并标记而不是互斥锁：同一会话的第二个摘要任务不该报错，它只是"没必要再跑一遍"。
         // 注意它只是**尽力而为**——真正保证正确性的是 updateSummary 的"指针只前进"条件：
         // 即使两个摘要任务并发跑完，晚到的那次也会因为 upto 不比库里大而被丢弃。
-        this.summaryGuard = roundGuard;
+        this.concurrency = concurrency;
     }
 
     /**
@@ -102,22 +105,23 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
         if (!clients.utilityAvailable() || sessionId == null) {
             return;
         }
-        String key = SUMMARY_KEY_PREFIX + sessionId;
-        if (!summaryGuard.tryAcquire(key)) {
+        if (!concurrency.markSummaryRunning(sessionId)) {
             log.debug("该会话已有摘要任务在跑，跳过 sessionId={}", sessionId);
             return;
         }
         try {
             summaryExecutor.execute(() -> {
+                running.incrementAndGet();
                 try {
                     runSummarize(userId, sessionId);
                 } finally {
-                    summaryGuard.release(key);
+                    running.decrementAndGet();
+                    concurrency.finishSummary(sessionId);
                 }
             });
         } catch (RuntimeException e) {
-            // 线程池满了/已关闭：释放占位并记日志，绝不让它影响本轮回复
-            summaryGuard.release(key);
+            // 线程池满了/已关闭：释放标记并记日志，绝不让它影响本轮回复
+            concurrency.finishSummary(sessionId);
             log.warn("摘要任务提交失败（忽略）sessionId={}", sessionId, e);
         }
     }
@@ -362,10 +366,15 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
         return text.length() <= limit ? text : text.substring(0, limit);
     }
 
-    /** 当前是否有摘要任务在跑（E2E/单测断言用）。 */
+    /**
+     * 当前是否有摘要任务在跑（E2E/单测断言用）。
+     *
+     * <p>注意：这是**本实例**的视角。合并标记在 Redis 里是全局的，但"正在跑"这件事
+     * 只有当前进程真的在跑才算——别的实例在跑对我们没有意义，也没法从标记反查。
+     */
     @Override
     public boolean inFlight() {
-        return summaryGuard.inFlightCount() > 0;
+        return running.get() > 0;
     }
 
     /** 供 E2E 断言：摘要场景当前用的提示词来源。 */

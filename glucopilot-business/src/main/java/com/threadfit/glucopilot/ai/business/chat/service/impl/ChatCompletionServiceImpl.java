@@ -8,7 +8,7 @@ import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.model.runtime.ModelCallUsage;
 import com.threadfit.glucopilot.ai.model.runtime.UsageProbe;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyPolicy;
 import com.threadfit.glucopilot.ai.business.chat.support.EnglishPreambleGuard;
 import com.threadfit.glucopilot.ai.business.chat.support.OwnedMediaResolver;
 import com.threadfit.glucopilot.ai.business.chat.dto.ChatContextShard;
@@ -142,8 +142,6 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
     private static final int MAX_CAPTION_CHARS = 1024;
 
     /** 单飞 key 前缀；key 用用户消息 id（全局唯一），因此不需要再拼 sessionId。 */
-    private static final String ROUND_KEY_PREFIX = "chat-round:";
-
     /**
      * 固定开销里"消息骨架 + 工具调用协议"的粗略常量（② 期）。
      * <p>
@@ -164,7 +162,7 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
     private final OwnedMediaResolver ownedMediaResolver;
     private final VisionAnalyzer visionAnalyzer;
     private final EnglishPreambleGuard englishPreambleGuard;
-    private final ChatRoundGuard roundGuard;
+    private final AiConcurrencyPolicy concurrency;
     private final JsonUtils jsonUtils;
     /** ② 期：固定开销估算要用它（系统提示词），校准要用它（估算 token）。 */
     private final AiPromptTemplateService promptTemplateService;
@@ -194,26 +192,33 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
             return Flux.just(doneEvent(generated));
         }
 
+        // 三道闸门的顺序是有讲究的：先"是不是发太勤"（最便宜、纯计数），再"今天额度用完没有"，
+        // 最后才抢"这条消息的生成权"与"并发流"——抢到的租约如果因为后面的闸门被拒，还要手工还回去，
+        // 越靠后的闸门越贵，所以尽量把便宜的判断放前面。
+        concurrency.checkRate(userId);
+        concurrency.checkDailyQuota(userId);
+
         // 单飞：同一条用户消息同时只允许一次生成。
         // 位置很关键——必须在**调用模型之前**：助手消息的客户端幂等键要到 INSERT 时才暴露冲突，
         // 而 INSERT 在模型调用之后，那时钱已经花了（实测两个并发请求 prompt_tokens 5855 + 5940）。
-        String roundKey = ROUND_KEY_PREFIX + target.getId();
-        Long roundToken = roundGuard.tryAcquireToken(roundKey);
-        if (roundToken == null) {
-            throw new BizException(ErrorCode.BIZ_REJECTED, "这一轮正在生成中，请稍后再试");
-        }
+        String roundToken = concurrency.acquireRound(target.getId());
+        String streamToken = concurrency.acquireStream(userId);
         Flux<ServerSentEvent<byte[]>> stream;
         try {
-            stream = startStream(userId, sessionId, target, roundKey, roundToken);
+            stream = startStream(userId, sessionId, target, roundToken);
         } catch (RuntimeException e) {
             // 同步阶段（图片轮次的视觉识别、请求组装）抛错时 Flux 还没返回，
             // doFinally 还没挂上——不在这里释放就会永久占位
-            roundGuard.release(roundKey, roundToken);
+            concurrency.releaseRound(target.getId(), roundToken);
+            concurrency.releaseStream(userId, streamToken);
             throw e;
         }
         // 兜底：客户端中途取消、上游报错等没走到 done 事件的情况靠这里释放
         // （按令牌释放，以免删掉下一轮刚拿到的锁）
-        return stream.doFinally(signal -> roundGuard.release(roundKey, roundToken));
+        return stream.doFinally(signal -> {
+            concurrency.releaseRound(target.getId(), roundToken);
+            concurrency.releaseStream(userId, streamToken);
+        });
     }
 
     /**
@@ -222,11 +227,10 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
      * 与 {@link #complete} 拆开，是为了让"获得执行权 → 可能同步失败的准备工作 → 挂释放回调"
      * 这段控制流写得清楚：同步阶段失败要就地释放，异步阶段失败由 {@code doFinally} 释放。
      *
-     * @param roundKey   单飞键（{@code chat-round:<userMsgId>}）
      * @param roundToken 本次持有的令牌，done 事件发出前按令牌释放
      */
     private Flux<ServerSentEvent<byte[]>> startStream(Long userId, Long sessionId, ChatMessage target,
-                                                      String roundKey, long roundToken) {
+                                                      String roundToken) {
         // 文本轮次取用户原话；图片轮次先跑阶段 1 拿到客观描述，再交给文本模型组织回答。
         TurnInput input = resolveTurnInput(userId, target);
 
@@ -317,7 +321,7 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
                     // 释放执行权必须排在 done 事件**发出之前**：doFinally 是"先向下游传播 onComplete、
                     // 再执行回调"，只靠它的话客户端收到 done 立刻重发仍可能被判"正在生成中"
                     // （CI 上稳定暴露过这个竞态，见 ChatCompletionServiceTest.上一轮结束后应允许重新发起）
-                    roundGuard.release(roundKey, roundToken);
+                    concurrency.releaseRound(target.getId(), roundToken);
                     return doneEvent(saved);
                 })
                 .subscribeOn(Schedulers.boundedElastic());
@@ -328,7 +332,7 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
                     // 顺序反了会让重试方在错误行写入前就进来，两轮抢同一个确定性 client_msg_id。
                     Flux<ServerSentEvent<byte[]>> events = errorEvents(userId, sessionId, target, input, state,
                             startNanos, error);
-                    roundGuard.release(roundKey, roundToken);
+                    concurrency.releaseRound(target.getId(), roundToken);
                     return events;
                 });
     }

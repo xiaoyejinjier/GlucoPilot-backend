@@ -22,6 +22,7 @@ public enum ErrorCode {
     TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, 42901, "限流或登录锁定"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, 50000, "系统异常"),
     PAYMENT_UNAVAILABLE(HttpStatus.NOT_IMPLEMENTED, 50100, "支付宝沙箱尚未配置"),
+    SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, 50300, "服务暂时不可用（容量已满或依赖降级）"),
     PAYMENT_UPSTREAM_ERROR(HttpStatus.BAD_GATEWAY, 50200, "沙箱支付服务暂不可用，请稍后重试");
 
     private final HttpStatus httpStatus;

@@ -12,7 +12,7 @@ import com.threadfit.glucopilot.ai.memory.entity.ChatUserMemoryEntity;
 import com.threadfit.glucopilot.ai.memory.mapper.ChatUserMemoryMapper;
 import com.threadfit.glucopilot.ai.memory.service.impl.UserChatMemoryServiceImpl;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyTestSupport;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import java.util.concurrent.Executor;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,7 +90,7 @@ class UserChatMemoryExtractionTest {
         when(memoryMapper.selectOne(any())).thenReturn(null);
 
         service = new UserChatMemoryServiceImpl(clients, memoryMapper, chatMessageMapper, chatSessionMapper, promptService,
-                resolver, aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), new ChatRoundGuard(),
+                resolver, aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), AiConcurrencyTestSupport.policy(),
                 executor);
     }
 

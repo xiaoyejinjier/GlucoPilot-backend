@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.ai.model.job;
 
 import com.threadfit.glucopilot.ai.model.mapper.AiCallLogMapper;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyPolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,6 +31,13 @@ public class AiCallLogCleanupJob {
 
     private final AiCallLogMapper mapper;
 
+    /**
+     * 多实例独占：{@code @Scheduled} 在每台机器上都会到点触发，没有闸门就会 N 台机器同时删同一批数据
+     * （重复删除本身无害，但会把 {@code deleted} 计数打散、日志里看不出真实进度）。
+     * 租约由 Redis 提供，抢不到就静默跳过——清理是幂等的，晚一天没有代价。
+     */
+    private final AiConcurrencyPolicy concurrency;
+
     /** 保留天数：默认 90 天（够做季度对比与"上个月花了多少"）。 */
     @Value("${ai.call-log.retention-days:90}")
     private int retentionDays;
@@ -40,6 +48,10 @@ public class AiCallLogCleanupJob {
 
     @Scheduled(cron = "0 30 3 * * *")
     public void cleanup() {
+        if (!concurrency.markJob("calllog-cleanup")) {
+            log.debug("账单清理已被其他实例执行，本实例跳过");
+            return;
+        }
         try {
             runOnce(LocalDateTime.now());
         } catch (RuntimeException e) {

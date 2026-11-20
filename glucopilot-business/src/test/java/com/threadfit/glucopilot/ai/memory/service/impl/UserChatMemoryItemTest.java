@@ -9,7 +9,7 @@ import com.threadfit.glucopilot.ai.memory.mapper.ChatUserMemoryMapper;
 import com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyTestSupport;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -53,7 +53,7 @@ class UserChatMemoryItemTest {
         aiProperties = new AIProperties();
         service = new UserChatMemoryServiceImpl(clients, memoryMapper, mock(ChatMessageMapper.class),
                 mock(ChatSessionMapper.class), mock(AiPromptTemplateService.class), mock(SceneModelResolver.class),
-                aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), new ChatRoundGuard(),
+                aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), AiConcurrencyTestSupport.policy(),
                 Runnable::run);
     }
 

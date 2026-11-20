@@ -194,6 +194,6 @@ class MemoryQueryToolContractTest {
                 .saveLongTermMemory("diet_taboo", "用户不吃香菜",
                         new ToolContext(Map.of(AiToolContext.USER_ID, USER_ID, AiToolContext.SESSION_ID, 19L)));
 
-        assertThat(guard.entryCount(19L)).as("写入后读工具缓存应被作废").isZero();
+        assertThat(guard.recall(new ToolRepeatGuard.Key(19L, MemoryQueryTools.TOOL_NAME, "{}"))).as("写入后读工具缓存应被作废").isEmpty();
     }
 }

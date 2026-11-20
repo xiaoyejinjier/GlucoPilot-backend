@@ -22,7 +22,7 @@ public class AdminWorkReminderController {
 
     @GetMapping("/admin/v1/work-reminders")
     @PreAuthorize(
-            "@ss.hasAnyPermi('content:news:list,feedback:manage,food:library:manage,health:alert:view')")
+            "@ss.hasAnyPermi('content:news:list,feedback:manage,food:library:manage,health:alert:view,doctor:review:manage,doctor:withdrawal:manage')")
     public ResponseEntity<ApiResponse<AdminWorkReminderService.Summary>> summary() {
         Long opsId = RequestContext.getOpsId();
         if (opsId == null) throw new BizException(ErrorCode.UNAUTHORIZED);
@@ -35,7 +35,7 @@ public class AdminWorkReminderController {
 
     @PutMapping("/admin/v1/work-reminders/read")
     @PreAuthorize(
-            "@ss.hasAnyPermi('content:news:list,feedback:manage,food:library:manage,health:alert:view')")
+            "@ss.hasAnyPermi('content:news:list,feedback:manage,food:library:manage,health:alert:view,doctor:review:manage,doctor:withdrawal:manage')")
     public ApiResponse<Void> read(
             @Valid @RequestBody AdminWorkReminderService.ReadRequest request) {
         Long opsId = RequestContext.getOpsId();

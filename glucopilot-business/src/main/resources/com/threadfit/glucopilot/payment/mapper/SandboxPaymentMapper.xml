@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.threadfit.glucopilot.payment.mapper.SandboxPaymentMapper">
+    <select id="latestPaid" resultType="com.threadfit.glucopilot.payment.entity.SandboxRecharge">
+        SELECT * FROM wallet_recharge_order
+        WHERE user_id=#{userId} AND status='PAID' AND credited_at IS NOT NULL
+          AND payment_provider='ALIPAY_SANDBOX' AND sandbox_app_id=#{app} AND sandbox_seller_id=#{seller}
+        ORDER BY paid_at DESC,order_no DESC LIMIT 1
+    </select>
     <select id="lockActivatedUser" resultType="long" useCache="false" flushCache="true">
         SELECT id FROM user_account
         WHERE id=#{userId} AND is_deleted=0 AND account_status=1 AND wallet_activated_at IS NOT NULL
@@ -33,7 +39,7 @@
     <update id="claimQuery">
         UPDATE wallet_recharge_order SET last_query_at=CURRENT_TIMESTAMP(3)
         WHERE order_no=#{orderNo} AND status='PENDING'
-          AND (last_query_at IS NULL OR last_query_at &lt;= TIMESTAMPADD(SECOND,-5,CURRENT_TIMESTAMP(3)))
+            AND (last_query_at IS NULL OR last_query_at &lt;= TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(3)))
     </update>
     <update id="paid">
         UPDATE wallet_recharge_order

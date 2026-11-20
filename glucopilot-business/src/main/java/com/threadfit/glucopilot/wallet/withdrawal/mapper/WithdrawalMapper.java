@@ -9,6 +9,9 @@ import java.util.*;
 
 @Mapper
 public interface WithdrawalMapper {
+    String latestPayee(
+            @Param("user") long user, @Param("app") String app, @Param("seller") String seller);
+
     WithdrawalOrder byRequest(@Param("user") long user, @Param("key") String key);
 
     WithdrawalOrder lock(@Param("no") String no);

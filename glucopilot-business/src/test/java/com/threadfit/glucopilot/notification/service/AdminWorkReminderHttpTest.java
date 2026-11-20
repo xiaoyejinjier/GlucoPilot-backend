@@ -22,6 +22,33 @@ import java.util.*;
 
 class AdminWorkReminderHttpTest {
     @Test
+    void doctorAndWithdrawalReviewPermissionsCanReadTheirOwnQueues() {
+        for (String permission : List.of("doctor:review:manage", "doctor:withdrawal:manage")) {
+            try (var context = new AnnotationConfigApplicationContext(Config.class)) {
+                SecurityContextHolder.getContext()
+                        .setAuthentication(
+                                new TestingAuthenticationToken("reviewer", "unused", permission));
+                RequestContext.setOpsId(8L);
+                var authorization = context.getBean(RuoYiAuthorizationService.class);
+                var service = context.getBean(AdminWorkReminderService.class);
+                when(authorization.permissionCodesOf(8L)).thenReturn(Set.of(permission));
+                when(service.summary(8L, Set.of(permission)))
+                        .thenReturn(new AdminWorkReminderService.Summary(0, List.of()));
+                assertEquals(
+                        200,
+                        context.getBean(AdminWorkReminderController.class)
+                                .summary()
+                                .getStatusCode()
+                                .value());
+                verify(service).summary(8L, Set.of(permission));
+            } finally {
+                SecurityContextHolder.clearContext();
+                RequestContext.clear();
+            }
+        }
+    }
+
+    @Test
     void readUsesAuthenticatedOperatorAndDoesNotTrustRequestAccount() throws Exception {
         try (var context = new AnnotationConfigApplicationContext(Config.class)) {
             var controller = context.getBean(AdminWorkReminderController.class);

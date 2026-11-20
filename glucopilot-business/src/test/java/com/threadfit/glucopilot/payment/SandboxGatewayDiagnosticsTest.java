@@ -82,6 +82,7 @@ class SandboxGatewayDiagnosticsTest {
         response.setTradeNo("trade_fixture");
         response.setTradeStatus("WAIT_BUYER_PAY");
         response.setTotalAmount("1.00");
+        response.setBuyerUserId("2088000000000002");
         response.setBody("sensitive_body_fixture");
         when(client.execute(any(AlipayTradeQueryRequest.class))).thenReturn(response);
         var gateway =
@@ -101,11 +102,13 @@ class SandboxGatewayDiagnosticsTest {
             var proof = gateway.query(order());
             assertEquals("WAIT_BUYER_PAY", proof.status());
             assertEquals("SR_test", proof.orderNo());
+            assertEquals("2088000000000002", proof.buyerUserId());
             String logged = appender.list.toString();
             assertTrue(logged.contains("tradeStatus=WAIT_BUYER_PAY"));
             assertTrue(logged.contains("code=10000"));
             assertFalse(logged.contains("sensitive_body_fixture"));
             assertFalse(logged.contains("trade_fixture"));
+            assertFalse(logged.contains("2088000000000002"));
 
             // SDK 原始报文日志已关闭，不能绕过白名单输出签名或密钥。
             AlipayLogger.logBizError("sensitive_sdk_payload_fixture");

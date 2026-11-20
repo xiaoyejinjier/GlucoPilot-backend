@@ -1,5 +1,26 @@
 # API 契约
 
+## 2026-11-19 支付返回及提现默认收款账号
+
+- 小程序收银台前台每2秒串行查询本人充值订单，后端同一待付订单查单限频调整为至少1秒；只在服务端确认PAID后卸载网页并直接返回原付款页，不以网页加载、回跳或前端消息作为到账依据。隐藏、卸载、切换账号及订单终态停止查询。
+- 新增`GET /api/v1/wallet/withdrawals/recipient`，本人鉴权、no-store，仅审核通过医生可用。返回`payeeUserId/source`，优先取本人当前沙箱应用及商家下上次使用的提现收款账号（HISTORY），否则查询本人最近一笔已入账充值（RECHARGE），经SDK验签并核对订单号、交易号、金额、商家、应用及成功状态后读取买家UID；无匹配账号返回空（NONE），不创建订单、不入账、不转账。
+- 小程序自动带入收款账号，页面仅展示掩码及来源，可切换到手动填写；识别失败不阻塞提现记录加载。提现申请仍携带经本人确认的UID，后端原有金额、身份、审核和5工作日规则不变。不得使用全局共享买家账号作为所有用户的默认收款账号。
+- “我的问诊”使用现有状态区分等待接诊、接诊中、已出具问诊单及结束；只强化状态展示和详情/交流入口，不在列表泄漏付费问诊单正文。
+
+## 2026-11-19 管理端待办提醒补全
+
+- 复用`GET /admin/v1/work-reminders`和`PUT /admin/v1/work-reminders/read`，新增DOCTOR_REVIEW（doctor:review:manage，待审核医生）、WITHDRAWAL_REVIEW（doctor:withdrawal:manage，待审核提现）、ARTICLE_REVIEW（content:news:list，待管理员终审文章）、GLUCOSE_PENDING（health:alert:view，尚待处理的异常实测记录）。原举报、反馈、食品审核和血糖更新提醒保留。
+- 每类仅返回该权限可见的真实待办数量、未读数量、最新时间及集合快照，不返回医疗正文或收款信息。医生重新提交、文章重新进入终审、血糖测量更新时，旧已读回执不吞掉新版本；提现使用冻结事件ID关联唯一申请。一次已读最多提交8类快照，按当前管理员独立保存，已读不改变审核/处理状态。
+- 管理端前台沿用5秒轮询和顶部信封红点；打开消息跳转对应待审核/待处理列表并重置旧筛选、页码，成功处理后立即刷新汇总。浏览器隐藏暂停轮询，恢复后立即检查；没有相应权限不展示该类提醒。
+
+## 2026-11-19 数据看板真实汇总
+
+- `GET /admin/v1/dashboard`，要求`dashboard:view`，返回统一ApiResponse及no-store。全部指标在只读事务内查询业务库，无模拟数据回退；时间口径为Asia/Shanghai。
+- 返回users(total/today/active)、records(todayGlucose/todayMeal/monthTotal)、content(newsViews/newsCount/feedbackPending)、trend、complianceDist、channelDist、nodeHeat、foodCount，以及generatedAt/rangeStart/rangeEnd。近14天包含今天，按日期升序补足14点，缺数据为0；血糖/饮食按record_date统计，新增用户按注册时间统计。monthTotal为本月实测血糖条数，active为近14天登录的正常用户。
+- 用户总数与记录统计排除逻辑删除和已注销账号，记录排除逻辑删除；血糖只统计glucose_record实测值。资讯统计已发布且发布时间不晚于查询时刻的文章，浏览数沿用community_article_view记录口径；反馈按尚无有效回复统计；食品数量统计未删除食品。
+- 用户达标率分布仅包含近14天有实测值的用户，范围沿用用户管理的`3.9≤值<7.8`，按四舍五入后的达标率分为≥70%、40%～<70%、<40%。九时段记录量合并实测和饮食条数，不将饮食预测值计为实测。
+- 管理端生产模式必须调用真实看板接口，失败显示错误并允许重试。明确开启演示模式时才显示模拟统计，演示趋势日期也按当前近14天生成。
+
 ## 2026-11-18 问诊消息按会话提醒
 
 - 信息汇总增加consultationConversations（最多20个有未读消息的问诊，按最新未读消息倒序），每项为consultationId/title/peerName/lastMessageId/unreadCount；同一问诊仅一项，连续消息累计未读数。未读总数consultations不受20项限制。只返回本人患者/有效接诊医生有权访问的会话，不返回消息正文。

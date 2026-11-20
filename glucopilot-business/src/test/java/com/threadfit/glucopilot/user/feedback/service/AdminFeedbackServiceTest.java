@@ -35,6 +35,7 @@ class AdminFeedbackServiceTest {
     @Mock private FeedbackMapper feedbackMapper;
     @Mock private UserProfileMapper userProfileMapper;
     @Mock private UserAccountMapper userAccountMapper;
+    @Mock private FeedbackTypeService feedbackTypeService;
 
     @InjectMocks private AdminFeedbackService service;
 

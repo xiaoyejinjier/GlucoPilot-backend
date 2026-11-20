@@ -4,6 +4,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+
 import lombok.Builder;
 import lombok.Data;
 
@@ -12,8 +13,7 @@ import java.time.LocalDateTime;
 /** 管理端反馈查询与审批 DTO。 */
 public final class AdminFeedbackDtos {
 
-    private AdminFeedbackDtos() {
-    }
+    private AdminFeedbackDtos() {}
 
     @Data
     @Builder
@@ -21,9 +21,14 @@ public final class AdminFeedbackDtos {
         private String id;
         private String userId;
         private String userName;
+
         /** 仅返回脱敏手机号。 */
         private String contact;
+
         private Integer feedbackType;
+        private String feedbackTypeName;
+        private String deviceId;
+        private String deviceDescription;
         private String contentText;
         private Integer replyStatus;
         private String officialReply;

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.device.entity.UserDevice;
 import com.threadfit.glucopilot.user.dto.FeedbackDtos;
 import com.threadfit.glucopilot.user.entity.Feedback;
 import com.threadfit.glucopilot.user.mapper.FeedbackMapper;
@@ -23,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @ExtendWith(MockitoExtension.class)
 class FeedbackServiceTest {
@@ -30,16 +32,23 @@ class FeedbackServiceTest {
     private static final Long USER_ID = 1L;
 
     @Mock private FeedbackMapper feedbackMapper;
+    @Mock private FeedbackTypeService feedbackTypeService;
 
     @InjectMocks private FeedbackService service;
 
     @Test
     void rejectsUnknownFeedbackType() {
+        when(feedbackTypeService.requireEnabled(9))
+                .thenThrow(
+                        new BizException(
+                                com.threadfit.glucopilot.common.api.ErrorCode.BAD_REQUEST,
+                                "反馈类型不存在或已停用"));
         assertThrows(BizException.class, () -> service.submit(USER_ID, request(9, "内容")));
     }
 
     @Test
     void submitStoresTrimmedContentAndReceivedStatus() {
+        when(feedbackTypeService.requireEnabled(1)).thenReturn(type(1, false));
         when(feedbackMapper.insert(any(Feedback.class)))
                 .thenAnswer(
                         inv -> {
@@ -116,5 +125,88 @@ class FeedbackServiceTest {
         request.setFeedbackType(type);
         request.setContentText(content);
         return request;
+    }
+
+    private static FeedbackDtos.TypeItem type(int id, boolean related) {
+        var type = new FeedbackDtos.TypeItem();
+        type.setId(id);
+        type.setName(related ? "设备支持" : "产品建议");
+        type.setDeviceRelated(related);
+        return type;
+    }
+
+    @Test
+    void unsupportedUnboundDeviceCanBeSubmittedWithModelAndNoDeviceRow() {
+        when(feedbackTypeService.requireEnabled(5)).thenReturn(type(5, true));
+        var request = request(5, "无法添加设备");
+        request.setDeviceDescription("  某品牌 X2 血糖仪  ");
+        service.submit(USER_ID, request);
+        var row = ArgumentCaptor.forClass(Feedback.class);
+        verify(feedbackMapper).insert(row.capture());
+        assertEquals("某品牌 X2 血糖仪", row.getValue().getDeviceDescription());
+        assertNull(row.getValue().getDeviceId());
+    }
+
+    @Test
+    void ownedDeviceIsLockedAndItsDescriptionIsStoredAsSnapshot() {
+        when(feedbackTypeService.requireEnabled(5)).thenReturn(type(5, true));
+        UserDevice device = new UserDevice();
+        device.setId(10L);
+        device.setDeviceName("我的血糖仪");
+        device.setProvider("MOCK");
+        when(feedbackMapper.lockOwnedDevice(USER_ID, 10L)).thenReturn(device);
+        var request = request(5, "同步失败");
+        request.setDeviceId(10L);
+        service.submit(USER_ID, request);
+        var row = ArgumentCaptor.forClass(Feedback.class);
+        verify(feedbackMapper).insert(row.capture());
+        assertEquals(10L, row.getValue().getDeviceId());
+        assertEquals("我的血糖仪（MOCK）", row.getValue().getDeviceDescription());
+    }
+
+    @Test
+    void rejectsMissingDeviceDetailsAndForeignOrUnboundDeviceEvenWithDescription() {
+        when(feedbackTypeService.requireEnabled(5)).thenReturn(type(5, true));
+        assertThrows(BizException.class, () -> service.submit(USER_ID, request(5, "不支持")));
+        var request = request(5, "不支持");
+        request.setDeviceId(99L);
+        request.setDeviceDescription("某型号");
+        assertThrows(BizException.class, () -> service.submit(USER_ID, request));
+        org.mockito.Mockito.verify(feedbackMapper, org.mockito.Mockito.never())
+                .insert(any(Feedback.class));
+    }
+
+    @Test
+    void rejectsDeviceFieldsForUnrelatedTypeAndOversizeDescription() {
+        when(feedbackTypeService.requireEnabled(1)).thenReturn(type(1, false));
+        var request = request(1, "建议");
+        request.setDeviceId(10L);
+        assertThrows(BizException.class, () -> service.submit(USER_ID, request));
+        request.setDeviceId(null);
+        request.setDeviceDescription("a".repeat(121));
+        assertThrows(BizException.class, () -> service.submit(USER_ID, request));
+    }
+
+    @Test
+    void historyReturnsDictionaryNameAndSnapshotAfterDeviceRemoved() {
+        when(feedbackTypeService.names()).thenReturn(Map.of(5, "设备支持"));
+        var row = new Feedback();
+        row.setId(20L);
+        row.setUserId(USER_ID);
+        row.setFeedbackType(5);
+        row.setDeviceDescription("提交时的品牌型号");
+        when(feedbackMapper.selectPage(any(), any()))
+                .thenAnswer(
+                        inv -> {
+                            com.baomidou.mybatisplus.extension.plugins.pagination.Page<Feedback>
+                                    page = inv.getArgument(0);
+                            page.setRecords(List.of(row));
+                            page.setTotal(1);
+                            return page;
+                        });
+        var item = service.page(USER_ID, new PageQuery()).getRecords().getFirst();
+        assertEquals("设备支持", item.getFeedbackTypeName());
+        assertEquals("提交时的品牌型号", item.getDeviceDescription());
+        assertNull(item.getDeviceId());
     }
 }

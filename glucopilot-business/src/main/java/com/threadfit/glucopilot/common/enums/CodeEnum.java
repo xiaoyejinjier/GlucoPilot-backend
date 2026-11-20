@@ -150,7 +150,7 @@ public interface CodeEnum {
     @Getter
     @RequiredArgsConstructor
     enum FeedbackType implements CodeEnum {
-        SUGGESTION(1), BUG(2), DEMAND(3), OTHER(4);
+        SUGGESTION(1), BUG(2), DEMAND(3), OTHER(4), DEVICE_SUPPORT(5);
         private final int code;
     }
 

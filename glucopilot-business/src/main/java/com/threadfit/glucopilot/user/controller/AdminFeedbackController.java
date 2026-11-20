@@ -6,7 +6,9 @@ import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.constant.PermCodes;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.user.dto.AdminFeedbackDtos;
+import com.threadfit.glucopilot.user.dto.FeedbackDtos;
 import com.threadfit.glucopilot.user.feedback.service.AdminFeedbackService;
+import com.threadfit.glucopilot.user.feedback.service.FeedbackTypeService;
 
 import jakarta.validation.Valid;
 
@@ -21,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /** 管理端反馈查询与审批回复。 */
 @RestController
 @RequestMapping("/admin/v1/feedbacks")
@@ -28,6 +32,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminFeedbackController {
 
     private final AdminFeedbackService adminFeedbackService;
+    private final FeedbackTypeService feedbackTypeService;
+
+    @GetMapping("/types")
+    @PreAuthorize("@ss.hasPermi('" + PermCodes.FEEDBACK_MANAGE + "')")
+    public ApiResponse<List<FeedbackDtos.TypeItem>> types() {
+        return ApiResponse.ok(feedbackTypeService.enabledTypes());
+    }
 
     @GetMapping
     @PreAuthorize("@ss.hasPermi('" + PermCodes.FEEDBACK_MANAGE + "')")

@@ -54,6 +54,12 @@ class WalletOrderTest {
         jdbc.execute(
                 "CREATE TABLE user_account(id BIGINT PRIMARY KEY,is_deleted INT DEFAULT"
                         + " 0,account_status INT DEFAULT 1,wallet_activated_at TIMESTAMP(3))");
+        jdbc.execute(
+                "CREATE TABLE wallet_sandbox_ledger(order_no VARCHAR(64) UNIQUE,user_id BIGINT,"
+                        + "balance_after_cents BIGINT)");
+        jdbc.execute(
+                "CREATE TABLE consultation_wallet_entry(order_no VARCHAR(64),user_id BIGINT,"
+                        + "balance_after_cents BIGINT,UNIQUE(order_no,user_id))");
         jdbc.update("INSERT INTO user_account(id) VALUES(1),(2),(3)");
         // SQL投影测试夹具；MySQL完整迁移（生成列/唯一约束）另外执行实际验证。
         String common =
@@ -199,6 +205,43 @@ class WalletOrderTest {
         assertEquals(100, item.path("amountCents").asInt());
         assertEquals(20, item.path("reportId").asInt());
         assertEquals(50, getData("/consultation-orders?pageSize=100").path("pageSize").asInt());
+    }
+
+    @Test
+    void rechargeBalanceUsesHistoricalLedgerAndMissingOrUnpaidRecordsStayNull() throws Exception {
+        RequestContext.setUserId(1L);
+        jdbc.update("INSERT INTO wallet_sandbox_account VALUES(1,77777)");
+        jdbc.update("INSERT INTO wallet_sandbox_ledger VALUES('r2',1,1500),('r1',1,9999)");
+        assertEquals(1500, getData("/wallet/recharge-orders/r2").path("balanceAfterCents").asLong());
+        var list = getData("/wallet/recharge-orders?status=PAID").path("records");
+        assertEquals(1500, list.get(0).path("balanceAfterCents").asLong());
+        assertTrue(getData("/wallet/recharge-orders/r1").path("balanceAfterCents").isNull());
+        jdbc.update("UPDATE wallet_sandbox_account SET balance_cents=100 WHERE user_id=1");
+        session.clearCache();
+        assertEquals(1500, getData("/wallet/recharge-orders/r2").path("balanceAfterCents").asLong());
+        jdbc.update("DELETE FROM wallet_sandbox_ledger WHERE order_no='r2'");
+        session.clearCache();
+        assertTrue(getData("/wallet/recharge-orders/r2").path("balanceAfterCents").isNull());
+        jdbc.update("INSERT INTO wallet_sandbox_ledger VALUES('r2',2,6000)");
+        session.clearCache();
+        assertTrue(getData("/wallet/recharge-orders/r2").path("balanceAfterCents").isNull());
+    }
+
+    @Test
+    void consultationBalanceBelongsToPatientAndZeroIsNotMissing() throws Exception {
+        RequestContext.setUserId(1L);
+        jdbc.update("UPDATE consultation_order SET status='PAID' WHERE order_no='c1'");
+        jdbc.update("INSERT INTO consultation_wallet_entry VALUES('c1',1,0),('c1',3,9900)");
+        var detail = getData("/consultation-orders/c1");
+        assertFalse(detail.path("balanceAfterCents").isNull());
+        assertEquals(0, detail.path("balanceAfterCents").asLong());
+        assertEquals(
+                0,
+                getData("/consultation-orders").path("records").get(0)
+                        .path("balanceAfterCents").asLong());
+        jdbc.update("DELETE FROM consultation_wallet_entry WHERE user_id=1");
+        session.clearCache();
+        assertTrue(getData("/consultation-orders/c1").path("balanceAfterCents").isNull());
     }
 
     @Test

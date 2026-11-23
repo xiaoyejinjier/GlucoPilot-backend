@@ -59,5 +59,6 @@ public final class WalletDtos {
             Long consultationId,
             Long reportId,
             Long doctorUserId,
-            String settlementStatus) {}
+            String settlementStatus,
+            Long balanceAfterCents) {}
 }

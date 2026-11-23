@@ -19,4 +19,6 @@ public class WalletOrderRow {
     private Long reportId;
     private Long doctorUserId;
     private String settlementStatus;
+    /** 该订单资金变动完成后的本人余额；无对应流水时为null。 */
+    private Long balanceAfterCents;
 }

@@ -1,5 +1,15 @@
 # API 契约
 
+## 2026-11-23 社区私信 WebSocket
+
+- 握手 `GET /api/v1/community/messages/socket`，使用 `Authorization: Bearer <accessToken>`；不在 URL 传令牌。身份绑定当前有效用户会话，禁用、过期、被替换的会话不得收发。生产小程序配置对应的 WSS socket 合法域名。
+- 客户端文本帧 `{type:"PING"}` 或 `{type:"SEND",peerUserId:"对方ID",content:"正文",clientRequestId:"原发送编号"}`。ID 为正整数字符串，正文最多1000字符，请求编号规则与 HTTP 一致。发送继续复用行锁、唯一键与事务，重试沿用同一编号。
+- 服务端帧统一 `{code,message,data,requestId}`；`data.type` 为 READY、PONG、SENT、DM_CHANGED 或 ERROR。SENT 携带 clientRequestId 和已入库的 message；错误也携带对应 clientRequestId，业务错误码沿用 HTTP。requestId 由服务端生成，不包含令牌或正文。会话失效先发401错误，再关闭4401。
+- 仅事务提交后发布 DM_CHANGED，携带 peerUserId、kind（MESSAGE/READ）、messageId；只发送给本会话双方。Redis Pub/Sub 在实例间转发失效通知，不缓存正文；客户端按本人鉴权接口读取数据库真实消息。回滚不推送，离线不依赖推送缓存。
+- 原消息 HTTP 接口保留。GET `/community/messages/{peerUserId}` 新增 `afterId`，与 beforeId 互斥；afterId 模式按ID升序读取之后的消息，hasMore 时继续用最后一条ID补拉（nextBeforeId 在此模式为null）。原beforeId向前分页语义不变。
+- 小程序前台保持单条连接，25秒心跳，断线退避重连；退出/切换账号/退后台关闭连接并丢弃旧账号回调。连接成功、收到通知时补拉，连接不可用时回退HTTP；连接正常时30秒兜底核对，其他类型提醒仍沿用汇总轮询。消息不自动重发，未确认的发送可用同一编号重试。
+- Nginx 透传 Upgrade/Connection 与 HTTP/1.1；本次不修改数据库结构。
+
 ## 2026-11-23 医生账号与提现审核入口整合
 
 - 管理端“医生账号”上方增加“提现审核”按钮，表格新增“提现详情”列，按医生的小程序`doctorUserId`进入其全部状态的提现记录。提现页提供返回医生账号、查看全部提现入口，并维持路由和服务端原有管理员权限。
@@ -556,7 +566,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 | POST /community/messages/{peerUserId} | `{content,clientRequestId}`，去空白后1～1000字；唯一键(sender_id,client_request_id)防重复，重复同参数返回原消息，不同接收者/正文40900 |
 | PUT /community/messages/{peerUserId}/read | `{throughId:string}`；只标记该对方发给本人的且id<=throughId的消息已读，不把晚到消息误标已读 |
 
-私信仅文本，普通HTTPS请求；打开页面每5秒刷新，退后台/离页停止；发送失败保留原文及幂等ID供重试，不自动重发，不显示虚假成功。所有查询以登录身份限定发送/接收双方，客户端不能指定senderId；第三人不可读、不可标已读。消息/评论正文不进入访问日志，不把私信内容放系统通知或公共资料；未知异常仍50000，参数40000、失效目标40400、幂等冲突40900。读取分页与标已读幂等；新增写请求以body.clientRequestId作幂等键，无需另外X-Idempotency-Key。
+私信仅文本，支持WebSocket实时发送/提醒及HTTPS历史查询；协议详见2026-11-23增补。连接不可用时5秒兜底刷新，正常聊天30秒核对；等待回复时保留5秒权限检查，退后台/离页停止页面刷新。发送失败保留原文及幂等ID供重试，不自动重发，不显示虚假成功。所有查询以登录身份限定发送/接收双方，客户端不能指定senderId；第三人不可读、不可标已读。消息/评论正文不进入访问日志，不把私信内容放系统通知或公共资料；未知异常仍50000，参数40000、失效目标40400、幂等冲突40900。读取分页与标已读幂等；新增写请求以body.clientRequestId作幂等键，无需另外X-Idempotency-Key。
 
 本次仅编写迁移与测试，不对真实数据库执行DDL。需配套后端构建、V29正常迁移后与两个不同C端账号真机验收；dev固定openid时两个客户端会是同一用户，不能用作双账号验收。
 

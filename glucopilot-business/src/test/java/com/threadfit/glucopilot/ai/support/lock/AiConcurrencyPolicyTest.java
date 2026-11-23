@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 
 /**
@@ -109,7 +110,11 @@ class AiConcurrencyPolicyTest {
     @Test
     void 每日额度应在跨天后自动恢复() {
         // 把"现在"钉在 23:59:50，额度 2 轮：第 3 轮必须被拒，跨到次日又可用
-        Clock beforeMidnight = Clock.fixed(Instant.parse("2026-11-20T15:59:50Z"), ZoneId.of("Asia/Shanghai"));
+        // InMemoryCounter按系统时间判断TTL，固定在历史日期会让计数器每次调用都立即过期。
+        // 用当前环境次日的午夜边界，保留真实计数器及跨天日期分桶校验。
+        ZoneId zone = ZoneId.systemDefault();
+        Instant boundary = LocalDate.now(zone).plusDays(2).atStartOfDay(zone).toInstant();
+        Clock beforeMidnight = Clock.fixed(boundary.minusSeconds(10), zone);
         InMemoryCounter counter = new InMemoryCounter();
         AiConcurrencyPolicy policy = new AiConcurrencyPolicy(new InMemoryLeaseGuard(), new InMemoryRateGate(),
                 new InMemoryCacheStore(), counter, properties(), beforeMidnight);
@@ -122,7 +127,7 @@ class AiConcurrencyPolicyTest {
                 .isEqualTo(ErrorCode.TOO_MANY_REQUESTS);
 
         // 次日：键带日期，天然是新的计数器
-        Clock nextDay = Clock.fixed(Instant.parse("2026-11-21T00:00:10Z"), ZoneId.of("Asia/Shanghai"));
+        Clock nextDay = Clock.fixed(boundary.plusSeconds(10), zone);
         AiConcurrencyPolicy tomorrow = new AiConcurrencyPolicy(new InMemoryLeaseGuard(), new InMemoryRateGate(),
                 new InMemoryCacheStore(), counter, properties(), nextDay);
         tomorrow.checkDailyQuota(5L);

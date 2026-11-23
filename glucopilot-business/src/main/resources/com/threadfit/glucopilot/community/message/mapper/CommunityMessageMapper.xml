@@ -80,6 +80,19 @@
         LIMIT #{limit}
     </select>
 
+    <!-- 仅补拉双方消息，不允许用游标读取其他人的会话。升序保证连续翻页不丢中间记录。 -->
+    <select id="selectMessagesAfter" resultType="com.threadfit.glucopilot.community.message.entity.CommunityMessage">
+        SELECT *
+        FROM community_message
+        WHERE (
+            (sender_id = #{viewer} AND recipient_id = #{peer})
+            OR (sender_id = #{peer} AND recipient_id = #{viewer})
+        )
+          AND id &gt; #{afterId}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
     <select id="countConversationMessage" resultType="java.lang.Long">
         SELECT COUNT(*)
         FROM community_message

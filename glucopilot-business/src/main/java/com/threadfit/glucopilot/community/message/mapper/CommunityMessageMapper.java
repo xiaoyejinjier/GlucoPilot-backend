@@ -46,6 +46,11 @@ public interface CommunityMessageMapper extends BaseMapper<CommunityMessage> {
             @Param("beforeId") Long beforeId,
             @Param("limit") int limit);
 
+    // 【断线补拉】从最后已确认的消息ID继续升序读取，避免超过一页时跳过中间消息。
+    List<CommunityMessage> selectMessagesAfter(
+            @Param("viewer") long viewer, @Param("peer") long peer,
+            @Param("afterId") long afterId, @Param("limit") int limit);
+
     Long countConversationMessage(
             @Param("id") long id, @Param("viewer") long viewer, @Param("peer") long peer);
 

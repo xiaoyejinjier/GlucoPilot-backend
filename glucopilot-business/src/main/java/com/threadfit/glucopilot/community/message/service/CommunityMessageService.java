@@ -19,6 +19,8 @@ import com.threadfit.glucopilot.community.profile.service.CommunityProfileServic
 import lombok.RequiredArgsConstructor;
 
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.context.ApplicationEventPublisher;
+import com.threadfit.glucopilot.community.message.realtime.DirectMessageChanged;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +31,7 @@ import java.util.*;
 public class CommunityMessageService {
     private final CommunityMessageMapper mapper;
     private final CommunityProfileService profiles;
+    private final ApplicationEventPublisher events;
 
     private void requirePeer(long viewer, long peer) {
         profiles.requireUser(viewer);
@@ -104,8 +107,10 @@ public class CommunityMessageService {
             throw new BizException(ErrorCode.MESSAGE_REQUEST_PENDING);
         }
         // 【5. 保存消息】写入community_message；唯一约束(sender_id, client_request_id)兜底防重。
+        boolean inserted = false;
         try {
             mapper.insertMessage(viewer, peer, content, request.clientRequestId());
+            inserted = true;
         } catch (DuplicateKeyException ex) {
             // 不再重复插入；继续按原编号读取已有消息，并核对是否确为同一次发送。
         }
@@ -114,7 +119,10 @@ public class CommunityMessageService {
         if (saved == null) {
             throw new BizException(ErrorCode.INTERNAL_ERROR, "发送失败，请重试");
         }
-        return sameMessage(saved, peer, content);
+        Message result = sameMessage(saved, peer, content);
+        // 【提交后通知】事件在事务内登记，监听器只在提交成功后推送；幂等重试不重复提醒。
+        if (inserted) events.publishEvent(new DirectMessageChanged(viewer, peer, saved.id(), "MESSAGE"));
+        return result;
     }
 
     // 同一请求编号不能改接收者或正文；一致才返回旧结果，不一致返回冲突。
@@ -127,11 +135,18 @@ public class CommunityMessageService {
 
     // 【聊天历史】仅查询双方消息；before是游标，多查一条判断是否还有更早的消息。
     public Messages messages(long viewer, long peer, Long before, int size) {
+        return messages(viewer, peer, before, null, size);
+    }
+
+    public Messages messages(long viewer, long peer, Long before, Long after, int size) {
         requirePeer(viewer, peer);
-        if (size < 1 || size > 50 || (before != null && before < 1)) {
+        if (size < 1 || size > 50 || (before != null && before < 1)
+                || (after != null && after < 1) || (before != null && after != null)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "分页参数错误");
         }
-        var rows = mapper.selectMessagesBefore(viewer, peer, before, size + 1).stream()
+        var source = after == null ? mapper.selectMessagesBefore(viewer, peer, before, size + 1)
+                : mapper.selectMessagesAfter(viewer, peer, after, size + 1);
+        var rows = source.stream()
                 .map(rs -> message(viewer, rs))
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         boolean more = rows.size() > size;
@@ -139,11 +154,11 @@ public class CommunityMessageService {
             rows.removeLast();
         }
         // SQL倒序取最近消息，返回前翻转为从旧到新，便于聊天界面展示。
-        Collections.reverse(rows);
+        if (after == null) Collections.reverse(rows);
         return new Messages(
                 rows,
                 more,
-                rows.isEmpty() ? null : rows.getFirst().id(),
+                after != null || rows.isEmpty() ? null : rows.getFirst().id(),
                 messagePermission(viewer, peer));
     }
 
@@ -163,7 +178,8 @@ public class CommunityMessageService {
         if (mapper.countConversationMessage(id, viewer, peer) != 1) {
             throw missing();
         }
-        mapper.markMessagesRead(peer, viewer, id);
+        if (mapper.markMessagesRead(peer, viewer, id) > 0)
+            events.publishEvent(new DirectMessageChanged(peer, viewer, through, "READ"));
     }
 
     // 【会话列表】每个聊天对象显示最后一条消息、公开资料和未读数量。

@@ -1,6 +1,6 @@
 # AI 模块数据表说明（逐列）
 
-> 依据：开发库 `sugar_health`（Flyway v82）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
+> 依据：开发库 `sugar_health`（Flyway v86）的 `information_schema` 实测结构 + 迁移文件 + 实体类注释。
 > 与 `AI-模块实现说明.md` 配套：那份讲「类怎么协作」，这份讲「数据落在哪、每一列是什么意思」。
 
 - 实测导出方式：`information_schema.COLUMNS / STATISTICS / TABLES`（`TABLE_SCHEMA='sugar_health'`）
@@ -415,6 +415,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 4 | `memory_text` | varchar(512) | NO | — | 记忆内容（一句话一件事，如「不吃香菜」） |
 | 4.1 | `item_hash` | char(64) | YES | — | V71：`memory_text` 规范化后的 SHA-256，**条目的身份**；`(user_id, memory_key, item_hash)` 才是「同一句话」。为什么不用正文直接做唯一键：varchar(512) 进索引超长，且空白/大小写差异会被判成两条 |
 | 5 | `source_session_id` | bigint unsigned | YES | — | 来源会话，可空（用户手工加的记忆没有来源会话） |
+| 5.1 | `write_source` | varchar(16) | YES | — | V86：写入来源。`EXPLICIT`＝用户当轮亲口要求记住（`save_long_term_memory`）、`BATCH`＝会话结束/归档时模型抽取；覆盖写时更新为本次来源；`NULL`＝本列上线前的历史行（管理端显示「—」）。为什么需要它：审计要区分"用户说的"与"模型猜的"，而 `confidence` 只是模型自评分 |
 | 6 | `confidence` | tinyint unsigned | NO | 100 | 置信度 0–100；注入时按它排序取前 N，同 key 冲突时取高的 |
 | 7 | `created_by` | bigint unsigned | NO | 0 | 创建人 |
 | 8 | `gmt_create` | datetime(3) | NO | CURRENT_TIMESTAMP(3) | 创建时间 |

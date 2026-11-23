@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 
 /**
@@ -108,9 +109,12 @@ class AiConcurrencyPolicyTest {
 
     @Test
     void 每日额度应在跨天后自动恢复() {
-        // 把"现在"钉在 23:59:50，额度 2 轮：第 3 轮必须被拒，跨到次日又可用
-        Clock beforeMidnight = Clock.fixed(Instant.parse("2026-11-20T15:59:50Z"), ZoneId.of("Asia/Shanghai"));
-        InMemoryCounter counter = new InMemoryCounter();
+        // "现在"钉在今天 23:59:50（与真实日期相对，而不是写死某天——写死会让用例在几天后失效：
+        // 计数器的 expireAt 一旦落在过去，就会被判"已过期"，额度永远放行，断言随之失败）
+        ZoneId zone = ZoneId.of("Asia/Shanghai");
+        LocalDate today = LocalDate.now(zone);
+        Clock beforeMidnight = Clock.fixed(today.atTime(23, 59, 50).atZone(zone).toInstant(), zone);
+        InMemoryCounter counter = new InMemoryCounter(beforeMidnight);
         AiConcurrencyPolicy policy = new AiConcurrencyPolicy(new InMemoryLeaseGuard(), new InMemoryRateGate(),
                 new InMemoryCacheStore(), counter, properties(), beforeMidnight);
 
@@ -122,9 +126,9 @@ class AiConcurrencyPolicyTest {
                 .isEqualTo(ErrorCode.TOO_MANY_REQUESTS);
 
         // 次日：键带日期，天然是新的计数器
-        Clock nextDay = Clock.fixed(Instant.parse("2026-11-21T00:00:10Z"), ZoneId.of("Asia/Shanghai"));
+        Clock nextDay = Clock.fixed(today.plusDays(1).atTime(0, 0, 10).atZone(zone).toInstant(), zone);
         AiConcurrencyPolicy tomorrow = new AiConcurrencyPolicy(new InMemoryLeaseGuard(), new InMemoryRateGate(),
-                new InMemoryCacheStore(), counter, properties(), nextDay);
+                new InMemoryCacheStore(), new InMemoryCounter(nextDay), properties(), nextDay);
         tomorrow.checkDailyQuota(5L);
     }
 

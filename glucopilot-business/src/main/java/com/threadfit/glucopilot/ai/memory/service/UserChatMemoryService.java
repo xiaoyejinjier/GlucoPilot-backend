@@ -45,8 +45,57 @@ public interface UserChatMemoryService {
      */
     Set<String> ALLOWED_KEYS = Set.of("diet_taboo", "glucose_goal", "health_context", "habit", "preference");
 
-    /** 送入上下文的一条记忆。 */
-    record MemoryItem(String key, String text, int confidence) {
+    /**
+     * 五类的<b>固定展示顺序</b>：忌口 → 目标 → 健康状况 → 习惯 → 偏好。
+     *
+     * <p>为什么不能只用一个 {@code Set}：{@code Set.of(...)} 的迭代顺序在不同 JVM/不同次启动上并不承诺稳定，
+     * 而注入顺序会直接决定 system 消息里记忆段的字节排列——顺序一变，这一段之后的所有历史都不再命中
+     * 前缀缓存（DeepSeek 的缓存是前缀匹配，实测命中与未命中差 30 倍价）。所以顺序必须是显式常量。
+     */
+    List<String> ALLOWED_KEY_ORDER =
+            List.of("diet_taboo", "glucose_goal", "health_context", "habit", "preference");
+
+    /**
+     * 送入上下文的一类记忆：一个键 + 该类下的若干条目。
+     *
+     * <p>为什么不是「一条记忆 = 一行文本 + 一个置信度」：V71 之后同一类可以有多条（"不吃香菜"与"海鲜过敏"
+     * 都是忌口），而置信度是<b>条目</b>的属性，不是类别的属性。早先把同类条目拼成一行再用 max 聚合成
+     * 一个置信度，等于让一条高置信度的条目给整行背书——模型无从知道"海鲜过敏(90)"与"不吃香菜(62)"
+     * 的可信程度并不相同。结构化的代价只是多一层嵌套，换来的是可以逐条判断"要不要先跟用户确认"。
+     *
+     * @param key     五类之一（{@link #ALLOWED_KEY_ORDER}）
+     * @param entries 该类下的条目，按置信度降序、最近更新降序，最多 {@code ai.memory.inject-max-items-per-key} 条
+     */
+    record MemoryItem(String key, List<Entry> entries) {
+
+        /** 紧凑构造器：防止调用方传 null 列表，也顺手做成不可变视图。 */
+        public MemoryItem {
+            entries = entries == null ? List.of() : List.copyOf(entries);
+        }
+
+        /** 该类实际要注入的条目数（装配器按它累计条数上限）。 */
+        public int count() {
+            return entries.size();
+        }
+
+        /** 该类里最低的条目置信度；空列表返回 0（只用于日志，不参与过滤）。 */
+        public int minConfidence() {
+            return entries.stream().mapToInt(Entry::confidence).min().orElse(0);
+        }
+
+        /** 该类里最高的条目置信度；空列表返回 0（只用于日志）。 */
+        public int maxConfidence() {
+            return entries.stream().mapToInt(Entry::confidence).max().orElse(0);
+        }
+
+        /**
+         * 一条具体的事实。
+         *
+         * @param text       事实原文（已 trim，长度受 {@code MAX_TEXT_CHARS} 约束）
+         * @param confidence 0~100：用户亲口说的通常 85+，模型抽取的按提示词给的分数
+         */
+        public record Entry(String text, int confidence) {
+        }
     }
 
     /**

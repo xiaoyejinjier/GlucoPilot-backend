@@ -29,6 +29,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -79,14 +80,9 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     /** 单条记忆文本上限（列是 varchar(512)，但记忆本身就该短，太长说明抽错了）。 */
     static final int MAX_TEXT_CHARS = 200;
 
-    /**
-     * 注入时每个类别最多带几条（V71 之后一类可以有多条）。
-     * <p>
-     * 三条的取舍：一条常常不够（"不吃香菜 + 不吃辣 + 海鲜过敏"是三次对话分别记下的），
-     * 但十条会让一行变成一段话，把历史消息的预算挤掉。更多的条目留给用户自己的记忆页——
-     * 那一页的用途是"看清全貌"，而注入的用途是"别答错"。
-     */
-    static final int MAX_ITEMS_PER_KEY_INJECTED = 3;
+    // 注入时的「每类几条」与「最低置信度」已经改成配置项（V86）：
+    // ai.memory.inject-max-items-per-key（默认 10）与 ai.memory.inject-min-confidence（默认 60）。
+    // 原来是写死的 3 条，且先全局取 top-N 再分桶——条目多的那一类会把别的类挤光。
 
     /** 空白折叠：关键词检索前把连续空白压成一个空格，避免「不吃  香菜」搜不到「不吃 香菜」。 */
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
@@ -166,15 +162,19 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     }
 
     // ------------------------------------------------------------------ 读取（供上下文装配）
-
     /**
-     * 取要注入上下文的记忆：<b>按类分组</b>，一类一行，最多 {@code ai.memory.inject-max-items} 行。
+     * 取要注入上下文的记忆：<b>按类分组、逐条带置信度</b>，顺序固定为 {@link UserChatMemoryService#ALLOWED_KEY_ORDER}。
      * <p>
-     * 为什么是「一类一行」而不是「一条一行」：V71 之后同一类下可以有多条（不吃香菜 / 不吃辣 /
-     * 海鲜过敏）。如果每条单独占一行，五类事实多起来就会挤掉历史消息与摘要的预算；而分组之后
-     * 「饮食忌口：不吃香菜、不吃辣、海鲜过敏」既完整又只占一行的位置。
-     * 每类最多取 {@link #MAX_ITEMS_PER_KEY_INJECTED} 条——再多的条目对回答没有增量信息，
-     * 完整的清单留给用户自己的记忆页去看。
+     * 三个刻意为之的选择：
+     * <ul>
+     *   <li><b>每类各自取前 N 条</b>（{@code ai.memory.inject-max-items-per-key}，默认 10）：V71 之后
+     *       同一类可以有任意多条，而"全局 top-N 再分桶"会让条目最多的那一类把其它类挤光——
+     *       忌口攒到 24 条时，「控糖目标」一条都进不来，模型下一轮就会反问用户目标是什么。</li>
+     *   <li><b>逐条过滤低置信度</b>（{@code ai.memory.inject-min-confidence}，默认 60）：过滤是
+     *       <b>条目</b>级的。早先把同类拼成一行再取 max，等于让一条 95 分的条目给 50 分的条目背书。</li>
+     *   <li><b>类顺序固定</b>：顺序决定记忆段的字节排列，而它处在 system 消息里、后面还跟着整段历史——
+     *       顺序一变，后面全部不再命中前缀缓存（DeepSeek 命中与未命中差 30 倍价）。</li>
+     * </ul>
      * <p>
      * 读失败返回空列表（记忆是增强项，读不到就当没有，绝不让这一轮问答失败）。
      */
@@ -183,38 +183,44 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         if (userId == null) {
             return List.of();
         }
-        int max = aiProperties.getMemory().getInjectMaxItems();
-        if (max <= 0) {
+        AIProperties.MemoryProperties memory = aiProperties.getMemory();
+        int maxKeys = memory.getInjectMaxItems();
+        int perKey = memory.getInjectMaxItemsPerKey();
+        int minConfidence = memory.getInjectMinConfidence();
+        if (maxKeys <= 0 || perKey <= 0) {
             return List.of();
         }
         try {
-            // 按置信度/更新时间排序取回，多取一些：分组之后需要的行数取决于每类几条，
-            // 只取 max 行可能全落在同一类里，导致别的类一条都进不来。
-            List<ChatUserMemoryEntity> rows = memoryMapper.selectActiveByUser(userId, max * MAX_ITEMS_PER_KEY_INJECTED);
-            Map<String, List<ChatUserMemoryEntity>> grouped = new LinkedHashMap<>();
+            List<ChatUserMemoryEntity> rows = memoryMapper.selectTopPerKey(userId, perKey);
+            Map<String, List<MemoryItem.Entry>> grouped = new HashMap<>();
+            int dropped = 0;
             for (ChatUserMemoryEntity row : rows) {
-                List<ChatUserMemoryEntity> bucket =
-                        grouped.computeIfAbsent(row.getMemoryKey(), k -> new ArrayList<>());
-                if (bucket.size() < MAX_ITEMS_PER_KEY_INJECTED) {
-                    bucket.add(row);
+                if (row.getMemoryText() == null || row.getMemoryText().isBlank()) {
+                    continue;
                 }
+                int confidence = row.getConfidence() == null ? 0 : row.getConfidence();
+                if (confidence < minConfidence) {
+                    // 低置信度的条目宁可不注入：模型看到的每一条都会被当作"用户的事实"复述
+                    dropped++;
+                    continue;
+                }
+                grouped.computeIfAbsent(row.getMemoryKey(), k -> new ArrayList<>())
+                        .add(new MemoryItem.Entry(row.getMemoryText().trim(), confidence));
             }
-            List<MemoryItem> items = new ArrayList<>(Math.min(grouped.size(), max));
-            for (Map.Entry<String, List<ChatUserMemoryEntity>> entry : grouped.entrySet()) {
-                if (items.size() >= max) {
+            // 按固定类序输出，而不是按 Map 的哈希顺序：见方法 javadoc 的第三条
+            List<MemoryItem> items = new ArrayList<>(Math.min(ALLOWED_KEY_ORDER.size(), maxKeys));
+            for (String key : ALLOWED_KEY_ORDER) {
+                if (items.size() >= maxKeys) {
                     break;
                 }
-                List<ChatUserMemoryEntity> bucket = entry.getValue();
-                StringBuilder joined = new StringBuilder();
-                int confidence = 0;
-                for (ChatUserMemoryEntity row : bucket) {
-                    if (joined.length() > 0) {
-                        joined.append('、');
-                    }
-                    joined.append(row.getMemoryText().trim());
-                    confidence = Math.max(confidence, row.getConfidence() == null ? 100 : row.getConfidence());
+                List<MemoryItem.Entry> entries = grouped.get(key);
+                if (entries == null || entries.isEmpty()) {
+                    continue;
                 }
-                items.add(new MemoryItem(entry.getKey(), joined.toString(), confidence));
+                items.add(new MemoryItem(key, entries));
+            }
+            if (dropped > 0) {
+                log.debug("注入时过滤掉 {} 条低置信度记忆（阈值 {}）userId={}", dropped, minConfidence, userId);
             }
             return items;
         } catch (RuntimeException e) {
@@ -566,6 +572,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             row.setItemHash(itemHash);
             row.setConfidence(Math.min(score, 100));
             row.setSourceSessionId(sourceSessionId);
+            row.setWriteSource(source.name());
             memoryMapper.insert(row);
             log.info("新增长期记忆 userId={} key={} confidence={} 来源会话={} 来源={} 条目={}",
                     userId, normalizedKey, score, sourceSessionId, source, itemHash.substring(0, 8));
@@ -590,6 +597,9 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         update.setId(existing.getId());
         update.setConfidence(Math.min(score, 100));
         update.setSourceSessionId(sourceSessionId == null ? existing.getSourceSessionId() : sourceSessionId);
+        // 覆盖写时同步记下来源：审计要回答的是「这一行现在这条说法是谁写的」，
+        // 而不是「它最初是谁写的」——后者会让人误以为一条被 EXPLICIT 更正过的记忆仍是模型猜的
+        update.setWriteSource(source.name());
         memoryMapper.updateById(update);
         log.info("提升长期记忆置信度 userId={} key={} {} → {} 条目={} 来源={}",
                 userId, normalizedKey, existingConfidence, update.getConfidence(),
@@ -802,7 +812,16 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         if (!known.isEmpty()) {
             sb.append("【已知的长期记忆（如与原文冲突，请输出更正后的说法）】\n");
             for (MemoryItem item : known) {
-                sb.append("- ").append(item.key()).append('：').append(item.text()).append('\n');
+                // 逐条渲染并带上置信度：抽取模型要能判断"这条是用户明确的说法，还是上次的弱推断"，
+                // 弱推断在原文里被推翻时应当输出更正，而不是继续沿用
+                sb.append("- ").append(item.key()).append('：');
+                for (int i = 0; i < item.entries().size(); i++) {
+                    if (i > 0) {
+                        sb.append('、');
+                    }
+                    sb.append(item.entries().get(i).text());
+                }
+                sb.append('\n');
             }
             sb.append('\n');
         }

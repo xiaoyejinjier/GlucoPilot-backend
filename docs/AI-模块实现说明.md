@@ -993,7 +993,7 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 | 写入同一类的新说法 | 覆盖旧记录 | 新增条目（同文则视为同一条，只在置信度提高时刷新） |
 | 删除 | 按 key 删整类 | 按 `id` 删一条 / 按 key 清一类 / 清空全部 |
 | 冷却（挡自动重建） | 键级 | **条目级**：删「不吃香菜」不连累「海鲜过敏」 |
-| 注入 | 每类一条，最多 5 行 | 每类最多 3 条**合并成一行**，仍是 ≤5 行 |
+| 注入 | 每类一条，最多 5 行 | **每类各自取前 10 条**（`inject-max-items-per-key`），逐条带置信度、逐条截断 40 字、整行封顶 400 字（超出写「另有 N 条」） |
 | 列表 | 一次性返回 | 分页（存储不设硬上限，但列表必须分页） |
 
 **「来源会话」的语义**：记「哪一次最确信地说过它」，不是「最近一次提到」。所以只有置信度提高时才刷新 `source_session_id` 与 `gmt_modified`——否则每轮闲聊都会刷新，「最近更新」会变成噪声。
@@ -1006,10 +1006,25 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 
 | 出口 | 入口方法 | 条数上限 | 失败策略 | 谁在用 |
 | --- | --- | --- | --- | --- |
-| 每轮注入 | `forInjection(userId)` | `inject-max-items`（8）× 每类 3 条合并一行 → ≤15 条 | 读失败返回空（不打断对话） | `ChatHistoryAssembler` |
+| 每轮注入 | `forInjection(userId)` | `inject-max-items`（类别数，yaml 设 5）× `inject-max-items-per-key`（10）→ 最多 50 条；逐条过滤 `< inject-min-confidence`（60） | 读失败返回空（不打断对话） | `ChatHistoryAssembler` |
 | 读工具 | `overviewForModel(userId, key, keyword, limit)` | `limit` 1~30（默认 15），可按类/关键词收窄 | 抛给工具层转成 `{"error":…}` | 模型调 `list_long_term_memory` |
 
 两者排序口径必须一致（置信度降序 → 最近更新降序 → id 降序），否则模型先读工具、再看到注入内容，会对「哪条更重要」得出矛盾结论。`overviewForModel` 多查一次 `countActiveFiltered`：读工具的价值一半在「一共记了多少条」，只给条目会让模型把「我看到 15 条」说成「你一共 15 条」。
+
+**注入取数为什么是「每类各取前 N 条」（V86）**：V71 之后一类可以有任意多条，而按置信度的**全局** top-N 会被条目最多的那一类占满——实测过的回归是：某用户攒了 24 条忌口，「控糖目标」只有 1 条，全局取 24 条时目标那条排在最后、被 `LIMIT` 截掉，模型下一轮反问用户"你的目标是什么"。修法是把 `LIMIT` 换成窗口函数：
+
+```sql
+SELECT * FROM (
+  SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.memory_key
+      ORDER BY m.confidence DESC, m.gmt_modified DESC, m.id DESC) AS rn
+  FROM chat_user_memory m WHERE m.user_id = ? AND m.is_deleted = 0) t
+WHERE t.rn <= ?            -- perKey = ai.memory.inject-max-items-per-key（默认 10）
+ORDER BY t.confidence DESC, t.gmt_modified DESC, t.id DESC
+```
+
+**注入的排序与粒度（V86）**：类顺序固定为 `ALLOWED_KEY_ORDER`（忌口 → 目标 → 状况 → 习惯 → 偏好），不再依赖 `HashMap` 的迭代顺序——记忆段处在 system 消息里、后面紧跟整段历史，顺序一变，后面全部不再命中 DeepSeek 的前缀缓存（命中与未命中差 30 倍价）。置信度**逐条**参与：装配器渲染成 `不吃香菜(90)、海鲜过敏(62)`，模型据此区分"用户明确说过"与"上次的弱推断"；过滤也是逐条的（`< inject-min-confidence` 不注入，但仍留在库里、仍显示在记忆页）。早先把同类拼成一行再取 `max`，等于让一条 95 分的条目给 50 分的条目背书，且整行 120 字截断会把第 5 条以后整段切掉而模型毫不知情。
+
+**`write_source`（V86）**：`chat_user_memory.write_source` 记 `EXPLICIT`（用户当轮亲口，走 `save_long_term_memory` 工具）或 `BATCH`（会话结束/归档时模型抽取），覆盖写时同步更新为**本次**来源。它的用途是审计：`confidence` 只是模型自己给的分数，回答不了"这话是用户说的还是模型猜的"。本列上线前的历史行为 `NULL`，管理端显示「—」。
 
 **归档补齐（V61 `memory_extracted_upto_msg_id`）**：会话闲置归档时，`ChatSessionServiceImpl.archiveIdleSessions` 先挑出「即将归档、且长期记忆还没覆盖到最后一条消息」的 **1 个**会话（`selectIdleSessionNeedingMemory`），归档后再为它提交一次 `extractAsync(..., "session-archived")`。
 

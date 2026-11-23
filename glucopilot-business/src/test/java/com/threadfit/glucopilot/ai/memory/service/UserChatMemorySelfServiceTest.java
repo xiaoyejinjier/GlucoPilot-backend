@@ -489,6 +489,45 @@ class UserChatMemorySelfServiceTest {
         doReturn(page).when(memoryMapper).selectPage(any(), any());
     }
 
+    /**
+     * 注入取数的 SQL 契约（V86）：<b>每一类各取前 N 条</b>，而不是全局 top-N。
+     *
+     * <p>这是本轮修的那个真实回归：某用户攒了 12 条高置信度忌口、只有 1 条控糖目标，
+     * 旧的「全局 top-8 再分桶」会把目标那条挤出去，模型于是反问用户"你的目标是什么"。
+     * 用真库（H2 + MySQL 模式）跑窗口函数，是因为 {@code ROW_NUMBER() OVER (PARTITION BY …)}
+     * 正是这段逻辑的核心，Mockito 测不到它。
+     */
+    @Test
+    void 真实库上按类各取前N条而不是全局截断() throws Exception {
+        UnpooledDataSource datasource = memoryDatasource();
+        createMemoryTable(datasource);
+        try (var connection = datasource.getConnection(); var sql = connection.createStatement()) {
+            // 12 条高置信度忌口（95~84）——足够把全局 top-8 全部占满
+            for (int i = 1; i <= 12; i++) {
+                sql.execute("INSERT INTO chat_user_memory "
+                        + "(user_id,memory_key,memory_text,confidence,created_by,is_deleted,gmt_modified) VALUES "
+                        + "(" + USER_ID + ",'diet_taboo','忌口" + i + "'," + (96 - i)
+                        + ",0,0,TIMESTAMP '2026-11-0" + ((i % 9) + 1) + " 10:00:00')");
+            }
+            // 1 条置信度最低的目标：旧逻辑下必然被挤掉
+            sql.execute("INSERT INTO chat_user_memory "
+                    + "(user_id,memory_key,memory_text,confidence,created_by,is_deleted,gmt_modified) VALUES "
+                    + "(" + USER_ID + ",'glucose_goal','餐后控制在 8 以内',70,0,0,TIMESTAMP '2026-11-01 09:00:00')");
+        }
+        SqlSessionFactory sessionFactory = memorySqlSessionFactory(datasource);
+        sessionFactory.getConfiguration().addMapper(ChatUserMemoryMapper.class);
+        try (SqlSession session = sessionFactory.openSession(true)) {
+            ChatUserMemoryMapper realMapper = session.getMapper(ChatUserMemoryMapper.class);
+
+            List<ChatUserMemoryEntity> top = realMapper.selectTopPerKey(USER_ID, 10);
+            assertEquals(11, top.size(), "10 条忌口 + 1 条目标，两类各自限量");
+            assertEquals(10, top.stream().filter(row -> "diet_taboo".equals(row.getMemoryKey())).count());
+            assertEquals(1, top.stream().filter(row -> "glucose_goal".equals(row.getMemoryKey())).count(),
+                    "目标类只有一条，必须出现在结果里");
+            assertEquals(95, top.get(0).getConfidence(), "类内按置信度降序：最高置信度的排最前");
+        }
+    }
+
     private static UnpooledDataSource memoryDatasource() {
         return new UnpooledDataSource("org.h2.Driver",
                 "jdbc:h2:mem:selfmem_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
@@ -507,7 +546,7 @@ class UserChatMemorySelfServiceTest {
                     + "id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, "
                     + "memory_key VARCHAR(64) NOT NULL, memory_text VARCHAR(512) NOT NULL, "
                     + "item_hash VARCHAR(64) NULL, "
-                    + "source_session_id BIGINT NULL, confidence TINYINT NOT NULL DEFAULT 100, "
+                    + "source_session_id BIGINT NULL, write_source VARCHAR(16) NULL, " + "confidence TINYINT NOT NULL DEFAULT 100, "
                     + "created_by BIGINT NOT NULL DEFAULT 0, "
                     + "gmt_create TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), "
                     + "updated_by BIGINT NOT NULL DEFAULT 0, "

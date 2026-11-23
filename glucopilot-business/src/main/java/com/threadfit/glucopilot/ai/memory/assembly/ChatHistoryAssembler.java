@@ -332,12 +332,26 @@ public class ChatHistoryAssembler {
         return tail;
     }
 
+    /** 单条记忆在上下文里的字符上限：够放下"海鲜过敏，吃了会起疹子"，再长就是抽取时把整句话抄进来了。 */
+    private static final int MEMORY_ITEM_CHARS = 40;
+
+    /** 一类记忆整行的字符上限：10 条 × 40 字会到 400，再长就把历史消息的预算挤掉了。 */
+    private static final int MEMORY_LINE_CHARS = 400;
+
     /**
      * 长期记忆作为附加上下文的第一段（比摘要更靠前：它是"你是谁"，比"聊过什么"更基础）。
      * <p>
-     * 条数由调用方（读取侧）限制；这里再限一次长度，避免一条超长记忆把预算吃光。
+     * 渲染规则（V86 起）：
+     * <ul>
+     *   <li><b>逐条带置信度</b>：{@code 不吃香菜(90)、海鲜过敏(62)}。模型据此能区分"用户明确说过"与
+     *       "上次推断的"，后者与本轮说法冲突时应当先确认，而不是照旧复述。</li>
+     *   <li><b>逐条截断</b>而不是整行截断：早先按整行截 120 字，一类里第 5 条以后会被整段切掉，
+     *       而模型完全不知道"被切掉了"。</li>
+     *   <li><b>行上限 + 显式提示</b>：超出时写「另有 N 条」，让模型知道库里还有、要看就调
+     *       {@code list_long_term_memory}，而不是以为记忆只有这些。</li>
+     * </ul>
      *
-     * @return 实际写进上下文的条数（空白条目会被跳过，因此可能小于 {@code memories.size()}）
+     * @return 实际写进上下文的<b>条目</b>数（空白条目与超出上限的条目不计）
      */
     private static int appendMemories(StringBuilder context, List<UserChatMemoryService.MemoryItem> memories) {
         if (memories == null || memories.isEmpty()) {
@@ -346,15 +360,39 @@ public class ChatHistoryAssembler {
         StringBuilder body = new StringBuilder();
         int count = 0;
         for (UserChatMemoryService.MemoryItem item : memories) {
-            if (item == null || item.text() == null || item.text().isBlank()) {
+            if (item == null || item.entries() == null || item.entries().isEmpty()) {
                 continue;
             }
-            String text = item.text().trim();
-            if (text.length() > 120) {
-                text = text.substring(0, 120);
+            StringBuilder line = new StringBuilder("- ").append(item.key()).append('：');
+            int rendered = 0;
+            int omitted = 0;
+            for (UserChatMemoryService.MemoryItem.Entry entry : item.entries()) {
+                if (entry == null || entry.text() == null || entry.text().isBlank()) {
+                    continue;
+                }
+                String text = entry.text().trim();
+                if (text.length() > MEMORY_ITEM_CHARS) {
+                    text = text.substring(0, MEMORY_ITEM_CHARS);
+                }
+                String piece = text + "(" + entry.confidence() + ")";
+                if (rendered > 0 && line.length() + piece.length() + 1 > MEMORY_LINE_CHARS) {
+                    omitted++;
+                    continue;
+                }
+                if (rendered > 0) {
+                    line.append('、');
+                }
+                line.append(piece);
+                rendered++;
             }
-            body.append("- ").append(item.key()).append('：').append(text).append('\n');
-            count++;
+            if (rendered == 0) {
+                continue;
+            }
+            if (omitted > 0) {
+                line.append("（另有 ").append(omitted).append(" 条，可调用 list_long_term_memory 查看）");
+            }
+            body.append(line).append('\n');
+            count += rendered;
         }
         if (count == 0) {
             // 一条都没进来就不要留一个空标题：那会让"注入了什么"更难读

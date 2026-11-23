@@ -93,6 +93,7 @@ public class AiAuditServiceImpl implements AiAuditService {
                         memory.getMemoryKey(),
                         memory.getMemoryText(),
                         memory.getSourceSessionId(),
+                        memory.getWriteSource(),
                         value(memory.getConfidence()),
                         memory.getIsDeleted() != null && memory.getIsDeleted() == 1,
                         memory.getGmtCreate(),

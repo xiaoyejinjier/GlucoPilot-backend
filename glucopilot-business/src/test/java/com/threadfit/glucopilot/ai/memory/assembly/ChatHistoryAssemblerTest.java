@@ -169,15 +169,42 @@ class ChatHistoryAssemblerTest {
                 List.of(new UserMessage("我爸也有糖尿病")),
                 List.of(new UserMessage("本轮")),
                 null, List.of(),
-                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "用户不吃香菜", 90),
-                        new UserChatMemoryService.MemoryItem("habit", "  ", 80),
-                        new UserChatMemoryService.MemoryItem("glucose_goal", "餐后控制在 8 以内", 85)),
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo",
+                                List.of(new UserChatMemoryService.MemoryItem.Entry("用户不吃香菜", 90))),
+                        new UserChatMemoryService.MemoryItem("habit",
+                                List.of(new UserChatMemoryService.MemoryItem.Entry("  ", 80))),
+                        new UserChatMemoryService.MemoryItem("glucose_goal",
+                                List.of(new UserChatMemoryService.MemoryItem.Entry("餐后控制在 8 以内", 85)))),
                 0);
 
         assertEquals(2, result.stats().memoryItems(), "空白条目不算注入一条");
         String context = result.messages().get(0).getText();
         assertTrue(context.contains("不吃香菜"));
         assertTrue(context.contains("餐后控制在 8 以内"));
+        // V86：逐条带置信度，模型才能区分「用户明确说过」与「上次的弱推断」
+        assertTrue(context.contains("(90)"), "要渲染条目的置信度：" + context);
+    }
+
+    @Test
+    void 同类条目过多时逐条截断并提示还有几条() {
+        List<UserChatMemoryService.MemoryItem.Entry> entries = new java.util.ArrayList<>();
+        for (int i = 1; i <= 10; i++) {
+            // 每条 42 字：会被逐条截到 40 字，然后 10 条拼起来必然超过 400 字的行上限
+            entries.add(new UserChatMemoryService.MemoryItem.Entry("第" + i + "条忌口" + "很长的描述".repeat(6), 95));
+        }
+        ChatHistoryAssembler.Assembled result = assembler.assemble(
+                List.of(new UserMessage("我爸也有糖尿病")),
+                List.of(new UserMessage("本轮")),
+                null, List.of(),
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", entries)),
+                0);
+
+        String context = result.messages().get(0).getText();
+        assertTrue(context.contains("（另有 "), "超出 400 字行上限时要告诉模型还有几条：" + context);
+        assertTrue(context.contains("list_long_term_memory"), "要给出查看方式，否则模型以为记忆就这些");
+        assertTrue(result.stats().memoryItems() < 10, "实际注入条数应小于 10，实际=" + result.stats().memoryItems());
+        // 逐条截断：不应出现超过 44 字（40 字正文 + 「(95)」）的条目
+        assertTrue(context.lines().noneMatch(line -> line.length() > 400 + 40), "单行不应失控：" + context);
     }
 
     @Test
@@ -285,7 +312,8 @@ class ChatHistoryAssemblerTest {
                 List.of(new UserMessage("我这周血糖怎么样")),
                 "用户早餐前 6.8，目标餐后 8 以内",
                 List.of("query_glucose_range → {avg:6.8}"),
-                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "对花生过敏", 95)),
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo",
+                        List.of(new UserChatMemoryService.MemoryItem.Entry("对花生过敏", 95)))),
                 500);
 
         List<ChatContextShard> shards = result.shards();
@@ -358,7 +386,8 @@ class ChatHistoryAssemblerTest {
                 List.of(new UserMessage("我这周血糖怎么样，需要注意什么")),
                 "摘要正文若干",
                 List.of("query_glucose_range → {avg:6.8}"),
-                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "对花生过敏", 95)),
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo",
+                        List.of(new UserChatMemoryService.MemoryItem.Entry("对花生过敏", 95)))),
                 300);
 
         int shardSum = result.shards().stream().mapToInt(ChatContextShard::tokenEstimate).sum();

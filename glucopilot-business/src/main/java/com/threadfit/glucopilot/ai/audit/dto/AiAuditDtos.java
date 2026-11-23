@@ -55,6 +55,10 @@ public final class AiAuditDtos {
      * <p>{@code memoryText} 给全文而不是预览：单条已被四道闸限制在 200 字以内，
      * 而且「系统到底记了什么」正是这一页要回答的问题，截断会让它答不出来。
      *
+     * <p>{@code writeSource}（V86）是「这条事实是谁说的」：{@code EXPLICIT}＝用户当轮亲口要求记住，
+     * {@code BATCH}＝会话结束/归档时模型抽取，{@code null}＝本列上线前的历史数据（无法追溯，前端显示「—」）。
+     * 它比 {@code confidence} 更能回答审计时真正关心的问题——模型自己给的分数不能证明这话是用户说的。
+     *
      * @param includeDeleted 语义上由查询参数决定，不体现在行里；行里 {@code deleted} 只表示这行是否已逻辑删除
      */
     public record MemoryRow(long id,
@@ -62,6 +66,7 @@ public final class AiAuditDtos {
                             String memoryKey,
                             String memoryText,
                             Long sourceSessionId,
+                            String writeSource,
                             int confidence,
                             boolean deleted,
                             LocalDateTime createdAt,

@@ -114,6 +114,25 @@ public interface ChatUserMemoryMapper extends BaseMapper<ChatUserMemoryEntity> {
             + "ORDER BY confidence DESC, gmt_modified DESC, id DESC LIMIT #{limit}")
     List<ChatUserMemoryEntity> selectActiveByUser(@Param("userId") Long userId, @Param("limit") int limit);
 
+    /**
+     * 注入用的候选集：<b>每一类各取前 {@code perKey} 条</b>（类内按置信度降序、最近更新降序）。
+     *
+     * <p>为什么不能再用 {@link #selectActiveByUser} 的「全局 top-N + 内存分桶」：
+     * V71 之后同一类可以有任意多条，而全局 top-N 是按置信度排的——某个用户攒了 24 条高置信度的忌口，
+     * 就会把「控糖目标」整类挤出候选窗口，模型下一轮会反过来问用户"你的目标是什么"。
+     * 这是一个结构性问题（条目越多越容易发生），分桶解决不了，只能让每一类各自排序、各自限量。
+     *
+     * <p>用窗口函数而不是「查一次所有类再循环查五次」：一条 SQL、一次往返，且不会出现
+     * 「查第二类时数据已经被改」的读不一致。
+     */
+    @Select("SELECT * FROM (SELECT m.*, "
+            + "ROW_NUMBER() OVER (PARTITION BY m.memory_key "
+            + "ORDER BY m.confidence DESC, m.gmt_modified DESC, m.id DESC) AS rn "
+            + "FROM chat_user_memory m WHERE m.user_id = #{userId} AND m.is_deleted = 0) t "
+            + "WHERE t.rn <= #{perKey} "
+            + "ORDER BY t.confidence DESC, t.gmt_modified DESC, t.id DESC")
+    List<ChatUserMemoryEntity> selectTopPerKey(@Param("userId") Long userId, @Param("perKey") int perKey);
+
     /** 该用户当前生效条目数（只用于"抽取是否失控"的告警，不做硬限制）。 */
     @Select("SELECT COUNT(*) FROM chat_user_memory WHERE user_id = #{userId} AND is_deleted = 0")
     int countActiveByUser(@Param("userId") Long userId);

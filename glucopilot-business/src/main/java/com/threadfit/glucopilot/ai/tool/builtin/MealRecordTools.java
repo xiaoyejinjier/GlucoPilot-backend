@@ -81,7 +81,6 @@ public class MealRecordTools {
                     item.put("meal", node == null ? meal.getNodeCode() : node.getNodeName());
                     item.put("foodsText", meal.getFoodsText());
                     item.put("carbsG", meal.getCarbsG());
-                    item.put("predictNow", meal.getPredictNow());
                     item.put("hungerLevel", meal.getHungerLevel());
                     item.put("supplementText", meal.getSupplementText());
                     meals.add(item);

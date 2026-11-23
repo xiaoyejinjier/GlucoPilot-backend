@@ -92,8 +92,6 @@ public final class AdminHealthRecordDtos {
         private String remark;
         private String foodsText;
         private BigDecimal carbsG;
-        private BigDecimal predictNow;
-        private BigDecimal predictSuggest;
         private LocalDateTime recordedAt;
     }
 }

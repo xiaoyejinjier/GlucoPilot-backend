@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.user.dto.FeedbackDtos;
 import com.threadfit.glucopilot.user.feedback.service.FeedbackService;
+import com.threadfit.glucopilot.user.feedback.service.FeedbackTypeService;
 
 import jakarta.validation.Valid;
 
@@ -17,6 +18,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /** C 端反馈留言中心。 */
 @RestController
 @RequestMapping("/api/v1/feedbacks")
@@ -24,6 +27,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class FeedbackController {
 
     private final FeedbackService feedbackService;
+    private final FeedbackTypeService feedbackTypeService;
+
+    @GetMapping("/types")
+    public ApiResponse<List<FeedbackDtos.TypeItem>> types() {
+        RequestContext.requireUserId();
+        return ApiResponse.ok(feedbackTypeService.enabledTypes());
+    }
 
     @PostMapping
     public ApiResponse<FeedbackDtos.SubmitResult> submit(

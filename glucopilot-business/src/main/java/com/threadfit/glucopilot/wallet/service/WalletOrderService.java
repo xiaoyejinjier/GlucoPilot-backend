@@ -83,6 +83,7 @@ public class WalletOrderService {
                 row.getConsultationId(),
                 row.getReportId(),
                 row.getDoctorUserId(),
-                row.getSettlementStatus());
+                row.getSettlementStatus(),
+                row.getBalanceAfterCents());
     }
 }

@@ -73,7 +73,7 @@ class UserChatMemoryItemTest {
         assertThat(inserted.get(0).getItemHash()).isNotEqualTo(inserted.get(1).getItemHash());
         assertThat(inserted.get(0).getMemoryText()).isEqualTo("不吃香菜");
         assertThat(inserted.get(1).getMemoryText()).isEqualTo("海鲜过敏");
-        // V86：写入来源必须落库，否则审计分不清「用户说的」与「模型猜的」
+        // V93：写入来源必须落库，否则审计分不清「用户说的」与「模型猜的」
         assertThat(inserted).allSatisfy(row -> assertThat(row.getWriteSource()).isEqualTo("EXPLICIT"));
     }
 

@@ -1011,7 +1011,7 @@ parse(raw).forEach(this::upsert);      // 剥 ```json 围栏后宽松解析 memo
 
 两者排序口径必须一致（置信度降序 → 最近更新降序 → id 降序），否则模型先读工具、再看到注入内容，会对「哪条更重要」得出矛盾结论。`overviewForModel` 多查一次 `countActiveFiltered`：读工具的价值一半在「一共记了多少条」，只给条目会让模型把「我看到 15 条」说成「你一共 15 条」。
 
-**注入取数为什么是「每类各取前 N 条」（V86）**：V71 之后一类可以有任意多条，而按置信度的**全局** top-N 会被条目最多的那一类占满——实测过的回归是：某用户攒了 24 条忌口，「控糖目标」只有 1 条，全局取 24 条时目标那条排在最后、被 `LIMIT` 截掉，模型下一轮反问用户"你的目标是什么"。修法是把 `LIMIT` 换成窗口函数：
+**注入取数为什么是「每类各取前 N 条」（V93）**：V71 之后一类可以有任意多条，而按置信度的**全局** top-N 会被条目最多的那一类占满——实测过的回归是：某用户攒了 24 条忌口，「控糖目标」只有 1 条，全局取 24 条时目标那条排在最后、被 `LIMIT` 截掉，模型下一轮反问用户"你的目标是什么"。修法是把 `LIMIT` 换成窗口函数：
 
 ```sql
 SELECT * FROM (
@@ -1022,9 +1022,9 @@ WHERE t.rn <= ?            -- perKey = ai.memory.inject-max-items-per-key（默�
 ORDER BY t.confidence DESC, t.gmt_modified DESC, t.id DESC
 ```
 
-**注入的排序与粒度（V86）**：类顺序固定为 `ALLOWED_KEY_ORDER`（忌口 → 目标 → 状况 → 习惯 → 偏好），不再依赖 `HashMap` 的迭代顺序——记忆段处在 system 消息里、后面紧跟整段历史，顺序一变，后面全部不再命中 DeepSeek 的前缀缓存（命中与未命中差 30 倍价）。置信度**逐条**参与：装配器渲染成 `不吃香菜(90)、海鲜过敏(62)`，模型据此区分"用户明确说过"与"上次的弱推断"；过滤也是逐条的（`< inject-min-confidence` 不注入，但仍留在库里、仍显示在记忆页）。早先把同类拼成一行再取 `max`，等于让一条 95 分的条目给 50 分的条目背书，且整行 120 字截断会把第 5 条以后整段切掉而模型毫不知情。
+**注入的排序与粒度（V93）**：类顺序固定为 `ALLOWED_KEY_ORDER`（忌口 → 目标 → 状况 → 习惯 → 偏好），不再依赖 `HashMap` 的迭代顺序——记忆段处在 system 消息里、后面紧跟整段历史，顺序一变，后面全部不再命中 DeepSeek 的前缀缓存（命中与未命中差 30 倍价）。置信度**逐条**参与：装配器渲染成 `不吃香菜(90)、海鲜过敏(62)`，模型据此区分"用户明确说过"与"上次的弱推断"；过滤也是逐条的（`< inject-min-confidence` 不注入，但仍留在库里、仍显示在记忆页）。早先把同类拼成一行再取 `max`，等于让一条 95 分的条目给 50 分的条目背书，且整行 120 字截断会把第 5 条以后整段切掉而模型毫不知情。
 
-**`write_source`（V86）**：`chat_user_memory.write_source` 记 `EXPLICIT`（用户当轮亲口，走 `save_long_term_memory` 工具）或 `BATCH`（会话结束/归档时模型抽取），覆盖写时同步更新为**本次**来源。它的用途是审计：`confidence` 只是模型自己给的分数，回答不了"这话是用户说的还是模型猜的"。本列上线前的历史行为 `NULL`，管理端显示「—」。
+**`write_source`（V93）**：`chat_user_memory.write_source` 记 `EXPLICIT`（用户当轮亲口，走 `save_long_term_memory` 工具）或 `BATCH`（会话结束/归档时模型抽取），覆盖写时同步更新为**本次**来源。它的用途是审计：`confidence` 只是模型自己给的分数，回答不了"这话是用户说的还是模型猜的"。本列上线前的历史行为 `NULL`，管理端显示「—」。
 
 **归档补齐（V61 `memory_extracted_upto_msg_id`）**：会话闲置归档时，`ChatSessionServiceImpl.archiveIdleSessions` 先挑出「即将归档、且长期记忆还没覆盖到最后一条消息」的 **1 个**会话（`selectIdleSessionNeedingMemory`），归档后再为它提交一次 `extractAsync(..., "session-archived")`。
 

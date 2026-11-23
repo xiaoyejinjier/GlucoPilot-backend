@@ -49,7 +49,7 @@ public class ChatUserMemoryEntity extends BaseEntity {
     private Long sourceSessionId;
 
     /**
-     * 写入来源（V86）：{@code EXPLICIT}＝用户当轮亲口要求记住，{@code BATCH}＝会话结束/归档时模型抽取。
+     * 写入来源（V93）：{@code EXPLICIT}＝用户当轮亲口要求记住，{@code BATCH}＝会话结束/归档时模型抽取。
      *
      * <p>为什么这一列必须落库：审计时最关键的一个问题是「这条是用户说的，还是模型猜的」。
      * 两条路径的可信度差得很远，而 {@code confidence} 只是模型自己给的分数，回答不了这个问题。

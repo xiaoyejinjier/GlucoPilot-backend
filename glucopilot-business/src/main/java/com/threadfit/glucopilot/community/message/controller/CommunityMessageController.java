@@ -36,8 +36,9 @@ public class CommunityMessageController {
     public ApiResponse<Messages> messages(
             @PathVariable long peerUserId,
             @RequestParam(required = false) Long beforeId,
+            @RequestParam(required = false) Long afterId,
             @RequestParam(defaultValue = "20") int pageSize) {
-        return ApiResponse.ok(service.messages(user(), peerUserId, beforeId, pageSize));
+        return ApiResponse.ok(service.messages(user(), peerUserId, beforeId, afterId, pageSize));
     }
 
     @PostMapping("/community/messages/{peerUserId}")

@@ -534,7 +534,7 @@ class GlucoseAlertServiceTest {
     }
 
     @Test
-    void policyRejectsMealPredictionAndHandlesExactBoundaries() {
+    void policyRejectsMealNodesAndHandlesExactBoundaries() {
         assertNull(GlucoseAlertPolicy.classify(null, new BigDecimal("3")));
         assertNull(GlucoseAlertPolicy.classify("breakfast", new BigDecimal("20")));
         assertNull(GlucoseAlertPolicy.classify("before_breakfast", new BigDecimal("3.9")));

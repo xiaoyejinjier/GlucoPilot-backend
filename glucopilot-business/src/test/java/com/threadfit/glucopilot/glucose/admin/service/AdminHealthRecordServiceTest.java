@@ -53,7 +53,7 @@ class AdminHealthRecordServiceTest {
                                 glucose("before_breakfast", "6.1", 1),
                                 glucose("after_breakfast", "9.2", 2)));
         when(mealRecordMapper.selectList(any()))
-                .thenReturn(List.of(meal("breakfast", "燕麦、鸡蛋", "8.8")));
+                .thenReturn(List.of(meal("breakfast", "燕麦、鸡蛋")));
         when(glucoseNodeMapper.selectList(any())).thenReturn(List.of());
 
         UserAccount account = new UserAccount();
@@ -83,7 +83,6 @@ class AdminHealthRecordServiceTest {
         assertTrue(row.getSlots().get("breakfast").getRecorded());
         assertTrue(row.getSlots().get("breakfast").getMeal());
         assertNull(row.getSlots().get("breakfast").getGlucoseValue());
-        assertEquals(new BigDecimal("8.8"), row.getSlots().get("breakfast").getPredictNow());
         assertFalse(row.getSlots().get("before_lunch").getRecorded());
     }
 
@@ -107,15 +106,13 @@ class AdminHealthRecordServiceTest {
         return record;
     }
 
-    private static MealRecord meal(String nodeCode, String foods, String predictNow) {
+    private static MealRecord meal(String nodeCode, String foods) {
         MealRecord record = new MealRecord();
         record.setUserId(USER_ID);
         record.setRecordDate(RECORD_DATE);
         record.setNodeCode(nodeCode);
         record.setFoodsText(foods);
         record.setCarbsG(new BigDecimal("42"));
-        record.setPredictNow(new BigDecimal(predictNow));
-        record.setPredictSuggest(new BigDecimal("7.3"));
         return record;
     }
 }

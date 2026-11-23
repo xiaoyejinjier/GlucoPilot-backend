@@ -164,12 +164,13 @@ class DoctorMethodSecurityTest {
                             "测试回复", "bound_doctor_reply");
             communication.send(8, reply);
             verify(c).sendMessage(22L, 8L, reply);
-            assertThrows(AccessDeniedException.class, () -> admin.list(null, new PageQuery()));
+            assertThrows(AccessDeniedException.class, () -> admin.list(null, 33L, new PageQuery()));
             login("doctor", Set.of("doctor:workbench:view"));
             assertThrows(AccessDeniedException.class, own::summary);
             assertThrows(AccessDeniedException.class, () -> communication.send(8, reply));
             login("admin", Set.of("doctor:withdrawal:manage"));
-            assertDoesNotThrow(() -> admin.list("PENDING", new PageQuery()));
+            assertDoesNotThrow(() -> admin.list("PENDING", 33L, new PageQuery()));
+            verify(w).list(eq(33L), eq("PENDING"), any(PageQuery.class));
             assertThrows(AccessDeniedException.class, own::summary);
         }
     }

@@ -181,7 +181,7 @@ class ChatHistoryAssemblerTest {
         String context = result.messages().get(0).getText();
         assertTrue(context.contains("不吃香菜"));
         assertTrue(context.contains("餐后控制在 8 以内"));
-        // V86：逐条带置信度，模型才能区分「用户明确说过」与「上次的弱推断」
+        // V93：逐条带置信度，模型才能区分「用户明确说过」与「上次的弱推断」
         assertTrue(context.contains("(90)"), "要渲染条目的置信度：" + context);
     }
 

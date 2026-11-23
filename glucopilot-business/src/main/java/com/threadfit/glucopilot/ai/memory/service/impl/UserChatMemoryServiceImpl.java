@@ -80,7 +80,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     /** 单条记忆文本上限（列是 varchar(512)，但记忆本身就该短，太长说明抽错了）。 */
     static final int MAX_TEXT_CHARS = 200;
 
-    // 注入时的「每类几条」与「最低置信度」已经改成配置项（V86）：
+    // 注入时的「每类几条」与「最低置信度」已经改成配置项（V93）：
     // ai.memory.inject-max-items-per-key（默认 10）与 ai.memory.inject-min-confidence（默认 60）。
     // 原来是写死的 3 条，且先全局取 top-N 再分桶——条目多的那一类会把别的类挤光。
 
@@ -99,7 +99,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     private static final List<String> FORBIDDEN_MARKERS =
             List.of("剂量", "加量", "减量", "停药", "换药", "开药", "处方", "确诊", "诊断为", "胰岛素用量");
 
-    
+
     /**
      * 关键词兜底触发的抽取原因（{@link #looksExplicit} 命中，见 {@code ChatCompletionServiceImpl}）。
      * <p>

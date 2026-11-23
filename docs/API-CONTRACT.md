@@ -1,4 +1,161 @@
-# API 契约
+﻿# API 契约
+
+## 2026-11-19 餐食记录改版 V2（移除血糖预测，新增适食分析）
+
+> 状态：**契约先行，尚未实现**。分阶段实现见 `.trae/documents/plans/2026-11-18-餐食模块改版方案.md` 第 7 节；字段细节以该方案 3.1–3.6 为准，本节只锁定对外字段、判定口径与错误码。
+> 原则：血糖记录的主流程、字段、接口**不做任何改动**；餐食与血糖的关联一律按业务键只读派生（`user_id + record_date + node_code`），不加外键、不回填历史。
+
+### 新接口：适食分析预览 `POST /api/v1/meal-suitability/preview`
+
+只读 `food_nutrition` / `food_category` 两张表做明细归一化，**不写库、不调用大模型、不读血糖**；同一输入 + 同一 `ruleVersion` 结果稳定。
+（2026-11-19 起：原描述「纯规则计算、不读库」已不适用，自阶段 2b-1 起 preview 先经 `MealNutritionResolver` 只读归一化再判定。）
+
+- 请求：`nodeCode`、可选 `ruleVersion`、`items[]`（`foodId`、`libraryFoodId`、`foodName`、`categoryCode`、`weightG`、`carbsG`、`caloriesKcal`、`giValue`、`nutritionSource`、`confidence`、`userCorrected`）。
+- 归一化（与保存共用同一 `MealNutritionResolver`，取行规则同 `pickBest`：上架优先 → 分类精确 → id 升序）：preview 为**客户端值优先**，只补客户端未给（`null`）的 `libraryFoodId` / `categoryCode` / `giValue` / `nutritionSource`，不覆盖已给值；保存路径反过来以库值覆盖客户端值。
+- 悬空引用（有意行为，非遗漏）：preview / save 提交的 `libraryFoodId` 在 `food_nutrition` 中不存在时，返回的 `libraryFoodId` 为 `null`，`libraryStatus=UNRESOLVED`；不允许保留指向不存在条目的引用。
+- 响应：`tier`（`LOW|MODERATE|HIGH|UNKNOWN`）、`tierLabel`、`ruleVersion`、`worstRuleCode`、`items[]`、`disclaimer`。`items[]` 字段：`foodId`、`foodName`、`tier`、`tierLabel`、`adviceText`、`ruleCode`、`categoryCode`、`giValue`、`libraryStatus`（`AVAILABLE|PENDING_REVIEW|UNRESOLVED`）、`nutritionSource`（`LIBRARY|AI_ESTIMATE|MANUAL|UNKNOWN`）。
+- `adviceText`：规则级单项建议（`food_suitability_rule.advice_text`，不含食物名，V92 起提供）；规则未配置时按档位兜底（LOW/MODERATE/HIGH 通用文案），`UNKNOWN` 固定为「信息不足，建议补充重量或改用食品库食物」，前端保证始终有值可展示。
+- **`items[]` 是归一化后的明细**：其中 `categoryCode` / `giValue` / `nutritionSource` 可能由服务端从营养库补全（例如客户端没传 GI 时补成库内值），它与本次判定实际使用的值完全一致；前端展示与计算依据必须一致，不得再展示请求原始值。`totalCarbsG` / `totalCaloriesKcal` / `summary` 等汇总字段随 2b-2 落地，当前阶段不返回。
+- 判定口径：GI 缺失但分类可用 → 按分类兜底并标 `giSource=CATEGORY_FALLBACK`；分类与营养值均缺失 → `UNKNOWN`，不猜测；整餐取最差项。
+- 文案边界：只输出「升糖负担较低/中等/较高」，禁止「适合/不适合食用」「可以放心吃」「会导致血糖升高 X」等绝对结论。
+
+**验收用例表（2026-11-19 2b-1 运行时实测口径，逐条对照 1a 原始清单）**
+
+| # | 请求要点 | 期望 |
+|---|---|---|
+| 1 | 米饭（`categoryCode=1`，不传 GI）+ 西兰花（`categoryCode=3`） | `tier=HIGH`、`worstRuleCode=GI_HIGH_70`（库内米饭 `gi=83.2` 补全后触发） |
+| 2 | 米饭（`categoryCode=1`，`giValue=75`） | `tier=HIGH`、`worstRuleCode=GI_HIGH_70` |
+| 3 | 牛奶（`categoryCode=5`，不传 GI） | `tier=UNKNOWN`（无奶类规则；库内 `gi=39` 不触发 GI 覆盖） |
+| 4 | `items=[]` | HTTP 400，`code=40000`（参数校验：items 不能为空） |
+| 5 | `ruleVersion="not-exists"` | HTTP 400，`code=40001`（业务拒绝：规则版本不存在或未启用） |
+
+### 变更：识别 `POST /api/v1/meal-analysis`
+
+请求不变（`mediaId`、`nodeCode`、`foodText`）。响应**新增** `items[].needsConfirmation:boolean` 与 `needsConfirmation:boolean`（服务端计算，前端不得自行推断），判定三条：`confidence < ai.meal.low-confidence-threshold`（默认 70）、`libraryStatus=UNRESOLVED`、`libraryStatus=PENDING_REVIEW`，任一明细成立即整餐为 `true`；明细为空时整餐恒为 `true`。
+
+> 2026-11-19 起（阶段 2b-3b1）响应**新增** `analysisToken:string|null`：识别快照令牌，有效期 **30 分钟**。快照写入失败时返回 `null`，**识别本身不受影响**；幂等重放返回与首次相同的令牌，且不会重建快照（超过 30 分钟后重放拿到的令牌已失效）。
+> 2026-11-20 起（阶段 2b-3b2）保存侧开始消费该令牌。**令牌是媒体级溯源，不证明逐条明细**：它只能证明「本次保存引用了这张照片在 TTL 内的一次识别」，用户换食物后匹配不上的明细不会被追溯，后续营养分析一律以落库的 `meal_food_item` 明细为准，不得拿 token 反推明细来源。前端必须与 2b-3b2 同版发布后才可透传该字段（3b1 期间仅后端准备，前端不得提前接入）。
+
+> 2026-11-19 收敛说明：原定义的「`weightG` 缺失或 ≤0、每 100g 碳水/热量缺失、分类缺失或无法映射」三项**不再计入** `needsConfirmation`，改由 `warnings` 覆盖。原因：`needsConfirmation` 只表达"请确认这条食物识别得对不对"，补重量/补营养属于"补数据"，两类动作在前端是不同交互，混在一个布尔里会让用户不知道要做什么。
+> 幂等重放时服务端按当次阈值与明细**重算**该字段，不信任缓存中的旧值。
+> 响应本就不含 `predictNow/predictSuggest/suggestText`，本次不删任何字段。
+
+### 变更：保存 `POST /api/v1/meal-records`
+
+- 请求新增：`clientVersion`、`ruleVersion`、`confirmLowConfidence`；`items[]` 新增 `libraryFoodId`、`categoryCode`、`giValue`、`nutritionSource`、`confidence`、`userCorrected`。
+- 请求新增 `analysisToken`（≤64 字符）：识别响应原样回传。服务端读取 `meal:analysis:snap:{userId}:{token}` 并用快照做低置信拦截；**每次保存都必须显式表态**，同一令牌不沿用上一次的 `confirmLowConfidence=true`（快照是只读证据，不记录"已确认"状态）。
+- 低置信拦截（仅当快照通过 `userId + mediaId` 双校验时生效）：命中「快照 `confidence < 70`」或「`libraryStatus != AVAILABLE`」的明细，若 `confirmLowConfidence != true` 则返回 HTTP 400 / `code=40001`，`message` 为 `存在未确认的低置信项：#2 米饭、#5 杂粮饭，请确认后重试`（`#n` 是请求 `items` 的 1-based 下标）。`ApiResponse` 结构不变。
+- 排除项：手输明细（`foodId` 与 `libraryFoodId` 均为空）与 `userCorrected=true` 的明细不参与拦截，只记服务端 WARN；手输名称被营养库匹配成库内条目后不再视为手输。换食物导致无法与快照配对的明细按「无证据」放行，同样不拦截。
+- 降级（按「无 token」处理，不拒绝保存）：token 缺失/超长、快照已过期、Redis 异常、快照 `userId` 或 `mediaId` 与本次请求不一致。此时不写 `analysis_token`，低置信判定退回保存时归一化出的 `library_status`（旧客户端无确认交互，只 WARN 不拦截）。
+- 落库：`meal_record.analysis_token` 仅在快照校验通过时写入，否则为 `null`；`meal_food_item.library_status` 命中快照时以**识别那一刻**的状态为准（避免运营中途下架导致"什么都没改却存不进去"），未命中则写保存时归一化结果。`analysis_token` 是媒体级溯源，不证明逐条明细。
+- 请求移除：`predictNow`、`predictSuggest`、`suggestText`、`algorithmVersion`、`recommendationStatus`（旧客户端继续携带已被忽略，实测确认不会报错）。
+- 服务端以 canonical 明细重新汇总根级 `carbsG`；分析快照落库（`analysis_tier`、`analysis_summary`、`analysis_rule_version` 等）。
+- 保存语义：同日同餐点**覆盖写入**，不返回 409；主记录与明细同事务提交，分析在提交后以独立事务计算并**同步返回**；分析失败不影响保存结果，只把 `analysisStatus` 置 `FAILED`（HTTP 200 / `code=0`）。
+- 兼容：`clientVersion < 2.0` 或未携带时走 legacy 分支，不校验 `confirmLowConfidence`，手输项按 `MANUAL` 处理，分析可为 `UNKNOWN` 但不阻断保存。
+- 响应新增：`analysisStatus`（`PENDING|READY|FAILED`，对应 `analysis_status` 0/1/2）、`ruleVersionChanged`（保存前后规则版本变化，首次分析为 `false`）、`analysis{tier,tierLabel,summary,ruleVersion,items[].{foodName,tier,ruleCode,advice}}`（`FAILED` 时为 `null`）。
+
+### 变更：查询 `GET /api/v1/meal-records?recordDate=`
+
+每餐对象新增 `analysisStatus`（`PENDING|READY|FAILED`，历史记录为 `null`）、`analysis{tier,tierLabel,summary,ruleVersion,items}`（`items` 只含已生成单项结论的明细，附单项建议文案 `advice`；未分析或失败时为 `null`）与只读 `glucoseContext{before,after,delta}`（来自 `glucose_record` 该餐对应的 `before_*`/`after_*` 两个节点，`delta=after-before` 可为负；任一侧缺失则该侧及 `delta` 为 `null`，两侧都缺失时 `glucoseContext` 为 `null`）。明细新增 `libraryFoodId`、`categoryCode`、`giValue`、`giSource`、`nutritionSource`、`confidence`、`userCorrected`、`portionRatio`、`adviceTier`、`adviceReasonCode`、`adviceText`。不新增 `GET /meal-records/{id}`，历史详情复用按日查询。
+
+### 下线：`POST /api/v1/predictions/meal-glucose`
+
+返回 **HTTP 410 + `code=41000`**（新增 `ErrorCode.FEATURE_REMOVED`），仅返回下线提示，保留 2 个版本过渡期；前端遇到 410 隐藏预测入口、不弹错误。过渡期结束后删除该路由与 `prediction/**`。
+
+### 错误码
+
+| 场景 | HTTP | code |
+| --- | --- | --- |
+| 低置信项未确认 / 非餐点节点 | 400 | 40001 |
+| 图片不属于当前用户 / 餐食记录不存在 | 404 | 40400 |
+| 同日同餐重复保存 | 200 | 0（覆盖写入，`created=false`） |
+| 识别并发或幂等键处理中 | 409 | 40900 |
+| 分析规则异常 | 200 | 0（`analysisStatus=FAILED`，不回滚） |
+| 预测接口 | 410 | 41000 |
+
+> 错误码编号对照：`BAD_REQUEST = 40000`（参数校验失败，如 `items` 为空），`BIZ_REJECTED = 40001`（业务校验拒绝，如低置信未确认、`ruleVersion` 不存在）。二者 HTTP 状态均为 400，前端需按 `code` 区分而非状态码。
+
+
+## 2026-11-23 社区私信 WebSocket
+
+- 握手 `GET /api/v1/community/messages/socket`，使用 `Authorization: Bearer <accessToken>`；不在 URL 传令牌。身份绑定当前有效用户会话，禁用、过期、被替换的会话不得收发。生产小程序配置对应的 WSS socket 合法域名。
+- 客户端文本帧 `{type:"PING"}` 或 `{type:"SEND",peerUserId:"对方ID",content:"正文",clientRequestId:"原发送编号"}`。ID 为正整数字符串，正文最多1000字符，请求编号规则与 HTTP 一致。发送继续复用行锁、唯一键与事务，重试沿用同一编号。
+- 服务端帧统一 `{code,message,data,requestId}`；`data.type` 为 READY、PONG、SENT、DM_CHANGED 或 ERROR。SENT 携带 clientRequestId 和已入库的 message；错误也携带对应 clientRequestId，业务错误码沿用 HTTP。requestId 由服务端生成，不包含令牌或正文。会话失效先发401错误，再关闭4401。
+- 仅事务提交后发布 DM_CHANGED，携带 peerUserId、kind（MESSAGE/READ）、messageId；只发送给本会话双方。Redis Pub/Sub 在实例间转发失效通知，不缓存正文；客户端按本人鉴权接口读取数据库真实消息。回滚不推送，离线不依赖推送缓存。
+- 原消息 HTTP 接口保留。GET `/community/messages/{peerUserId}` 新增 `afterId`，与 beforeId 互斥；afterId 模式按ID升序读取之后的消息，hasMore 时继续用最后一条ID补拉（nextBeforeId 在此模式为null）。原beforeId向前分页语义不变。
+- 小程序前台保持单条连接，25秒心跳，断线退避重连；退出/切换账号/退后台关闭连接并丢弃旧账号回调。连接成功、收到通知时补拉，连接不可用时回退HTTP；连接正常时30秒兜底核对，其他类型提醒仍沿用汇总轮询。消息不自动重发，未确认的发送可用同一编号重试。
+- Nginx 透传 Upgrade/Connection 与 HTTP/1.1；本次不修改数据库结构。
+
+## 2026-11-23 医生账号与提现审核入口整合
+
+- 管理端“医生账号”上方增加“提现审核”按钮，表格新增“提现详情”列，按医生的小程序`doctorUserId`进入其全部状态的提现记录。提现页提供返回医生账号、查看全部提现入口，并维持路由和服务端原有管理员权限。
+- `GET /admin/v1/doctor-withdrawals`增加可选正整数`userId`，复用既有按本人ID查询的分页及状态过滤；不传时保持全部医生查询，非法ID返回400。仅具`doctor:withdrawal:manage`的管理员仍能直接访问该页面，医生本人接口继续按绑定身份限制。
+- 正常拥有医生账号权限时将提现审核侧栏入口整合到医生账号按钮；只有提现审核权限时保留侧栏入口。现有待审核提醒仍直达全局待审核列表，不保留此前医生筛选。
+- 无数据库迁移，不执行审批或转账；新增筛选仅读取记录。
+
+## 2026-11-23 订单完成后的余额记录
+
+- 充值订单与问诊订单列表、详情的Order新增可空整数字段`balanceAfterCents`（分）：只在PAID且存在对应本人资金流水时返回该笔入账/扣款完成后的余额，合法0分保持为0；不使用当前钱包余额推算历史。
+- 充值从`wallet_sandbox_ledger`按订单号和本人ID读取，问诊从`consultation_wallet_entry`按订单号和付款人ID读取，避免读取同一订单的医生收入余额。未完成订单或历史流水缺失返回null；小程序仅对已支付订单展示“充值后余额/支付后余额”，缺失显示“未记录”。
+- 复用既有索引和流水快照，不新增数据库迁移，不修改充值、扣款、提现或已支付金额；保持现有身份隔离与分页。
+
+## 2026-11-23 小程序本机账号切换与登录排版
+
+- 登录页协议默认不勾选：未勾选点击三种登录入口、发送验证码或提交登录时，弹出协议提示，提供“同意”“拒绝”两个按钮。同意仅自动勾选协议，用户再次点击后继续；拒绝只关闭提示，保持未勾选。该勾选不代替登录后的服务端版本化免责声明确认。
+- “切换已登录账号”仅在切换/添加账号流程进入登录页时展示；普通退出、会话过期和冷启动不展示。入口文字和箭头相邻居左，底部退出/切换按钮与上方卡片等宽，维持原高度。
+- 小程序在“我的→退出登录”下方增加“切换账号”，切换流程中的登录页提供已保存账号入口。本机最多保留5个账号，按API环境隔离；只保存登录会话和基本展示信息，不保存验证码、密码或健康记录，令牌不绑定到页面data。
+- 复用`GET /api/v1/users/me`及`GET /api/v1/consultation-doctors/me`校验候选会话和身份；校验请求使用候选令牌，不替换当前令牌、不触发当前账号的401退出处理。医生标签仅对应服务端APPROVED身份，标签本身不参与授权。
+- 切换时先验证目标会话及其communityKey，校验成功且当前账号/环境/页面仍未变化才替换登录态；停止旧通知、清理账号缓存和临时拍照信息，保留其他已保存会话，再复用登录后的禁用状态与免责声明检查。失效会话要求重新登录，不根据账号ID或角色直接登录。
+- 普通“退出登录”撤销当前会话并使其本机保存状态失效；切换或添加账号不撤销其他已保存账号的有效会话。同账号多终端登录限制沿用服务端规则。无新增接口、表结构或权限变更。
+- 手机号和邮箱登录弹窗统一验证码按钮的高度、文字居中及禁用状态；不自动发送验证码。
+
+## 2026-11-20 合并后的反馈迁移编号
+
+- 保留远端已发布的V83（设备云凭证）、V84（设备类型型号）、V85（类型扩展）；本地反馈建表/设备关联迁移顺延为V86，反馈排序迁移顺延为V87，所有接口与类型编号保持不变。
+- 已在本机执行旧反馈V83/V84的环境，应先停止旧后端、备份数据库，再仅将这两条已知脚本的Flyway历史对齐至V86/V87，并核对脚本、校验和、表结构与业务数据，最后执行远端设备V83～V85。不可直接重跑反馈建表或使用全局repair覆盖其他历史。
+- 下文11月20日开发记录中的反馈V83/V84指合并前编号，发布使用V86/V87。
+- 2026-11-23已在本机完成备份、空库及原数据副本验证后对齐：只调整两条已知反馈迁移历史，执行3份设备迁移，86份迁移校验通过；122张原业务表的既有字段和值保持一致。此记录仅说明该本机环境已对齐，其他环境仍需按自身历史执行检查。
+
+## 2026-11-20 反馈分类排序与表驱动维护
+
+- V84仅将`feedback_type.id=5`的`sort_no`调整为35，不修改已执行的V83。统一顺序为产品建议、Bug问题、功能诉求、设备支持、其他，类型编号保持不变。
+- 管理端“刷新”、小程序反馈页下拉刷新同时重读类型字典；后端不缓存字典。以后通过表新增/改名/排序/停用普通反馈分类，刷新即可生效，无需修改枚举、前端选项或重新部署。旧类型停用后仍在历史反馈中回显，已引用类型不物理删除、不重用编号。
+- 类型表字段：`id`为1～255未占用编号，`name`为类型名称，`sort_no`越小越靠前，`enabled=1`可提交，`device_related=1`启用现有设备选择/型号说明校验。新增分类沿用已有提交、筛选、回复流程；新增支付、附件等业务能力仍需开发对应逻辑。
+
+例如新增分类（先确认编号6未使用），修改后刷新页面：
+
+```sql
+INSERT INTO feedback_type (id, name, device_related, enabled, sort_no)
+VALUES (6, '账号问题', 0, 1, 25);
+-- 改名与排序
+UPDATE feedback_type SET name = '账号相关', sort_no = 25 WHERE id = 6;
+-- 停用，保留已有反馈
+UPDATE feedback_type SET enabled = 0 WHERE id = 6;
+```
+
+## 2026-11-20 反馈类型表与设备支持反馈
+
+- 负责人：Codex（用户要求），覆盖小程序反馈页和管理端反馈管理；V83新增`feedback_type`类型表，编号1产品建议、2Bug问题、3功能诉求、4其他、5设备支持。`feedback.feedback_type`外键关联类型；历史编号与记录保留，启用状态控制可提交类型。
+- 新增`GET /api/v1/feedbacks/types`（登录用户）及`GET /admin/v1/feedbacks/types`（反馈管理权限），返回`[{id,name,deviceRelated}]`，按类型表排序；均沿用ApiResponse。
+- `POST /api/v1/feedbacks`保留`feedbackType,contentText`，增加可选`deviceId`（字符串ID）、`deviceDescription`（最多120字符）。设备相关类型必须提供本人已绑定设备ID或非空品牌型号说明；校验设备归属，不能关联他人/已解绑设备；非设备类型不得携带设备字段。设备行加锁校验归属，防止同时解绑导致误关联。
+- `feedback.device_id`可空外键关联`user_device.id`，物理删除设备时SET NULL；`device_description`保存提交时的型号/名称快照，历史反馈不依赖设备后续绑定人。不要求不支持的设备先绑定。
+- 用户/管理端列表新增`feedbackTypeName,deviceId,deviceDescription`；管理端类型筛选沿用数值ID，并展示设备说明。仅新增反馈入口、筛选和展示，原官方回复与提醒流程不变。
+- 验收：类型数据库驱动、旧反馈兼容、设备支持提交/查询/回复、设备越权及解绑并发校验、小屏布局；后端重建重启执行V83，小程序重新编译，管理端刷新。
+
+## 2026-11-20 编辑资料运动习惯与其他胰岛素
+
+- 小程序将运动习惯改为带填写提示的多行输入，空白保持未填写，沿用 `health.exerciseHabit` → `form.exercise` → `PUT /api/v1/users/me/health-profile.exerciseHabit` 的映射，最多256字符。
+- 胰岛素分组增加“其他胰岛素”及名称输入，沿用 `medication` 文本字段，其他名称以“其他胰岛素：名称”记录；多个名称分别加前缀后用分号分隔，读取时还原对应输入。已选择但未填名称时提示填写或取消；已有具体药物和历史自由文本不丢失，不自动推断旧记录的药物类别。无后端字段或数据库变更。
+
+## 2026-11-20 文章管理整合举报入口
+
+- 管理端文章页在“标签管理”右侧提供“举报管理”，复用 `/content/community-reports`，不再显示独立侧栏菜单；子页使用文章管理高亮及“首页/文章管理/举报管理”面包屑，并提供返回文章入口。
+- 按钮红点复用 `GET /admin/v1/work-reminders` 中 REPORT 的 pendingCount，表示尚有待处理举报。复用现有5秒前台轮询，不额外请求举报列表或增加轮询；全局标记已读不消除未处理提示，处理成功后刷新汇总。缓存只在内存，按管理员和登录令牌隔离，退出/换号清理；后端接口、权限和数据结构不变。
+
+## 2026-11-20 文章详情浏览量回传社区列表
+
+- 沿用 `POST /api/v1/community/articles/{id}/views` 返回的 `viewCount`，不修改作者排除和同账号同文章每日去重规则。详情页仅在收到成功响应后，通过小程序页面 EventChannel 回传文章ID及真实浏览量。
+- 社区页仅更新相同登录会话下对应文章的浏览数字，保留推荐种子、列表顺序、分页及滚动位置，不额外请求推荐列表或重复记录曝光。换账号、已卸载页面、不匹配文章及非法计数不回填，迟到的较小计数不覆盖新值。
 
 ## 2026-11-19 支付返回及提现默认收款账号
 
@@ -485,7 +642,7 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 | POST /community/messages/{peerUserId} | `{content,clientRequestId}`，去空白后1～1000字；唯一键(sender_id,client_request_id)防重复，重复同参数返回原消息，不同接收者/正文40900 |
 | PUT /community/messages/{peerUserId}/read | `{throughId:string}`；只标记该对方发给本人的且id<=throughId的消息已读，不把晚到消息误标已读 |
 
-私信仅文本，普通HTTPS请求；打开页面每5秒刷新，退后台/离页停止；发送失败保留原文及幂等ID供重试，不自动重发，不显示虚假成功。所有查询以登录身份限定发送/接收双方，客户端不能指定senderId；第三人不可读、不可标已读。消息/评论正文不进入访问日志，不把私信内容放系统通知或公共资料；未知异常仍50000，参数40000、失效目标40400、幂等冲突40900。读取分页与标已读幂等；新增写请求以body.clientRequestId作幂等键，无需另外X-Idempotency-Key。
+私信仅文本，支持WebSocket实时发送/提醒及HTTPS历史查询；协议详见2026-11-23增补。连接不可用时5秒兜底刷新，正常聊天30秒核对；等待回复时保留5秒权限检查，退后台/离页停止页面刷新。发送失败保留原文及幂等ID供重试，不自动重发，不显示虚假成功。所有查询以登录身份限定发送/接收双方，客户端不能指定senderId；第三人不可读、不可标已读。消息/评论正文不进入访问日志，不把私信内容放系统通知或公共资料；未知异常仍50000，参数40000、失效目标40400、幂等冲突40900。读取分页与标已读幂等；新增写请求以body.clientRequestId作幂等键，无需另外X-Idempotency-Key。
 
 本次仅编写迁移与测试，不对真实数据库执行DDL。需配套后端构建、V29正常迁移后与两个不同C端账号真机验收；dev固定openid时两个客户端会是同一用户，不能用作双账号验收。
 
@@ -754,11 +911,9 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 
 规范化食品名后精确匹配 `food_nutrition`，已有食品必须使用库中营养，严禁模型覆盖。可信的新食品自动入库为待审核条目（`shelf_status=0`、`nutrition_source=AI_ESTIMATE`），保留来源模型；使用现有唯一键防止重复登记。模型估算明确标记，运营核对营养后可编辑上架。待审核 ID 不作为上架 `foodId` 提交，饮食记录保存食物名和营养快照。迁移 `V15__add_food_nutrition_source.sql` 保存来源。
 
-确认食物及份量后使用原饮食记录接口保存照片与明细。真实血糖预测必须提供真实当前血糖并调用现有 `/api/v1/predictions/meal-glucose`，未提供时不显示数值预测，仍可保存饮食。
+确认食物及份量后使用原饮食记录接口保存照片与明细。餐后血糖预测已于阶段 4 下线（`POST /api/v1/predictions/meal-glucose` 返回 410），页面改用整餐升糖负担分析（`POST /api/v1/meal-suitability/preview`），未提供实测血糖仍可保存饮食。
 
-2026-10-14 用户授权的临时演示：餐食结果页暂不调用真实预测接口，识别成功后自动展示“模拟预测评分”。前端适配入口为 `frontend/services/meal-score-preview.js` 的异步 `getMealScorePreview(input)`，入参包含餐点、食物明细、营养合计、可空实测血糖、饱腹感；返回 `{ schemaVersion: 1, source: 'MOCK', score: 85, maxScore: 100, label, description }`。85分是固定展示样例，不根据营养或血糖计算，不代表真实评估；食品识别、食品库匹配及营养数据仍为真实接口结果。修改补充信息、重新识别、识别失败或退出页面时清除失效评分。
-
-模拟评分只保存在当前页面，不提交 `score`、`predictNow`、`predictSuggest` 或模拟建议，不写入本地饮食缓存或数据库、不参与统计。后续由预测模块负责人确认真实评分接口契约，再替换上述适配入口；现有后端预测实现和请求/响应字段不改动。
+【历史存档，已下线】2026-10-14 临时演示的“模拟预测评分”与 `frontend/services/meal-score-preview.js` 均已在餐食模块改版中删除；模拟评分不写入数据库、不参与统计。
 
 用户端确认餐食后写入饮食记录与营养快照；快照在保存时点固化、不可变，不提供字段级修改（改 = 重新保存覆盖），不随营养库实时联动。同日同餐点重复保存为覆盖写入，不新增记录。
 
@@ -770,9 +925,11 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 
 保存请求体字段：`recordDate`（必填）、`nodeCode`（必填，餐点）、`mediaId`（餐食照片 ID，可空，须为当前用户 `MEAL` 类型）、`foodsText`（可空，≤512，为空时按明细食物名拼接兜底）、`carbsG`（可空，≥0，为空时按明细求和兜底）、`hungerLevel`（可空，`1` 饱腹 / `2` 一般 / `3` 微饿）、`supplementText`（可空，≤512）、`predictNow` / `predictSuggest`（可空，`(0,40)`）、`suggestText`（可空，≤512）、`algorithmVersion`（可空，≤8，算法版本号如 `v2.1`）、`recommendationStatus`（可空，≤16，`IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE`）、`items`（可空，≤50，每项含 `foodId` 可空、`foodName` 必填 ≤64、`weightG` / `carbsG` / `caloriesKcal` 可空 ≥0，`foodId` 非空时须为上架食物）。
 
-预测三列 `predictNow` / `predictSuggest` / `suggestText` 由 prediction 客户端串联在用户确认后携带，服务端只校验范围与长度、不重算；两个模块未上线期间传空即可。`algorithmVersion` / `recommendationStatus` 由 prediction 客户端随预测结果一并携带并落库（`meal_record` 增列 `algorithm_version` / `recommendation_status`，均可空），供后续统计按算法版本 / 推荐状态过滤，`DANGER` / `INFEASIBLE` 状态同样落库。删除后同日同餐点可重新保存。
+【阶段 4 起停止写入】预测三列 `predictNow` / `predictSuggest` / `suggestText` 由 prediction 客户端串联在用户确认后携带，服务端只校验范围与长度、不重算；两个模块未上线期间传空即可。`algorithmVersion` / `recommendationStatus` 由 prediction 客户端随预测结果一并携带并落库（`meal_record` 增列 `algorithm_version` / `recommendation_status`，均可空），供后续统计按算法版本 / 推荐状态过滤，`DANGER` / `INFEASIBLE` 状态同样落库。删除后同日同餐点可重新保存。
 
 ## 餐后血糖预测
+
+> **已下线（阶段 4）**：本接口现在固定返回 HTTP 410 / `code=41000`。以下为历史契约存档，仅用于旧版本排障；过渡期结束后删除路由与 `prediction/**`。
 
 用户端通过 `POST /api/v1/predictions/meal-glucose` 获取餐后 2 小时血糖预测。服务端为纯计算：不落库、不查 `glucose_record` / `meal_record`，自身无持久化，可重复调用（重算 = 同接口携带补充信息重复调用）；唯一服务端读取是健康档案的分类参数（经 `profile.health` 服务接口自取，未建档时兜底建档 + 默认参数分档，正常返回）。食物数据由客户端从 ai 分析结果转发（ai 未上线时前端可手输联调），当前血糖由客户端传入，服务端不查血糖记录、不设默认值。
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.user.mapper.FeedbackMapper">
+    <!-- 同设备解绑/重新绑定的更新互斥；只读取本人设备，不暴露其他用户档案。 -->
+    <select id="lockOwnedDevice" resultType="com.threadfit.glucopilot.device.entity.UserDevice">
+        SELECT id, user_id, device_name, provider
+        FROM user_device
+        WHERE id = #{deviceId}
+          AND user_id = #{userId}
+          AND is_deleted = 0
+        FOR UPDATE
+    </select>
+</mapper>

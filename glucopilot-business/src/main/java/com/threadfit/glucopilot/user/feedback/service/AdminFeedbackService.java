@@ -41,6 +41,7 @@ public class AdminFeedbackService {
     private final FeedbackMapper feedbackMapper;
     private final UserProfileMapper userProfileMapper;
     private final UserAccountMapper userAccountMapper;
+    private final FeedbackTypeService feedbackTypeService;
 
     public PageResult<AdminFeedbackDtos.FeedbackItem> page(
             Integer feedbackType, Integer replyStatus, String keyword, PageQuery query) {
@@ -89,6 +90,7 @@ public class AdminFeedbackService {
                                                 Function.identity(),
                                                 (a, b) -> a));
 
+        Map<Integer, String> typeNames = feedbackTypeService.names();
         List<AdminFeedbackDtos.FeedbackItem> items =
                 rows.getRecords().stream()
                         .map(
@@ -96,7 +98,8 @@ public class AdminFeedbackService {
                                         toItem(
                                                 row,
                                                 profiles.get(row.getUserId()),
-                                                accounts.get(row.getUserId())))
+                                                accounts.get(row.getUserId()),
+                                                typeNames))
                         .toList();
         return PageResult.of(rows.getCurrent(), rows.getSize(), rows.getTotal(), items);
     }
@@ -127,7 +130,10 @@ public class AdminFeedbackService {
     }
 
     private static AdminFeedbackDtos.FeedbackItem toItem(
-            Feedback row, UserProfile profile, UserAccount account) {
+            Feedback row,
+            UserProfile profile,
+            UserAccount account,
+            Map<Integer, String> typeNames) {
         String fallbackName =
                 account != null && StringUtils.hasText(account.getUsername())
                         ? account.getUsername()
@@ -142,6 +148,9 @@ public class AdminFeedbackService {
                 .userName(userName)
                 .contact(account == null ? null : PhoneUtils.mask(account.getPhone()))
                 .feedbackType(row.getFeedbackType())
+                .feedbackTypeName(typeNames.get(row.getFeedbackType()))
+                .deviceId(row.getDeviceId() == null ? null : String.valueOf(row.getDeviceId()))
+                .deviceDescription(row.getDeviceDescription())
                 .contentText(row.getContentText())
                 .replyStatus(FeedbackReplyState.of(row))
                 .officialReply(row.getOfficialReply())

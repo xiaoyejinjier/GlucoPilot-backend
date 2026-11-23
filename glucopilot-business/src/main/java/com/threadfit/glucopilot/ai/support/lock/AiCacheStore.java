@@ -44,4 +44,3 @@ public interface AiCacheStore {
     /** 删掉整张表（会话结束/显式失效时用）。 */
     void deleteAll(String mapKey);
 }
-

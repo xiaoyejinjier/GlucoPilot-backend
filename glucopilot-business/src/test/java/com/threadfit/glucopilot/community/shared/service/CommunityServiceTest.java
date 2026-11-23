@@ -690,6 +690,42 @@ class CommunityServiceTest {
     }
 
     @Test
+    void messageEventsDoNotRepeatOnIdempotentRetryOrRepeatedRead() {
+        var events = new ArrayList<Object>();
+        service = CommunityTestMappers.community(jdbc, events::add);
+        var first = send(1, 2, "你好", "event-request-001");
+        send(1, 2, "你好", "event-request-001");
+        assertEquals(1, events.size());
+        assertEquals("MESSAGE", ((com.threadfit.glucopilot.community.message.realtime.DirectMessageChanged) events.getFirst()).kind());
+        tx.executeWithoutResult(status -> service.read(2, 1, first.id()));
+        tx.executeWithoutResult(status -> service.read(2, 1, first.id()));
+        assertEquals(2, events.size());
+        assertEquals("READ", ((com.threadfit.glucopilot.community.message.realtime.DirectMessageChanged) events.getLast()).kind());
+    }
+
+    @Test
+    void reconnectCursorLoadsAllMissingPagesWithoutThirdPartyMessages() {
+        jdbc.update("INSERT INTO community_follow(follower_id,target_key) VALUES(1,'u2'),(2,'u1')");
+        var first = send(1, 2, "起点", "reconnect-start");
+        for (int i = 0; i < 105; i++) send(1, 2, "消息" + i, "reconnect-" + i);
+        send(2, 3, "第三方消息", "reconnect-private");
+        var all = new ArrayList<Message>();
+        long cursor = Long.parseLong(first.id());
+        while (true) {
+            var page = service.messageService().messages(2, 1, null, cursor, 50);
+            assertNull(page.nextBeforeId());
+            for (var row : page.records()) { assertTrue(Long.parseLong(row.id()) > cursor); cursor = Long.parseLong(row.id()); }
+            all.addAll(page.records());
+            if (!page.hasMore()) break;
+        }
+        assertEquals(105, all.size());
+        assertEquals("消息0", all.getFirst().content());
+        assertEquals("消息104", all.getLast().content());
+        error(ErrorCode.BAD_REQUEST, () -> service.messageService().messages(2, 1, 1L, 2L, 50));
+        error(ErrorCode.BAD_REQUEST, () -> service.messageService().messages(2, 1, null, 0L, 50));
+    }
+
+    @Test
     void readMarkerDoesNotMarkLaterOrThirdPartyMessages() {
         jdbc.update("INSERT INTO community_follow(follower_id,target_key) VALUES(1,'u2'),(2,'u1')");
         var first = send(2, 1, "第一条", "message-0001");

@@ -16,31 +16,36 @@
     <!-- 仅在两个固定表之间选择，禁止通过客户端参数拼接表名。 -->
     <sql id="table"><choose><when test="recharge">wallet_recharge_order</when><otherwise>consultation_order</otherwise></choose></sql>
     <sql id="scope">
-        user_id = #{userId}
-        <if test="status != null">AND status = #{status}</if>
+        o.user_id = #{userId}
+        <if test="status != null">AND o.status = #{status}</if>
     </sql>
     <sql id="columns">
-        order_no, status, amount_cents, currency, gmt_create AS created_at, paid_at, closed_at,
+        o.order_no, o.status, o.amount_cents, o.currency, o.gmt_create AS created_at, o.paid_at, o.closed_at,
         <choose>
             <when test="recharge">credited_at, NULL AS consultation_id, NULL AS report_id, NULL AS doctor_user_id, NULL AS settlement_status</when>
             <otherwise>NULL AS credited_at, consultation_id, report_id, doctor_user_id, settlement_status</otherwise>
         </choose>
+        , CASE WHEN o.status = 'PAID' THEN (
+            SELECT e.balance_after_cents
+            FROM <choose><when test="recharge">wallet_sandbox_ledger</when><otherwise>consultation_wallet_entry</otherwise></choose> e
+            WHERE e.order_no = o.order_no AND e.user_id = o.user_id
+        ) ELSE NULL END AS balance_after_cents
     </sql>
     <select id="count" resultType="long">
-        SELECT COUNT(*) FROM <include refid="table"/>
+        SELECT COUNT(*) FROM <include refid="table"/> o
         WHERE <include refid="scope"/>
     </select>
     <select id="list" resultType="com.threadfit.glucopilot.wallet.entity.WalletOrderRow">
         SELECT <include refid="columns"/>
-        FROM <include refid="table"/>
+        FROM <include refid="table"/> o
         WHERE <include refid="scope"/>
-        ORDER BY gmt_create DESC, id DESC
+        ORDER BY o.gmt_create DESC, o.id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
     <!-- 所属用户条件必须与订单号同时查询，不能先按订单号查出后交给前端过滤。 -->
     <select id="detail" resultType="com.threadfit.glucopilot.wallet.entity.WalletOrderRow">
         SELECT <include refid="columns"/>
-        FROM <include refid="table"/>
-        WHERE user_id = #{userId} AND order_no = #{orderNo}
+        FROM <include refid="table"/> o
+        WHERE o.user_id = #{userId} AND o.order_no = #{orderNo}
     </select>
 </mapper>

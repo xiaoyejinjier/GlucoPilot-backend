@@ -37,7 +37,6 @@ export/
 | 正餐记录与营养快照 | `meal/service/impl/MealRecordServiceImpl.java` |
 | 日统计与打卡 | `statistics/daily/service/DailyStatisticsService.java` |
 | 周统计 | `statistics/weekly/service/WeeklyStatisticsService.java` |
-| 周视图预测值汇总 | `statistics/weekly/service/MealPredictionStatisticsService.java` |
 | 月视图与月统计 | `statistics/monthly/service/MonthlyStatisticsService.java` |
 | 趋势统计 | `statistics/trend/service/TrendStatisticsService.java` |
 | 异常事件处理、冲突校验与操作留痕 | `glucose/alert/service/GlucoseAlertService.java` |

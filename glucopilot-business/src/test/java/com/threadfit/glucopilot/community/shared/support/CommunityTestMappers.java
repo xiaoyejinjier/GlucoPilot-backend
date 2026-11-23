@@ -113,6 +113,10 @@ public final class CommunityTestMappers {
 
     /** Assemble actual feature services sharing the fixture's MyBatis session and transaction. */
     public static CommunityService community(JdbcTemplate fixture) {
+        return community(fixture, event -> {});
+    }
+
+    public static CommunityService community(JdbcTemplate fixture, org.springframework.context.ApplicationEventPublisher publisher) {
         var access = access(fixture);
         var profiles =
                 new CommunityProfileService(
@@ -130,7 +134,7 @@ public final class CommunityTestMappers {
                         mapper(fixture, CommunityCommentMapper.class), profiles, access, events);
         var messages =
                 new CommunityMessageService(
-                        mapper(fixture, CommunityMessageMapper.class), profiles);
+                        mapper(fixture, CommunityMessageMapper.class), profiles, publisher);
         var presentation =
                 new CommunityArticlePresentationService(
                         mapper(fixture, CommunityArticlePresentationMapper.class));

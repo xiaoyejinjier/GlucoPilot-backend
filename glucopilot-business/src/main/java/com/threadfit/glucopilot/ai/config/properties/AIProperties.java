@@ -243,7 +243,7 @@ public class AIProperties {
         /**
          * 注入上下文的最多<b>类别数</b>（不是条目数）；0 = 不注入。
          *
-         * <p>语义在 V86 之后收窄了：以前它是"最多注入几条记忆"的上界，现在条目数由
+         * <p>语义在 V93 之后收窄了：以前它是"最多注入几条记忆"的上界，现在条目数由
          * {@link #injectMaxItemsPerKey} 控制。允许的类别只有五个，所以默认值取 8 等价于"全给"。
          */
         private int injectMaxItems = 8;

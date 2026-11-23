@@ -26,7 +26,6 @@ XML 与 Java 接口的包路径、文件名相同，MyBatis 注册接口时自�
 | 异常血糖查询、审批、审计和用户回复 | [GlucoseAlertService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/alert/service/GlucoseAlertService.java) → [GlucoseAlertRepository](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/alert/repository/GlucoseAlertRepository.java) | [GlucoseAlertMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/mapper/GlucoseAlertMapper.java)、[GlucoseAlertQuery](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/mapper/GlucoseAlertQuery.java)、[GlucoseAlertRows](../glucopilot-business/src/main/java/com/threadfit/glucopilot/glucose/entity/GlucoseAlertRows.java) |
 | 正餐照片读取 | [MealPhotoService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/meal/service/MealPhotoService.java) | [MealPhotoMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/meal/mapper/MealPhotoMapper.java)，复用 `MediaFile` |
 | 用户头像读取 | [AvatarMediaService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/file/service/AvatarMediaService.java) | [AvatarMediaMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/file/mapper/AvatarMediaMapper.java)，复用 `MediaFile` |
-| 周视图的每日推荐吃法预测值汇总 | [MealPredictionStatisticsService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/statistics/weekly/service/MealPredictionStatisticsService.java) | [MealPredictionStatisticsMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/statistics/mapper/MealPredictionStatisticsMapper.java)、`statistics/entity/DailyMealPredictionRow.java` |
 | 管理端信封提醒：举报、反馈、待审核食品 | [AdminWorkReminderService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/notification/service/AdminWorkReminderService.java) | [AdminWorkReminderMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/notification/mapper/AdminWorkReminderMapper.java)、`notification/entity/WorkReminderCount.java` |
 | 英文阅读的原文、翻译缓存和任务租约 | [LocalizationService](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/service/LocalizationService.java) | [LocalizationMapper](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/mapper/LocalizationMapper.java)、[LocalizationSql](../glucopilot-business/src/main/java/com/threadfit/glucopilot/localization/mapper/LocalizationSql.java)、`localization/entity/` |
 
@@ -34,7 +33,6 @@ XML 与 Java 接口的包路径、文件名相同，MyBatis 注册接口时自�
 
 - 异常审批仍由 Spring 事务包住：锁定源血糖记录，比较测量值、测量时间和版本，再更新处理结果、写入审计。对用户只返回公开回复。
 - 图片仍按原媒体登记的 `storage_key`、桶和存储提供方读取；正餐照片继续校验归属与有效正餐关联，头像继续校验有效用户。
-- 预测统计只聚合已保存的 `predict_suggest`，不修改预测算法，也不混入实测均值。
 - 管理端先校验操作员权限，再执行对应提醒查询；无待办时不返回虚假条目。
 - 翻译保留原文哈希、阅读权限、原子租约认领、续期、失败重试和关闭时释放租约。
 
@@ -47,7 +45,7 @@ XML 与 Java 接口的包路径、文件名相同，MyBatis 注册接口时自�
 | 私信 | `community/message/service/CommunityMessageService.java` | `community/message/mapper/CommunityMessageMapper.java`：双方账号行锁、请求标记查重、权限查询、消息写入 |
 | 血糖记录 | `glucose/record/service/GlucoseRecordService.java` | `glucose/mapper/GlucoseRecordMapper.java` |
 | 正餐记录 | `meal/service/impl/MealRecordServiceImpl.java` | `meal/mapper/MealRecordMapper.java`、`MealFoodItemMapper.java` |
-| 日、周、月和趋势统计 | `statistics/daily/service/DailyStatisticsService.java`、`statistics/weekly/service/WeeklyStatisticsService.java`、`statistics/monthly/service/MonthlyStatisticsService.java`、`statistics/trend/service/TrendStatisticsService.java` | 调用记录模块服务，复用血糖与正餐 Mapper；预测汇总使用上表新增 Mapper |
+| 日、周、月和趋势统计 | `statistics/daily/service/DailyStatisticsService.java`、`statistics/weekly/service/WeeklyStatisticsService.java`、`statistics/monthly/service/MonthlyStatisticsService.java`、`statistics/trend/service/TrendStatisticsService.java` | 调用记录模块服务，复用血糖与正餐 Mapper |
 | 举报与举报反馈 | `community/report/service/CommunityReportService.java`、`CommunityReportFeedbackService.java` | `community/report/mapper/CommunityReportManagementMapper.java`、`CommunityReportMapper.java` |
 | 用户反馈、管理端反馈 | `user/feedback/service/FeedbackService.java`、`AdminFeedbackService.java` | `user/mapper/FeedbackMapper.java`，复用用户资料 Mapper |
 | 食品营养库、食品管理 | `food/service/FoodService.java`、`AdminFoodService.java` | `food/mapper/FoodNutritionMapper.java`、`FoodCategoryMapper.java`；分类/详情的 Redis 读缓存见 `food/README.md` |

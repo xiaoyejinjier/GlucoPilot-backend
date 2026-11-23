@@ -49,6 +49,12 @@
 
     <dependencies>
 
+        <!-- 原生 WebSocket，与现有 Spring MVC、用户会话鉴权共用入口。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+        </dependency>
+
         <!-- 官方支付宝SDK：仅用于沙箱签名、验签、扫码预下单和查单。 -->
         <dependency>
             <groupId>com.alipay.sdk</groupId>

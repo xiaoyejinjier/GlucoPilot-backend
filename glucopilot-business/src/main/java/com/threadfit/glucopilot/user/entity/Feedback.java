@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.user.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.threadfit.glucopilot.common.model.BaseEntity;
+
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -14,11 +15,17 @@ import java.time.LocalDateTime;
 public class Feedback extends BaseEntity {
 
     private Long userId;
-    /** 1建议2Bug3诉求4其他 */
+
+    /** 反馈类型字典编号。 */
     private Integer feedbackType;
+
+    private Long deviceId;
+    private String deviceDescription;
     private String contentText;
+
     /** 0已收到1处理中2已处理3已关闭 */
     private Integer replyStatus;
+
     private String officialReply;
     private Long repliedBy;
     private LocalDateTime repliedAt;

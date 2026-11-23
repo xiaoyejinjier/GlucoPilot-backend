@@ -12,7 +12,6 @@ import com.threadfit.glucopilot.localization.mapper.LocalizationMapper;
 import com.threadfit.glucopilot.localization.mapper.LocalizationSql;
 import com.threadfit.glucopilot.meal.mapper.MealPhotoMapper;
 import com.threadfit.glucopilot.notification.mapper.AdminWorkReminderMapper;
-import com.threadfit.glucopilot.statistics.mapper.MealPredictionStatisticsMapper;
 
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.Test;
@@ -68,7 +67,6 @@ class OwnedFeatureMapperRegistrationTest {
                             GlucoseAlertMapper.class,
                             MealPhotoMapper.class,
                             AvatarMediaMapper.class,
-                            MealPredictionStatisticsMapper.class,
                             AdminWorkReminderMapper.class,
                             LocalizationMapper.class)) {
                 assertNotNull(context.getBean(mapper));

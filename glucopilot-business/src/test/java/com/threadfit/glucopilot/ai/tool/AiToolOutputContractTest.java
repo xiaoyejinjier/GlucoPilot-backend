@@ -184,7 +184,6 @@ class AiToolOutputContractTest {
                         .mediaUrl("http://localhost:9000/glucopilot-dev/3/2026/10/7/x.jpg")
                         .foodsText("米饭、青菜、鸡胸肉")
                         .carbsG(new BigDecimal("68.0"))
-                        .predictNow(new BigDecimal("9.2"))
                         .build();
         MealVos.DayMeals day =
                 MealVos.DayMeals.builder().recordDate(LocalDate.now()).meals(List.of(meal)).build();
@@ -200,6 +199,8 @@ class AiToolOutputContractTest {
                         .queryMealRecords(1, CONTEXT);
 
         assertThat(json).contains("米饭、青菜、鸡胸肉").contains("中餐").contains("carbsG");
+        // 预测已下线：工具输出不再携带预测字段
+        assertThat(json).doesNotContain("predictNow").doesNotContain("predictSuggest");
         // 模型看不到图片，URL 与 mediaId 只会白花 token
         assertThat(json)
                 .doesNotContain("mediaUrl")

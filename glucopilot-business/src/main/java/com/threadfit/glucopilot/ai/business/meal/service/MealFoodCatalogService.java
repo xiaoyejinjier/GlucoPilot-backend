@@ -36,6 +36,52 @@ public interface MealFoodCatalogService {
                 .replaceAll("[\\s\\p{Z}]+", " ").trim();
     }
 
+    /**
+     * 单条明细是否需要用户确认：置信度低于阈值，或未命中营养库（UNRESOLVED），或命中但待审（PENDING_REVIEW）。
+     * <p>
+     * 规则只写这一份：识别时用它给明细打标，幂等重放时用它按明细重算，
+     * 否则"旧缓存里的标记"与"当前规则"会各说各话。
+     * <p>
+     * 未知库状态（非 AVAILABLE）一律判为需确认，属安全侧：将来新增状态时宁可多让用户看一眼。
+     */
+    static boolean needsConfirmation(int confidence, String libraryStatus, int threshold) {
+        return confidence < threshold || !"AVAILABLE".equals(libraryStatus);
+    }
+
+    /**
+     * 同名多行时的取行规则（单一实现，识别与餐食归一化共用）：
+     * <b>上架优先 → 分类精确优先 → id 升序取第一条</b>。
+     * <p>
+     * 与数据库 {@code ORDER BY shelf_status DESC, id ASC} 等价，但只依赖传入集合，
+     * 因此批量路径（一次 IN 查回多行）也能得到和单查完全一致的结论。
+     */
+    static com.threadfit.glucopilot.food.entity.FoodNutrition pickBest(
+            java.util.List<com.threadfit.glucopilot.food.entity.FoodNutrition> candidates, int category) {
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
+        java.util.List<com.threadfit.glucopilot.food.entity.FoodNutrition> preferred = candidates.stream()
+                .filter(food -> food.getShelfStatus() != null && food.getShelfStatus() == 1).toList();
+        if (preferred.isEmpty()) {
+            preferred = candidates;
+        }
+        java.util.Comparator<com.threadfit.glucopilot.food.entity.FoodNutrition> byId = java.util.Comparator
+                .comparing(com.threadfit.glucopilot.food.entity.FoodNutrition::getId,
+                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()));
+        java.util.List<com.threadfit.glucopilot.food.entity.FoodNutrition> pool = preferred;
+        return pool.stream()
+                .filter(food -> food.getCategoryCode() != null && food.getCategoryCode() == category)
+                .min(byId)
+                .orElseGet(() -> pool.stream().min(byId).orElse(null));
+    }
+
+    /**
+     * 只读匹配：按归一化名称找库内条目，<b>不建草稿、不补图片、不写库</b>。
+     * <p>
+     * 与 {@link #resolve} 共用 {@link #pickBest} 的取行规则，避免"识别标已上架、保存标待审"的规则漂移。
+     */
+    com.threadfit.glucopilot.food.entity.FoodNutrition findLibraryFood(String normalizedName, int category);
+
     /** 归一化结果：命中的条目（可为新建的）+ 是否新增。 */
     record Resolution(MealAnalysisDtos.Item item, boolean added) {
     }

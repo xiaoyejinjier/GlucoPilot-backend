@@ -36,6 +36,6 @@
 
 - 隔离 Tomcat + JDK WebSocket 客户端完成真实 HTTP Upgrade、READY/PING/PONG/SEND/SENT；匿名握手401；没有使用真实账号或连接共享业务库。
 - 自动测试覆盖身份冒充、会话失效和被替换、第三人隔离、幂等不重复通知、事务提交/回滚、Redis失败降级、超过一页的离线补拉、切换账号和旧回调丢弃。
-- 手机及微信开发者工具的实际连接仍需重启后按上述步骤验证。
+- 用户本地联调已确认101握手、正常收发、已读同步、全局通知及断网重连后收到新消息；服务器WSS部署仍需按上述步骤验证。
 
 实现参考：[Spring 原生 WebSocket 服务端与并发发送说明](https://docs.spring.io/spring-framework/reference/web/websocket/server.html)。

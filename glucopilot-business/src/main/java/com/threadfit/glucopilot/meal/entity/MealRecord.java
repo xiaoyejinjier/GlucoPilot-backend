@@ -32,16 +32,34 @@ public class MealRecord extends BaseEntity {
     private Integer hungerLevel;
     /** 补餐备注，可空 */
     private String supplementText;
-    /** 预测当前血糖（mmol/L），可空 */
+    /** 已下线（阶段 4 停写，列暂留至清理迁移）：预测当前血糖（mmol/L），可空 */
     private BigDecimal predictNow;
-    /** 预测建议血糖（mmol/L），可空 */
+    /** 已下线（阶段 4 停写，列暂留至清理迁移）：预测建议血糖（mmol/L），可空 */
     private BigDecimal predictSuggest;
-    /** 预测建议文案，可空 */
+    /** 已下线（阶段 4 停写，列暂留至清理迁移）：预测建议文案，可空 */
     private String suggestText;
-    /** 算法版本号（v2.1 等），可空 */
+    /** 已下线（阶段 4 停写，列暂留至清理迁移）：算法版本号，可空 */
     private String algorithmVersion;
-    /** 推荐状态：IN_RANGE|ABOVE|BELOW|LOW|DANGER|INFEASIBLE，可空 */
+    /** 已下线（阶段 4 停写，列暂留至清理迁移）：推荐状态，可空 */
     private String recommendationStatus;
+    /** 识别模型标识（如 qwen-vl），可空 */
+    private String recognitionModel;
+    /** 识别完成时间，可空 */
+    private LocalDateTime recognitionAt;
+    /** 用户确认时间，可空 */
+    private LocalDateTime confirmedAt;
+    /** 分析状态：0待分析 1已生成 2失败；可空 = 历史记录未分析 */
+    private Integer analysisStatus;
+    /** 保存时引用的识别快照令牌（V90），可空；媒体级溯源，不证明逐条明细 */
+    private String analysisToken;
+    /** 整餐档位：LOW|MODERATE|HIGH|UNKNOWN，可空 */
+    private String analysisTier;
+    /** 整餐摘要（通用文案），可空 */
+    private String analysisSummary;
+    /** 判定所用规则版本，历史可追溯，可空 */
+    private String analysisRuleVersion;
+    /** 分析生成时间，可空 */
+    private LocalDateTime analysisGeneratedAt;
     /** 记录时刻（服务端写入，防伪） */
     private LocalDateTime recordedAt;
 }

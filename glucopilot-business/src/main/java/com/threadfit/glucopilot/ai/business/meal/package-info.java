@@ -12,6 +12,6 @@
  *   <li>食物营养库（{@code food_nutrition}）作为估算数据源，属其他模块交付。</li>
  * </ul>
  * 入口为 {@code POST /api/v1/meal-analysis}。识别不生成血糖预测、不写饮食记录；
- * 实测当前血糖由用户提供，预测与保存继续使用 prediction 和 meal 的既有接口。
+ * 实测当前血糖由用户提供，血糖记录与饮食保存使用 glucose 和 meal 的既有接口。
  */
 package com.threadfit.glucopilot.ai.business.meal;

@@ -395,8 +395,6 @@ public class AdminHealthRecordService {
                                     .recorded(true)
                                     .foodsText(record.getFoodsText())
                                     .carbsG(record.getCarbsG())
-                                    .predictNow(record.getPredictNow())
-                                    .predictSuggest(record.getPredictSuggest())
                                     .recordedAt(record.getRecordedAt())
                                     .build());
                 });

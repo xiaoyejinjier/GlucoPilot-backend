@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
@@ -129,6 +130,71 @@ class MealFoodCatalogServiceTest {
         assertEquals(0, result.item().getConfidence());
         assertNull(result.item().getLibraryFoodId());
         verifyNoInteractions(foods, categories);
+    }
+
+    @Test void availableLibraryMatchDoesNotNeedConfirmationAtThreshold() {
+        when(foods.selectList(any())).thenReturn(List.of(row(1L, "米饭", 1, "MANUAL")));
+        var result = service.resolve(input("米饭", "99", "999", "100", 70), "vision");
+        assertEquals("AVAILABLE", result.item().getLibraryStatus());
+        assertFalse(result.item().isNeedsConfirmation());
+    }
+
+    @Test void confidenceBelowThresholdNeedsConfirmationWithoutTouchingLibrary() {
+        var result = service.resolve(input("米饭", "99", "999", "100", 69), "vision");
+        assertEquals("UNRESOLVED", result.item().getLibraryStatus());
+        assertTrue(result.item().isNeedsConfirmation());
+        verifyNoInteractions(foods, categories);
+    }
+
+    @Test void pendingReviewDraftNeedsConfirmation() {
+        when(foods.selectList(any())).thenReturn(List.of(row(7L, "杂粮饭", 0, "AI_ESTIMATE")));
+        var result = service.resolve(input("杂粮饭", "99", "999", "100", 90), "vision");
+        assertEquals("PENDING_REVIEW", result.item().getLibraryStatus());
+        assertTrue(result.item().isNeedsConfirmation());
+    }
+
+    @Test void highConfidenceButUnresolvedNeedsConfirmation() {
+        when(foods.selectList(any())).thenReturn(List.of());
+        var result = service.resolve(input("新食品", "101", "100", "100", 90), "vision");
+        assertEquals("UNRESOLVED", result.item().getLibraryStatus());
+        assertTrue(result.item().isNeedsConfirmation());
+    }
+
+    @Test void configuredThresholdIsActuallyUsed() {
+        ReflectionTestUtils.setField(service, "lowConfidenceThreshold", 80);
+        var result = service.resolve(input("米饭", "99", "999", "100", 75), "vision");
+        // 默认阈值 70 时 75 会去查库；阈值调到 80 后不再查库，说明配置真正生效
+        assertEquals("UNRESOLVED", result.item().getLibraryStatus());
+        assertTrue(result.item().isNeedsConfirmation());
+        verifyNoInteractions(foods, categories);
+    }
+
+    @Test void readOnlyLookupPicksTheSameRowAsResolve() {
+        FoodNutrition offline = row(9L, "米饭", 0, "AI_ESTIMATE");
+        FoodNutrition online = row(3L, "米饭", 1, "MANUAL");
+        when(foods.selectList(any())).thenReturn(List.of(offline, online));
+        FoodNutrition viaLookup = service.findLibraryFood("米饭", 1);
+        var resolved = service.resolve(input("米饭", "99", "999", "100", 90), "vision");
+        assertEquals("3", resolved.item().getLibraryFoodId());
+        assertEquals(3L, viaLookup.getId());
+        // 只读：3 号是 MANUAL 且已上架，不应触发任何写
+        verify(foods, never()).insertRecognitionDraft(any());
+        verify(foods, never()).attachRecognitionPhoto(any(), any());
+    }
+
+    @Test void readOnlyLookupNeverCreatesDraftWhileResolveStillDoes() {
+        when(foods.selectList(any())).thenReturn(List.of());
+        when(foods.insertRecognitionDraft(any())).thenReturn(1);
+        when(foods.selectOne(any())).thenReturn(row(7L, "新食品", 0, "AI_ESTIMATE"));
+        when(categories.selectById(1L)).thenReturn(null);
+        // 只读方法：同名无命中时返回 null，且绝不写库
+        assertNull(service.findLibraryFood("新食品", 1));
+        verify(foods, never()).insertRecognitionDraft(any());
+        verify(foods, never()).attachRecognitionPhoto(any(), any());
+        // resolve：保留原有写路径（建草稿恰好一次）
+        var resolved = service.resolve(input("新食品", "20", "120", "100", 90), "vision");
+        assertTrue(resolved.added());
+        verify(foods, times(1)).insertRecognitionDraft(any());
     }
 
     private static FoodNutrition row(long id, String name, int shelf, String source) {

@@ -4,6 +4,7 @@ import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.vision.VisionAnalyzer;
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.analysis.MealAnalysisSnapshotStore;
 import com.threadfit.glucopilot.common.constant.GlucoseNodes;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum.MediaBizType;
@@ -13,13 +14,17 @@ import com.threadfit.glucopilot.common.util.JsonUtils;
 import com.threadfit.glucopilot.file.entity.MediaFile;
 import com.threadfit.glucopilot.file.service.MediaFileService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,6 +32,7 @@ import com.threadfit.glucopilot.ai.business.meal.dto.MealAnalysisDtos;
 import com.threadfit.glucopilot.ai.business.meal.service.MealAnalysisService;
 import com.threadfit.glucopilot.ai.business.meal.service.MealFoodCatalogService;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class MealAnalysisServiceImpl implements MealAnalysisService {
@@ -37,6 +43,13 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
     private final SceneModelResolver sceneModelResolver;
     private final JsonUtils json;
     private final IdempotencyStore idempotency;
+    private final MealAnalysisSnapshotStore snapshots;
+
+    private static final SecureRandom TOKEN_RANDOM = new SecureRandom();
+
+    /** 与 {@code MealFoodCatalogServiceImpl} 读同一个配置项：重放旧缓存时按当前阈值重算，不信任缓存里的标记。 */
+    @Value("${ai.meal.low-confidence-threshold:70}")
+    private int lowConfidenceThreshold = 70;
 
     @Override
     public MealAnalysisDtos.Result analyze(Long userId, MealAnalysisDtos.Request request) {
@@ -52,7 +65,10 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
         if (key != null) {
             IdempotencyStore.Claim claim = idempotency.claim(key);
             if (claim instanceof IdempotencyStore.Claim.Replay replay) {
-                return json.fromJson(replay.json(), MealAnalysisDtos.Result.class);
+                MealAnalysisDtos.Result cached = json.fromJson(replay.json(), MealAnalysisDtos.Result.class);
+                // 旧缓存不含 needsConfirmation（或为 null），重放时无条件按明细重算，避免旧标记被固化。
+                cached.setNeedsConfirmation(needsConfirmation(cached.getItems()));
+                return cached;
             }
             if (claim instanceof IdempotencyStore.Claim.InFlight) {
                 throw new BizException(ErrorCode.CONFLICT, "相同请求处理中，请稍后重试");
@@ -94,13 +110,49 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
             var result = MealAnalysisDtos.Result.builder().model(model).items(items)
                     .carbsG(total(items, false)).caloriesKcal(total(items, true))
                     .matchedCount((int) items.stream().filter(item -> "LIBRARY".equals(item.getNutritionSource())).count())
-                    .newFoodsCount(newCount).warnings(List.copyOf(warnings)).build();
+                    .newFoodsCount(newCount).warnings(List.copyOf(warnings))
+                    .needsConfirmation(needsConfirmation(items)).build();
+            issueAnalysisToken(userId, request.getMediaId(), request.getNodeCode(), model, items, result);
             if (key != null) idempotency.complete(key, result);
             return result;
         } catch (RuntimeException ex) {
             if (key != null) idempotency.release(key);
             throw ex;
         }
+    }
+
+    /**
+     * 生成识别快照令牌并写入 Redis（3b1 只写不读，保存链路自 3b2 起才消费）。
+     * <p>快照写入失败<b>不得影响识别结果</b>：令牌置空，前端按「无令牌」处理；识别是主功能，token 是增强项。
+     * 幂等重放走缓存分支，不重建快照，因此这里只在真正跑完识别的路径上调用。
+     */
+    private void issueAnalysisToken(Long userId, Long mediaId, String nodeCode, String model,
+                                    List<MealAnalysisDtos.Item> items, MealAnalysisDtos.Result result) {
+        String token = newToken();
+        MealAnalysisSnapshotStore.Snapshot snapshot = new MealAnalysisSnapshotStore.Snapshot(
+                userId, mediaId, nodeCode, System.currentTimeMillis(), model, toSnapshotItems(items));
+        if (!snapshots.put(userId, token, snapshot)) {
+            log.warn("餐食识别快照不可用，本次返回空 analysisToken：userId={} mediaId={}", userId, mediaId);
+            return;
+        }
+        result.setAnalysisToken(token);
+    }
+
+    private static List<MealAnalysisSnapshotStore.SnapshotItem> toSnapshotItems(List<MealAnalysisDtos.Item> items) {
+        List<MealAnalysisSnapshotStore.SnapshotItem> list = new ArrayList<>(items.size());
+        for (MealAnalysisDtos.Item item : items) {
+            list.add(new MealAnalysisSnapshotStore.SnapshotItem(
+                    item.getFoodName(), item.getFoodId(), item.getLibraryFoodId(), item.getCategoryCode(),
+                    item.getGiValue(), item.getNutritionSource(), item.getLibraryStatus(), item.getConfidence()));
+        }
+        return list;
+    }
+
+    /** 32 字节随机 + Base64URL 无填充（43 字符）；不用 UUID，避免熵不足且无扩展空间。 */
+    private static String newToken() {
+        byte[] bytes = new byte[32];
+        TOKEN_RANDOM.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     MealAnalysisDtos.ModelResult parse(String raw) {
@@ -117,6 +169,27 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
             throw new BizException(ErrorCode.BIZ_REJECTED, "餐食识别结果格式不正确，请重试");
         }
         return result;
+    }
+
+    /**
+     * 按当前阈值重算每条明细的标记，并汇总整餐结论。
+     * <p>
+     * 明细为空或 null 时恒为 true：空结果最需要用户介入，不能因为 {@code anyMatch} 在空集合上返回 false
+     * 而被判定为"无需确认"。注意成功路径上 items 为空会先抛 BizException，这里的空判定是防御性的，
+     * 主要服务于幂等重放（旧缓存可能是空 items）。
+     */
+    boolean needsConfirmation(List<MealAnalysisDtos.Item> items) {
+        if (items == null || items.isEmpty()) {
+            return true;
+        }
+        boolean any = false;
+        for (MealAnalysisDtos.Item item : items) {
+            int confidence = item.getConfidence() == null ? 0 : item.getConfidence();
+            boolean flag = MealFoodCatalogService.needsConfirmation(confidence, item.getLibraryStatus(), lowConfidenceThreshold);
+            item.setNeedsConfirmation(flag);
+            any = any || flag;
+        }
+        return any;
     }
 
     private BigDecimal total(List<MealAnalysisDtos.Item> items, boolean calories) {

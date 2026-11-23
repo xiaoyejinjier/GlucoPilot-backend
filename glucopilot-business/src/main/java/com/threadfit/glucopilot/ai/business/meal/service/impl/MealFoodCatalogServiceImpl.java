@@ -7,6 +7,7 @@ import com.threadfit.glucopilot.food.entity.FoodNutrition;
 import com.threadfit.glucopilot.food.mapper.FoodCategoryMapper;
 import com.threadfit.glucopilot.food.mapper.FoodNutritionMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.threadfit.glucopilot.common.api.ErrorCode;
@@ -18,12 +19,42 @@ import java.text.Normalizer;
 import java.util.List;
 import com.threadfit.glucopilot.ai.business.meal.dto.MealAnalysisDtos;
 import com.threadfit.glucopilot.ai.business.meal.service.MealFoodCatalogService;
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class MealFoodCatalogServiceImpl implements MealFoodCatalogService {
     private final FoodNutritionMapper foods;
     private final FoodCategoryMapper categories;
+
+    /**
+     * 低置信阈值（默认 70）。
+     * <p>
+     * <b>已知技术债</b>：这个值同时承担两个语义——①是否去营养库匹配（行为门槛，见 {@link #resolve}）；
+     * ②是否要求用户确认（产品门槛，落到 Item.needsConfirmation）。调低会扩大库匹配范围，
+     * 可能让低置信识别命中"看起来权威"的可疑营养数据。待规则稳定后再拆成两个配置。
+     * <p>
+     * 用字段注入而非构造器参数：{@code MealFoodCatalogServiceTest} 以 {@code @InjectMocks} 构造，
+     * 若改为 int 构造参数会注入 0，导致阈值静默失效、全部走库匹配。
+     */
+    @Value("${ai.meal.low-confidence-threshold:70}")
+    private int lowConfidenceThreshold = 70;
+
+    /** 启动时打印实际生效的阈值：key 拼错会静默回落默认值，只有把非默认值跑一次才能证明绑定通了。 */
+    @PostConstruct
+    void logLowConfidenceThreshold() {
+        log.info("餐食识别低置信阈值已生效：ai.meal.low-confidence-threshold={}", lowConfidenceThreshold);
+    }
+
+    /** 只读匹配：不建草稿、不补图片。取行规则完全交给 {@link MealFoodCatalogService#pickBest}。 */
+    @Override
+    public FoodNutrition findLibraryFood(String normalizedName, int category) {
+        List<FoodNutrition> matches = foods.selectList(new QueryWrapper<FoodNutrition>()
+                .eq("food_name", normalizedName).orderByDesc("shelf_status").orderByAsc("id"));
+        return MealFoodCatalogService.pickBest(matches, category);
+    }
 
     @Transactional
     @Override
@@ -37,6 +68,7 @@ public class MealFoodCatalogServiceImpl implements MealFoodCatalogService {
     public Resolution resolve(MealAnalysisDtos.ModelFood input, String model, Long sourceMediaId) {
         if (sourceMediaId != null && sourceMediaId <= 0) sourceMediaId = null;
         String name = MealFoodCatalogService.normalizeName(input.getName());
+        // TODO(2b)：confidence=0 目前无法区分「模型未给」与「模型给了 0」，两者都会落到低置信分支，待 2b 处理。
         int confidence = input.getConfidence() != null && input.getConfidence() >= 0 && input.getConfidence() <= 100
                 ? input.getConfidence() : 0;
         int category = input.getCategoryCode() == null || input.getCategoryCode() < 1 || input.getCategoryCode() > 9
@@ -44,14 +76,8 @@ public class MealFoodCatalogServiceImpl implements MealFoodCatalogService {
         BigDecimal weight = positive(input.getWeightG(), 5000);
         FoodNutrition row = null;
         boolean added = false;
-        if (confidence >= 70) {
-            List<FoodNutrition> matches = foods.selectList(new QueryWrapper<FoodNutrition>()
-                    .eq("food_name", name).orderByDesc("shelf_status").orderByAsc("id"));
-            List<FoodNutrition> availableMatches = matches.stream()
-                    .filter(food -> Integer.valueOf(1).equals(food.getShelfStatus())).toList();
-            List<FoodNutrition> preferred = availableMatches.isEmpty() ? matches : availableMatches;
-            row = preferred.stream().filter(food -> food.getCategoryCode() != null && food.getCategoryCode() == category)
-                    .findFirst().orElse(preferred.isEmpty() ? null : preferred.get(0));
+        if (confidence >= lowConfidenceThreshold) {
+            row = findLibraryFood(name, category);
             if (row == null && bounded(input.getCarbsPer100g(), 100) != null
                     && bounded(input.getCaloriesPer100g(), 1000) != null) {
                 FoodCategory selected = categories.selectById((long) category);
@@ -80,6 +106,8 @@ public class MealFoodCatalogServiceImpl implements MealFoodCatalogService {
         boolean available = row != null && Integer.valueOf(1).equals(row.getShelfStatus());
         String source = row == null ? "UNKNOWN"
                 : "AI_ESTIMATE".equals(row.getNutritionSource()) ? "AI_ESTIMATE" : "LIBRARY";
+        String libraryStatus = row == null ? "UNRESOLVED" : available ? "AVAILABLE" : "PENDING_REVIEW";
+        boolean needsConfirmation = MealFoodCatalogService.needsConfirmation(confidence, libraryStatus, lowConfidenceThreshold);
         MealAnalysisDtos.Item item = MealAnalysisDtos.Item.builder()
                 .foodName(row == null ? name : row.getFoodName())
                 .foodId(available ? String.valueOf(row.getId()) : null)
@@ -89,7 +117,8 @@ public class MealFoodCatalogServiceImpl implements MealFoodCatalogService {
                 .carbsG(portion(carbs, weight)).caloriesKcal(portion(calories, weight))
                 .confidence(confidence).nutritionSource(source)
                 .giValue(row == null ? null : row.getGiValue())
-                .libraryStatus(row == null ? "UNRESOLVED" : available ? "AVAILABLE" : "PENDING_REVIEW")
+                .libraryStatus(libraryStatus)
+                .needsConfirmation(needsConfirmation)
                 .build();
         return new Resolution(item, added);
     }

@@ -87,6 +87,7 @@ public class WithdrawalService {
     }
 
     public PageResult<WithdrawalOrder> list(Long user, String status, PageQuery page) {
+        if (user != null && user <= 0) throw bad("医生编号必须为正整数");
         if (page.getPageNum() < 1 || page.getPageSize() < 1 || page.getPageSize() > 50)
             throw bad("每页1～50条");
         String filter = status == null || status.isBlank() ? null : status;

@@ -9,6 +9,7 @@ import com.threadfit.glucopilot.wallet.withdrawal.service.WithdrawalTransferServ
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 
 import lombok.RequiredArgsConstructor;
 
@@ -31,8 +32,10 @@ public class AdminWithdrawalController {
 
     @GetMapping
     public ResponseEntity<ApiResponse<PageResult<WithdrawalOrder>>> list(
-            @RequestParam(required = false) String status, @Valid PageQuery page) {
-        return ok(service.list(null, status, page));
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) @Positive Long userId,
+            @Valid PageQuery page) {
+        return ok(service.list(userId, status, page));
     }
 
     @PostMapping("/{no}/review")

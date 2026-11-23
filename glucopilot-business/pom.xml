@@ -27,6 +27,12 @@
         <aliyun.oss.version>3.18.2</aliyun.oss.version>
         <!-- minio 8.6.0 传递 okhttp 5.1.0（KMP 空 jar），显式覆盖到可用版本（旧经验 4.12.0） -->
         <okhttp.version>4.12.0</okhttp.version>
+        <!--
+            Redisson 4.x 是支持 Spring Boot 4.1 的线（官方矩阵：Boot 4.1 ↔ redisson-spring-data-41）。
+            我们只用 plain 依赖的锁/信号量 API，不引 redisson-spring-data-* 适配层，
+            因此这个版本约束只影响「Redisson 自身与 Netty 的兼容」。
+        -->
+        <redisson.version>4.7.0</redisson.version>
     </properties>
 
     <dependencyManagement>
@@ -160,6 +166,19 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!--
+            Redisson：只用于 AI 模块的「分布式互斥 / 限速 / 去重」原语（信号量、令牌桶、原子计数）。
+            刻意用 plain 依赖而不是 redisson-spring-boot-starter：starter 会注册
+            RedissonConnectionFactory 顶掉现有 Lettuce，从而改变 StringRedisTemplate 的使用者
+            （IdempotencyStore、系统配置缓存、社区热榜）。plain 依赖不自带自动配置，
+            连接参数由 AiConcurrencyConfig 自己从 spring.data.redis.* 读取。
+        -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <version>${redisson.version}</version>
         </dependency>
 
 

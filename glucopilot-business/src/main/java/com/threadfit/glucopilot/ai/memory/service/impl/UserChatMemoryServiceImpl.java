@@ -9,7 +9,7 @@ import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
 import com.threadfit.glucopilot.ai.support.AiCallContext;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyPolicy;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.api.PageQuery;
@@ -103,7 +103,6 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     private static final List<String> FORBIDDEN_MARKERS =
             List.of("剂量", "加量", "减量", "停药", "换药", "开药", "处方", "确诊", "诊断为", "胰岛素用量");
 
-    private static final String EXTRACT_KEY_PREFIX = "chat-memory-extract:";
 
     /**
      * 关键词兜底触发的抽取原因（{@link #looksExplicit} 命中，见 {@code ChatCompletionServiceImpl}）。
@@ -136,7 +135,10 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     private final SceneModelResolver sceneModelResolver;
     private final AIProperties aiProperties;
     private final com.threadfit.glucopilot.common.util.JsonUtils jsonUtils;
-    private final ChatRoundGuard extractGuard;
+    private final AiConcurrencyPolicy concurrency;
+
+    /** 本实例正在跑的抽取任务数（用于 inFlight 断言）。 */
+    private final java.util.concurrent.atomic.AtomicInteger running = new java.util.concurrent.atomic.AtomicInteger();
     private final Executor executor;
 
     public UserChatMemoryServiceImpl(AiChatClientRegistry clients,
@@ -147,7 +149,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                                  SceneModelResolver sceneModelResolver,
                                  AIProperties aiProperties,
                                  com.threadfit.glucopilot.common.util.JsonUtils jsonUtils,
-                                 ChatRoundGuard roundGuard,
+                                 AiConcurrencyPolicy concurrency,
                                  @Qualifier("chatSummaryExecutor") Executor executor) {
         this.clients = clients;
         this.memoryMapper = memoryMapper;
@@ -159,7 +161,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         this.jsonUtils = jsonUtils;
         // 与摘要共用同一个单飞守卫（键不同）与同一个线程池：
         // 两者都是"回复之后的后台增强"，没必要各起一个池；线程池饿了宁可丢记忆也不拖慢对话
-        this.extractGuard = roundGuard;
+        this.concurrency = concurrency;
         this.executor = executor;
     }
 
@@ -680,21 +682,22 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             log.debug("关键词兜底未开启，跳过抽取 sessionId={}", sessionId);
             return;
         }
-        String key = EXTRACT_KEY_PREFIX + sessionId;
-        if (!extractGuard.tryAcquire(key)) {
+        if (!concurrency.markExtractRunning(sessionId)) {
             log.debug("该会话已有记忆抽取任务在跑，跳过 sessionId={}", sessionId);
             return;
         }
         try {
             executor.execute(() -> {
+                running.incrementAndGet();
                 try {
                     runExtract(userId, sessionId, reason);
                 } finally {
-                    extractGuard.release(key);
+                    running.decrementAndGet();
+                    concurrency.finishExtract(sessionId);
                 }
             });
         } catch (RuntimeException e) {
-            extractGuard.release(key);
+            concurrency.finishExtract(sessionId);
             log.warn("记忆抽取任务提交失败（忽略）sessionId={}", sessionId, e);
         }
     }
@@ -943,7 +946,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     /** 当前是否有抽取任务在跑（E2E/断言用）。 */
     @Override
     public boolean inFlight() {
-        return extractGuard.inFlightCount() > 0;
+        return running.get() > 0;
     }
 
     /** 供排障：记忆表最近更新时间（E2E 用）。 */

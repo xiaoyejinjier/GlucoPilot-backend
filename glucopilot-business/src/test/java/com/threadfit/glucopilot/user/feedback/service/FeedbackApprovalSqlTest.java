@@ -71,7 +71,7 @@ class FeedbackApprovalSqlTest {
                     getClass()
                             .getClassLoader()
                             .getResourceAsStream(
-                                    "db/migration/V84__feedback_device_support_sort.sql")) {
+                                    "db/migration/V87__feedback_device_support_sort.sql")) {
                 schemaConnection
                         .createStatement()
                         .execute(new String(in.readAllBytes(), StandardCharsets.UTF_8));

@@ -1116,20 +1116,55 @@ if (updated == 0) { /* 指针已经前进了（别的实例先完成），丢弃
 
 `window-messages` 从此不再等于"每轮固定发 20 条"，而是"最多发 20 条"——这也是本轮设计里最容易读错的一个词。
 
-### 10.5 `ChatRoundGuard`（92 行）：进程内单飞
+### 10.5 AI 并发闸门：`AiConcurrencyPolicy`（Redis / Redisson）
 
-```java
-static final Duration STALE_AFTER = Duration.ofMinutes(5);
-private final Map<String, Long> inFlight = new ConcurrentHashMap<>();
+原来这里是 `ChatRoundGuard`——一个 `ConcurrentHashMap` 的进程内单飞，只挡得住单实例。接上 Redis 之后，把它换成了按**业务语义**分层的闸门：调用方只说「我要开始生成这一条」「我要识别语音」，不再关心底层是哪把锁。
 
-public boolean tryAcquire(String key) {   // 顺便清理超过 5 分钟的僵尸条目
-    long now = System.currentTimeMillis();
-    return inFlight.compute(key, (k, startedAt) ->
-            (startedAt == null || now - startedAt > STALE_AFTER.toMillis()) ? now : startedAt) == now;
-}
-```
+#### 四类约束 → 四种原语
 
-**注意它的边界**：这是 `ConcurrentHashMap`，只在单进程内有效。多实例部署时同一轮仍可能被两个实例同时生成——真正的一致性由 DB 兜底：`selectAssistantReply` 幂等 + `chat_message` 唯一键。摘要靠 `upto` 指针，审核靠 `FOR UPDATE SKIP LOCKED`。
+| 业务约束 | 语义 | 原语 | 抢不到的后果 |
+| --- | --- | --- | --- |
+| 同一轮不能被生成两次 | 互斥 | `RPermitExpirableSemaphore`（1 permit） | 409 |
+| 每人同时几条流 / 全局几路生成 | 并发上限 | 同上的多 permit | 429 / 503 |
+| 每人每分钟几次、每天几轮 | 速率 + 配额 | `RRateLimiter` / `RAtomicLong` | 429 |
+| 摘要与记忆抽取「已经在跑就别再开」 | 去重合并 | `RMapCache.putIfAbsent` | 静默跳过 |
+| 清理任务多实例只跑一个 | 定时任务独占 | `RLock.tryLock`（**唯一的锁**） | 跳过本实例 |
+
+#### 为什么不用 `RLock` 做轮次互斥
+
+`RLock` 是**线程绑定**的：加锁时记下 `threadId`，`unlock()` 必须由同一线程调用，否则 `IllegalMonitorStateException`。而我们是在请求线程里加锁、在流式终局（Netty 线程）释放——用 `RLock` 必然炸。
+
+`RPermitExpirableSemaphore` 的官方 javadoc 写得很清楚：*"Each permit identified by own id and could be released only using its id"*。`tryAcquire(waitTime, leaseTime, unit)` 返回的 permit id 就是「令牌」，任何线程拿着它都能 `tryRelease(permitId)`——正好等于原来 `ChatRoundGuard` 的 `token` 语义。
+
+另外**显式传 `leaseTime` 时不会启看门狗**（后台续期线程只在 `lock()` 不传 leaseTime 才开）。我们要的就是"到点自动释放"：SSE 最长 60 秒，lease 取 90 秒，比旧的 `STALE_AFTER=5min` 更贴合真实耗时。
+
+#### key 与参数
+
+| key | 参数 | 失败语义 |
+| --- | --- | --- |
+| `ai:round:{assistantMsgId}` | 1 permit / 90s | 409 `40900`「这一条正在生成中，请 3 秒后再试」 |
+| `ai:round:cluster` | 64 permits / 90s | 503 `50300`「当前对话请求较多，请稍后再试」 |
+| `ai:stream:user:{userId}` | 2 permits / 90s | 429 `42901`「同时进行的对话过多（上限 2 条）」 |
+| `ai:rate:chat:{userId}` | 20 次 / 60s | 429 `42901`「发送太频繁（每分钟上限 20 次）」 |
+| `ai:quota:chat:{userId}:{yyyyMMdd}` | 200 轮 / 天（次日 0 点过期） | 429 `42901`「今日对话额度已用完」 |
+| `ai:speech:cluster` / `ai:speech:user:{userId}` | 8 / 1，lease 180s | 429 `42901` |
+| `ai:summary:run:{sessionId}` / `ai:extract:run:{sessionId}` | TTL 600s 的标记 | 静默跳过（后台任务不报错） |
+| `ai:toolrepeat:{sessionId}` | 字段 = `工具名\0入参`，30min | 命中即回放 |
+| `ai:job:calllog-cleanup` | `RLock` / 600s | `log.debug` 后跳过 |
+
+顺序上**先抢集群名额再抢轮次租约**：簇先挡掉容量打满（503 比 409 更准确），抢不到轮次时把簇名额还回去，避免一次 409 消耗掉全局配额。
+
+#### 三个容易写错的地方
+
+1. **配额计数必须原子自增**：`RAtomicLong.addAndGet` 且**只在首次自增（`value == delta`）时设过期**。每次都 `expireAt` 会把 TTL 一直往后推，跨天永远不归零。
+2. **去重标记必须能清**：`markSummaryRunning` 是 `putIfAbsent`，`finishSummary` 必须 `delete`，否则一次失败会让这个会话 600 秒内再也不能压缩。
+3. **进程内实现不要照抄 Redis 的「最小 1 秒」**：`InMemoryCacheStore`/`InMemoryRateGate` 里原本也写了 `Math.max(ttl, 1000ms)`，导致 20~30ms 的测试窗口永不生效。
+
+#### 装配与降级
+
+- 用 **plain `org.redisson:redisson:4.7.0` + 自建 `RedissonClient`**，不用 `redisson-spring-boot-starter`：starter 会注册自己的 `RedissonConnectionFactory` 顶掉 Spring 的 Lettuce，把 `StringRedisTemplate` 的使用者（`IdempotencyStore`、系统配置缓存、社区热榜）一起换掉。Spring Boot 4 若用 starter，自动配置类名是 `RedissonAutoConfigurationV4`（写 `V2` 不报错也不生效）。
+- `ai.concurrency.backend` 可取 `redisson`（默认）与 `memory`；`degrade-on-redis-error=true` 时任何 Redis 运行时异常都会**降级到进程内实现 + 60 秒节流 WARN**，不把用户挡在门外。
+- `ChatRoundGuard` 已删除：`ChatSummaryServiceImpl` / `UserChatMemoryServiceImpl` 的 `inFlight()` 改为本进程的 `AtomicInteger`（"在跑没在跑"是本进程的事实），跨实例的一致性由上面的标记负责。
 
 ### 10.6 `MyBatisChatMemoryRepository`（164 行）：把 Spring AI 的 `ChatMemory` 接到自家表
 

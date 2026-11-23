@@ -7,7 +7,7 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatSessionMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyTestSupport;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -96,7 +96,7 @@ class ChatSummaryServiceTest {
         when(promptTemplateService.systemPrompt(SceneCode.SUMMARY)).thenReturn("摘要提示词");
 
         service = new ChatSummaryServiceImpl(clients, chatSessionMapper, chatMessageMapper,
-                promptTemplateService, sceneModelResolver, properties, new ChatRoundGuard(), directExecutor);
+                promptTemplateService, sceneModelResolver, properties, AiConcurrencyTestSupport.policy(), directExecutor);
         // 门控（批次 3 / T3.2）默认是关的吗？不是——线上默认 12 条 / 1500 字 / 60 秒。
         // 但本类的既有用例都在验证"压缩逻辑本身"，用的是 6~12 条的迷你数据，
         // 所以这里把三道门关掉；门控自己的行为由本类末尾的四个专用用例覆盖。
@@ -232,7 +232,7 @@ class ChatSummaryServiceTest {
             throw new RejectedExecutionException("queue full");
         };
         ChatSummaryServiceImpl rejectingService = new ChatSummaryServiceImpl(clients, chatSessionMapper,
-                chatMessageMapper, promptTemplateService, sceneModelResolver, properties, new ChatRoundGuard(), rejecting);
+                chatMessageMapper, promptTemplateService, sceneModelResolver, properties, AiConcurrencyTestSupport.policy(), rejecting);
 
         rejectingService.maybeSummarizeAsync(USER_ID, SESSION_ID);
         assertFalse(rejectingService.inFlight(), "提交失败必须释放占位，否则该会话永远不能再触发摘要");
@@ -251,7 +251,7 @@ class ChatSummaryServiceTest {
         // 让任务在"执行中"卡住：用一个可控的执行器
         List<Runnable> queued = new ArrayList<>();
         ChatSummaryService queuedService = new ChatSummaryServiceImpl(clients, chatSessionMapper,
-                chatMessageMapper, promptTemplateService, sceneModelResolver, properties, new ChatRoundGuard(), queued::add);
+                chatMessageMapper, promptTemplateService, sceneModelResolver, properties, AiConcurrencyTestSupport.policy(), queued::add);
 
         queuedService.maybeSummarizeAsync(USER_ID, SESSION_ID);
         queuedService.maybeSummarizeAsync(USER_ID, SESSION_ID);

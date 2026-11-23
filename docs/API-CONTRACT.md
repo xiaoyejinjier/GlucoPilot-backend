@@ -1,5 +1,12 @@
 # API 契约
 
+## 2026-11-20 合并后的反馈迁移编号
+
+- 保留远端已发布的V83（设备云凭证）、V84（设备类型型号）、V85（类型扩展）；本地反馈建表/设备关联迁移顺延为V86，反馈排序迁移顺延为V87，所有接口与类型编号保持不变。
+- 已在本机执行旧反馈V83/V84的环境，应先停止旧后端、备份数据库，再仅将这两条已知脚本的Flyway历史对齐至V86/V87，并核对脚本、校验和、表结构与业务数据，最后执行远端设备V83～V85。不可直接重跑反馈建表或使用全局repair覆盖其他历史。
+- 下文11月20日开发记录中的反馈V83/V84指合并前编号，发布使用V86/V87。
+- 2026-11-23已在本机完成备份、空库及原数据副本验证后对齐：只调整两条已知反馈迁移历史，执行3份设备迁移，86份迁移校验通过；122张原业务表的既有字段和值保持一致。此记录仅说明该本机环境已对齐，其他环境仍需按自身历史执行检查。
+
 ## 2026-11-20 反馈分类排序与表驱动维护
 
 - V84仅将`feedback_type.id=5`的`sort_no`调整为35，不修改已执行的V83。统一顺序为产品建议、Bug问题、功能诉求、设备支持、其他，类型编号保持不变。
@@ -946,17 +953,34 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
 | GET /api/v1/devices/{id}/sync-logs?limit=10 | C 端登录 | 本人设备近 N 次同步流水（默认 10，最大 50）；按时间倒序；他人设备 id 业务拒绝 |
 
-绑定请求体：`{ deviceSn, provider, deviceName? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceStatus, lastSyncAt, bound }`（bound 恒为 true，表示归属当前用户）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
+绑定请求体：`{ deviceSn, provider, deviceName?, deviceCategory?, deviceModel? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceCategory?, deviceModel?, deviceStatus, lastSyncAt, bound, cloudLinked }`（bound 恒为 true；deviceCategory 闭集 CGM/BGM/PUMP/PEN/BAND/WATCH/RING/HUB/SCALE/BP/OXIMETER/OTHER 可空；deviceModel 可空；cloudLinked 表示已关联有效厂商云授权，首期仅 HUAWEI；响应不含 token）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
+
+## 华为健康云授权与拉取（首期）
+
+服务端持有华为 OAuth 应用凭证与用户 token（表 device_cloud_credential，token 应用层加密）。小程序不持有厂商密钥。HUAWEI_CLOUD_ENABLED 未开启或未配置凭证时，下列接口业务拒绝，不影响 POST /api/v1/device/glucose-sync 演示推送。
+
+| 方法与路径 | 权限 | 说明 |
+| --- | --- | --- |
+| GET /api/v1/devices/cloud/huawei/authorize-url | C 端登录 | 可选 deviceId；返回 { authorizeUrl, state } |
+| GET /api/v1/devices/cloud/huawei/callback | 匿名（华为回调） | code + state；换 token 后 302 回跳小程序 |
+| GET /api/v1/devices/{id}/cloud-auth | C 端登录 | { linked, expiresAt, scopes? } |
+| DELETE /api/v1/devices/{id}/cloud-auth | C 端登录 | 撤销云授权 |
+| POST /api/v1/devices/cloud-pull | C 端登录 | { deviceId? }；服务端拉 samplePoints 后复用适配器入库；同用户+设备最短间隔 60s |
+
+cloud-pull 成功：{ provider, items, devices? }（items 同 SyncResponse；devices 为按设备汇总可选列表）。
 
 ## 管理端设备档案
 
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
-| GET /admin/v1/devices | device:manage | 分页查询 |
-| POST /admin/v1/devices | device:manage | 创建 |
-| PUT /admin/v1/devices/{id} | device:manage | 更新 |
+| GET /admin/v1/devices | device:manage | 分页；可选 keyword、deviceStatus、provider、deviceCategory、bound、cloudLinked；列表项含 deviceCategory、deviceModel、cloudLinked、syncHealth（OK/NEVER/STALE，48h）、createdAt |
+| POST /admin/v1/devices | device:manage | 创建；可选 deviceCategory、deviceModel |
+| PUT /admin/v1/devices/{id} | device:manage | 更新名称/厂商/类型/型号/绑定用户 |
 | PUT /admin/v1/devices/{id}/status | device:manage | 启用/禁用 |
 | DELETE /admin/v1/devices/{id} | device:manage | 逻辑删除 |
+| GET /admin/v1/devices/{id}/sync-logs?limit=20 | device:manage | 近 N 次同步流水（默认 20，最大 50） |
+| GET /admin/v1/devices/{id}/cloud-auth | device:manage | { linked, expiresAt, scopes?, vendorSubjectMasked? }；无 token |
+| DELETE /admin/v1/devices/{id}/cloud-auth | device:manage | 撤销云授权 |
 
 ## 服务器资源监控（2026-10-22）
 

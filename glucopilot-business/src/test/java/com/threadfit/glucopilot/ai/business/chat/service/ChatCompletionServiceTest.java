@@ -7,7 +7,9 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.client.AiChatClientRegistry;
 import com.threadfit.glucopilot.ai.model.runtime.ModelCallUsage;
 import com.threadfit.glucopilot.ai.scene.SceneCode;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyPolicy;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyTestSupport;
+import com.threadfit.glucopilot.ai.support.lock.InMemoryLeaseGuard;
 import com.threadfit.glucopilot.ai.memory.service.ChatSummaryService;
 import com.threadfit.glucopilot.ai.support.TokenEstimator;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
@@ -106,8 +108,10 @@ class ChatCompletionServiceTest {
             mock(com.threadfit.glucopilot.ai.memory.service.UserChatMemoryService.class);
     private final ChatContextRecorder chatContextRecorder = mock(ChatContextRecorder.class);
 
-    /** 真实的单飞保护（不是 mock）：用例要断言"done 事件到达时锁已经放开"。 */
-    private final ChatRoundGuard roundGuard = new ChatRoundGuard();
+    /** 真实的单飞保护（不是 mock）：用例要断言"done 事件到达时租约已经还回"。 */
+    private final InMemoryLeaseGuard leaseGuard = new InMemoryLeaseGuard();
+
+    private final AiConcurrencyPolicy concurrency = AiConcurrencyTestSupport.policy(leaseGuard);
 
     private ChatCompletionService service;
 
@@ -115,7 +119,7 @@ class ChatCompletionServiceTest {
     void setUp() {
         service = new ChatCompletionServiceImpl(registry, chatMessageMapper, chatSessionService,
                 chatMessageService, ownedMediaResolver, visionAnalyzer, new EnglishPreambleGuard(),
-                roundGuard, new JsonUtils(new ObjectMapper()), promptTemplateService,
+                concurrency, new JsonUtils(new ObjectMapper()), promptTemplateService,
                 toolRegistry, new TokenEstimator(), chatSummaryService,
                 userChatMemoryService, chatContextRecorder);
         when(promptTemplateService.systemPrompt(any())).thenReturn("system prompt");
@@ -202,7 +206,7 @@ class ChatCompletionServiceTest {
         assertEquals("error", events.get(1).event());
         assertTrue(payload(events.get(1)).contains("\"code\":50000"), payload(events.get(1)));
         // 错误事件到达客户端时执行权必须已放开，否则用户点"重试"会收到"正在生成中"
-        assertEquals(0, roundGuard.inFlightCount(), "error 事件发出时执行权必须已经释放");
+        assertEquals(0, leaseGuard.held("ai:round:cluster"), "error 事件发出时集群名额必须已经释放");
 
         verify(chatMessageService).appendAssistantMessage(eq(USER_ID), eq(SESSION_ID), eq(TARGET_MSG_ID),
                 eq("部分内容"), anyString(), any(),
@@ -350,8 +354,8 @@ class ChatCompletionServiceTest {
         BizException ex = assertThrows(BizException.class,
                 () -> service.complete(USER_ID, SESSION_ID, request()));
 
-        assertEquals(ErrorCode.BIZ_REJECTED, ex.getErrorCode());
-        assertEquals("这一轮正在生成中，请稍后再试", ex.getMessage());
+        assertEquals(ErrorCode.CONFLICT, ex.getErrorCode());
+        assertEquals("这一条正在生成中，请 3 秒后再试", ex.getMessage());
         verify(registry, times(1)).textClient();
     }
 
@@ -364,7 +368,7 @@ class ChatCompletionServiceTest {
 
         // 关键：done 到达时就该放开——doFinally 是"先传播 onComplete 再执行回调"，
         // 只靠它会让"收到 done 立刻重发"偶发被判正在生成中（CI 上曾稳定复现）
-        assertEquals(0, roundGuard.inFlightCount(), "done 事件发出时执行权必须已经释放");
+        assertEquals(0, leaseGuard.held("ai:round:cluster"), "done 事件发出时集群名额必须已经释放");
 
         // 第二轮不应再抛"正在生成中"（此时会因为 mock 的幂等回查返回 null 而正常开流）
         assertNotNull(service.complete(USER_ID, SESSION_ID, request()));

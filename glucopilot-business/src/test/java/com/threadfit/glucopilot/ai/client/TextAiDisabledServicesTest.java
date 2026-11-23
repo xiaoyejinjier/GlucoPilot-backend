@@ -9,7 +9,7 @@ import com.threadfit.glucopilot.ai.memory.mapper.ChatUserMemoryMapper;
 import com.threadfit.glucopilot.ai.memory.service.impl.ChatSummaryServiceImpl;
 import com.threadfit.glucopilot.ai.memory.service.impl.UserChatMemoryServiceImpl;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyPolicy;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.util.JsonUtils;
 import org.junit.jupiter.api.Test;
@@ -24,7 +24,7 @@ class TextAiDisabledServicesTest {
     @Test
     void memoryServicesStartWithoutModelAndKeepSelfServiceAvailable() {
         Executor executor = mock(Executor.class);
-        ChatRoundGuard guard = mock(ChatRoundGuard.class);
+        AiConcurrencyPolicy guard = mock(AiConcurrencyPolicy.class);
         ChatUserMemoryMapper mapper = mock(ChatUserMemoryMapper.class);
         when(mapper.selectList(any())).thenReturn(List.of());
         // listOwnForUser 走 selectPage：不给桩会拿到 null，getRecords() 直接 NPE
@@ -47,7 +47,7 @@ class TextAiDisabledServicesTest {
                 return registry;
             })
             .withBean(JsonUtils.class, () -> mock(JsonUtils.class))
-            .withBean(ChatRoundGuard.class, () -> guard)
+            .withBean(AiConcurrencyPolicy.class, () -> guard)
             .withBean("chatSummaryExecutor", Executor.class, () -> executor)
             .withUserConfiguration(AiChatClientConfig.class, ChatSummaryServiceImpl.class,
                     UserChatMemoryServiceImpl.class)

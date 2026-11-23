@@ -22,11 +22,38 @@ public final class AdminDeviceDtos {
         private String deviceSn;
         private String deviceName;
         private String provider;
+        private String deviceCategory;
+        private String deviceModel;
         private String userId;
         private String userMasked;
         private Integer deviceStatus;
         private LocalDateTime lastSyncAt;
         private LocalDateTime createdAt;
+        /** 是否关联有效厂商云授权 */
+        private Boolean cloudLinked;
+        /** OK / NEVER / STALE（超过 48h 或未同步中 STALE 与 NEVER 区分） */
+        private String syncHealth;
+    }
+
+    @Data
+    @Builder
+    public static class SyncLogItem {
+        private String id;
+        private String provider;
+        private Integer sampleCount;
+        private Integer createdCount;
+        private String remark;
+        private LocalDateTime syncedAt;
+    }
+
+    @Data
+    @Builder
+    public static class CloudAuthStatus {
+        private Boolean linked;
+        private LocalDateTime expiresAt;
+        private String scopes;
+        /** 脱敏后的厂商侧主体，永不回传 token */
+        private String vendorSubjectMasked;
     }
 
     @Data
@@ -39,6 +66,10 @@ public final class AdminDeviceDtos {
         private String deviceName;
         @Size(max = 32)
         private String provider;
+        @Size(max = 32)
+        private String deviceCategory;
+        @Size(max = 64)
+        private String deviceModel;
         private Long userId;
     }
 
@@ -49,6 +80,10 @@ public final class AdminDeviceDtos {
         private String deviceName;
         @Size(max = 32)
         private String provider;
+        @Size(max = 32)
+        private String deviceCategory;
+        @Size(max = 64)
+        private String deviceModel;
         private Long userId;
     }
 

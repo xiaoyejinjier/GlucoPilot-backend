@@ -1,13 +1,13 @@
 package com.threadfit.glucopilot.ai.tool.runtime;
 
+import com.threadfit.glucopilot.ai.config.properties.AiConcurrencyProperties;
+import com.threadfit.glucopilot.ai.support.lock.AiCacheStore;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -23,6 +23,11 @@ import java.util.Optional;
  *
  * <p><b>只做去重，不做限流</b>：调用次数上限仍由框架的 {@code spring.ai.tools.limits.*} 负责，
  * 这里若再写一套计数器，两处上限会互相打架（见 {@link AiToolRegistry} 的约定）。
+ *
+ * <h2>为什么从本地 LRU 换成 Redis 小缓存</h2>
+ * 原来每个实例各存一份：用户在两台机器上聊同一个会话，第二台机器上的"刚查过"就丢了，
+ * 模型会再查一遍；反过来，实例重启也会把缓存清空。现在落到共享缓存里，
+ * 会话维度天然对齐，也不需要自己维护 LRU 与过期清理——TTL 交给 Redis。
  */
 @Slf4j
 @Component
@@ -31,39 +36,41 @@ public class ToolRepeatGuard {
     /** 结果缓存时长：超过就重新执行。 */
     static final Duration TTL = Duration.ofMinutes(30);
 
-    /** 每个会话最多记多少条（LRU 淘汰）。 */
-    static final int MAX_ENTRIES_PER_SESSION = 16;
-
-    /** 最多同时记多少个会话（LRU 淘汰，防止内存随用户数无限增长）。 */
-    static final int MAX_SESSIONS = 512;
-
     /** 超过这个长度的结果不缓存：大结果复制一份内存不划算，重复执行也贵不到哪去。 */
     static final int MAX_CACHEABLE_CHARS = 8_000;
 
-    /** 缓存时长（可注入，测试要用毫秒级的 TTL 验证过期）。 */
+    /** 一张会话一张表：{@code ai:toolrepeat:{sessionId}}，字段是「工具名 + 入参」。 */
+    private static final String KEY_PREFIX = "ai:toolrepeat:";
+
+    private final AiCacheStore cacheStore;
+
     private final Duration ttl;
 
+    /**
+     * 退化形态：没有共享缓存时只在**本实例**内去重。
+     *
+     * <p>生产环境永远用容器注入的那个 Bean（带 Redis 小缓存）；这个构造器供单测与
+     * "只想验证判据、不想搭 Redis"的场景使用——它的行为与改造前完全一致。
+     */
     public ToolRepeatGuard() {
-        this(TTL);
+        this(new com.threadfit.glucopilot.ai.support.lock.InMemoryCacheStore(), TTL);
     }
 
-    ToolRepeatGuard(Duration ttl) {
+    @Autowired
+    public ToolRepeatGuard(AiCacheStore cacheStore, AiConcurrencyProperties properties) {
+        this(cacheStore, Duration.ofMinutes(Math.max(properties.getToolCacheMinutes(), 1)));
+    }
+
+    ToolRepeatGuard(AiCacheStore cacheStore, Duration ttl) {
+        this.cacheStore = cacheStore;
         this.ttl = ttl;
     }
-
-    private final Map<Long, SessionCache> sessions =
-            new LinkedHashMap<>(16, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<Long, SessionCache> eldest) {
-                    return size() > MAX_SESSIONS;
-                }
-            };
 
     /** 去重键：会话 + 工具名 + 规范化后的入参。 */
     public record Key(long sessionId, String toolName, String input) {
 
-        /** 会话内的键：会话 id 已经作为外层 map 的键，这里不再重复。 */
-        String cacheKey() {
+        /** 会话内的字段名：会话 id 已经是表名的一部分，这里不再重复。 */
+        String field() {
             return toolName + '\u0000' + input;
         }
     }
@@ -75,21 +82,7 @@ public class ToolRepeatGuard {
      * @return 上次的结果（可能为空列表以外的任何字符串）
      */
     public Optional<String> recall(Key key) {
-        synchronized (sessions) {
-            SessionCache cache = sessions.get(key.sessionId());
-            if (cache == null) {
-                return Optional.empty();
-            }
-            Entry entry = cache.get(key.cacheKey());
-            if (entry == null) {
-                return Optional.empty();
-            }
-            if (System.nanoTime() - entry.savedAtNanos() > ttl.toNanos()) {
-                cache.remove(key.cacheKey());
-                return Optional.empty();
-            }
-            return Optional.of(entry.result());
-        }
+        return cacheStore.get(KEY_PREFIX + key.sessionId(), key.field());
     }
 
     /**
@@ -102,17 +95,12 @@ public class ToolRepeatGuard {
         if (result == null || result.length() > MAX_CACHEABLE_CHARS) {
             return;
         }
-        synchronized (sessions) {
-            sessions.computeIfAbsent(key.sessionId(), id -> new SessionCache())
-                    .put(key.cacheKey(), new Entry(result, System.nanoTime()));
-        }
+        cacheStore.put(KEY_PREFIX + key.sessionId(), key.field(), result, ttl);
     }
 
-    /** 清空某会话的缓存（会话结束时调用；未接入也不影响正确性，只是多留一会儿内存）。 */
+    /** 清空某会话的缓存（会话结束时调用；未接入也不影响正确性，只是多留一会儿缓存）。 */
     public void forget(long sessionId) {
-        synchronized (sessions) {
-            sessions.remove(sessionId);
-        }
+        cacheStore.deleteAll(KEY_PREFIX + sessionId);
     }
 
     /**
@@ -132,83 +120,6 @@ public class ToolRepeatGuard {
             return;
         }
         String prefix = toolName + '\u0000';
-        synchronized (sessions) {
-            SessionCache cache = sessions.get(sessionId);
-            if (cache == null) {
-                return;
-            }
-            cache.removeIf(key -> key.startsWith(prefix));
-        }
-    }
-
-    /** 当前缓存的会话数（测试与观测用）。 */
-    public int sessionCount() {
-        synchronized (sessions) {
-            return sessions.size();
-        }
-    }
-
-    /** 某个会话缓存的条目数（测试用）。 */
-    public int entryCount(long sessionId) {
-        synchronized (sessions) {
-            SessionCache cache = sessions.get(sessionId);
-            return cache == null ? 0 : cache.size();
-        }
-    }
-
-    /** 淘汰过期条目（不必定时调用：recall 命中过期即删；这里给测试与运维留一个显式入口）。 */
-    public void evictExpired() {
-        long now = System.nanoTime();
-        long ttlNanos = ttl.toNanos();
-        synchronized (sessions) {
-            Iterator<Map.Entry<Long, SessionCache>> it = sessions.entrySet().iterator();
-            while (it.hasNext()) {
-                SessionCache cache = it.next().getValue();
-                cache.entries.values().removeIf(entry -> now - entry.savedAtNanos() > ttlNanos);
-                if (cache.isEmpty()) {
-                    it.remove();
-                }
-            }
-        }
-    }
-
-    private record Entry(String result, long savedAtNanos) {
-    }
-
-    /** 单个会话的 LRU 缓存。 */
-    private static final class SessionCache {
-
-        private final LinkedHashMap<String, ToolRepeatGuard.Entry> entries =
-                new LinkedHashMap<>(16, 0.75f, true) {
-                    @Override
-                    protected boolean removeEldestEntry(Map.Entry<String, ToolRepeatGuard.Entry> eldest) {
-                        return size() > MAX_ENTRIES_PER_SESSION;
-                    }
-                };
-
-        Entry get(String cacheKey) {
-            return entries.get(cacheKey);
-        }
-
-        void put(String cacheKey, Entry entry) {
-            entries.put(cacheKey, entry);
-        }
-
-        void remove(String cacheKey) {
-            entries.remove(cacheKey);
-        }
-
-        /** 按缓存键前缀批量作废（写工具改了底层数据后，只作废受影响的那一个工具的缓存）。 */
-        void removeIf(java.util.function.Predicate<String> predicate) {
-            entries.keySet().removeIf(predicate);
-        }
-
-        int size() {
-            return entries.size();
-        }
-
-        boolean isEmpty() {
-            return entries.isEmpty();
-        }
+        cacheStore.deleteIf(KEY_PREFIX + sessionId, field -> field.startsWith(prefix));
     }
 }

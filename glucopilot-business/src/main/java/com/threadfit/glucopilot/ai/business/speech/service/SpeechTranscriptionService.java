@@ -3,6 +3,7 @@ import com.threadfit.glucopilot.ai.business.speech.dto.SpeechDtos;
 import com.threadfit.glucopilot.ai.business.speech.config.SpeechProperties;
 
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyPolicy;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,28 +20,35 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
 
-/** 仅转写短录音，不执行聊天、工具调用或媒体持久化。 */
+/**
+ * 仅转写短录音，不执行聊天、工具调用或媒体持久化。
+ *
+ * <h2>并发控制为什么不再用本地的 Set + Semaphore</h2>
+ * 原来「每人一条 + 全局 8 条」是两把进程内原语。多实例部署时它们各管各的：
+ * 两个人分别连着实例 A、B，就能同时各占一个"全局唯一"的名额，实际并发翻倍、
+ * 上游语音服务被打爆。现在两把闸门都在 {@link AiConcurrencyPolicy#acquireSpeech} 里，
+ * 由 Redis 的许可信号量统一分配；Redis 不可用时自动退回进程内实现（见 {@code AiConcurrencyConfig}）。
+ */
 @Service
 public class SpeechTranscriptionService {
     private static final int MAX_AUDIO_BYTES = 512 * 1024;
     private final SpeechProperties properties;
     private final AIProperties aiProperties;
+    private final AiConcurrencyPolicy concurrency;
     private final RestClient client;
-    private final Set<Long> inFlight = ConcurrentHashMap.newKeySet();
-    private final Semaphore capacity = new Semaphore(8);
 
     @Autowired
-    public SpeechTranscriptionService(SpeechProperties properties, AIProperties aiProperties) {
-        this(properties, aiProperties, createClient());
+    public SpeechTranscriptionService(SpeechProperties properties, AIProperties aiProperties,
+                                      AiConcurrencyPolicy concurrency) {
+        this(properties, aiProperties, concurrency, createClient());
     }
 
-    SpeechTranscriptionService(SpeechProperties properties, AIProperties aiProperties, RestClient client) {
+    SpeechTranscriptionService(SpeechProperties properties, AIProperties aiProperties,
+                               AiConcurrencyPolicy concurrency, RestClient client) {
         this.properties = properties;
         this.aiProperties = aiProperties;
+        this.concurrency = concurrency;
         this.client = client;
     }
 
@@ -59,10 +67,9 @@ public class SpeechTranscriptionService {
         if (!properties.isEnabled() || key == null || key.isBlank() || key.contains("${")) {
             throw new BizException(ErrorCode.INTERNAL_ERROR, "语音识别尚未配置，请配置百炼语音密钥后重试");
         }
-        if (!inFlight.add(userId)) throw new BizException(ErrorCode.TOO_MANY_REQUESTS, "正在识别上一段语音，请稍候");
-        boolean acquired = capacity.tryAcquire();
+        // 两把租约（个人 1 条 + 集群 8 条）由策略层一次拿全：拿不到就抛 429，不会漏放也不会漏收
+        String token = concurrency.acquireSpeech(userId);
         try {
-            if (!acquired) throw new BizException(ErrorCode.TOO_MANY_REQUESTS, "语音识别繁忙，请稍后重试");
             var body = Map.of(
                     "model", properties.getModel(), "stream", false,
                     "messages", List.of(Map.of("role", "user", "content", List.of(Map.of(
@@ -87,8 +94,7 @@ public class SpeechTranscriptionService {
         } catch (RuntimeException ex) {
             throw new BizException(ErrorCode.INTERNAL_ERROR, "语音识别连接失败或超时，请稍后重试");
         } finally {
-            if (acquired) capacity.release();
-            inFlight.remove(userId);
+            concurrency.releaseSpeech(userId, token);
         }
     }
 

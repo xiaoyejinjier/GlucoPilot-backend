@@ -6,10 +6,12 @@ import com.baomidou.mybatisplus.core.toolkit.GlobalConfigUtils;
 import com.threadfit.glucopilot.common.mybatis.AuditMetaObjectHandler;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.exception.*;
+import com.threadfit.glucopilot.device.cloud.DeviceCloudCredentialService;
 import com.threadfit.glucopilot.device.controller.UserDeviceController;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
 import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
+import org.mockito.Mockito;
 import org.apache.ibatis.mapping.Environment;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
@@ -31,14 +33,21 @@ class UserDeviceServiceTest {
         jdbc=new JdbcTemplate(ds); tx=new TransactionTemplate(new DataSourceTransactionManager(ds));
         String schema;try(var in=getClass().getResourceAsStream("/db/migration/V25__user_device.sql")){schema=new String(Objects.requireNonNull(in).readAllBytes(),StandardCharsets.UTF_8);}
         int start=schema.indexOf("CREATE TABLE user_device (");schemaConnection=ds.getConnection();
-        try(var statement=schemaConnection.createStatement()){statement.execute(schema.substring(start,schema.indexOf(';',start)).replace("CONSTRAINT pk_id PRIMARY KEY","PRIMARY KEY"));}
+        try(var statement=schemaConnection.createStatement()){
+            statement.execute(schema.substring(start,schema.indexOf(';',start)).replace("CONSTRAINT pk_id PRIMARY KEY","PRIMARY KEY"));
+            statement.execute("ALTER TABLE user_device ADD COLUMN device_category VARCHAR(32) NULL");
+            statement.execute("ALTER TABLE user_device ADD COLUMN device_model VARCHAR(64) NULL");
+        }
         var config=new MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);
         GlobalConfigUtils.setGlobalConfig(config,new GlobalConfig().setDbConfig(new GlobalConfig.DbConfig()).setMetaObjectHandler(new AuditMetaObjectHandler()));
         config.setEnvironment(new Environment("test",new SpringManagedTransactionFactory(),ds));
         config.addMapper(UserDeviceMapper.class);
         config.addMapper(DeviceSyncLogMapper.class);
         var sqlSession=new SqlSessionTemplate(new MybatisSqlSessionFactoryBuilder().build(config));
-        service=new UserDeviceService(sqlSession.getMapper(UserDeviceMapper.class),sqlSession.getMapper(DeviceSyncLogMapper.class));
+        DeviceCloudCredentialService cloudCredentials=Mockito.mock(DeviceCloudCredentialService.class);
+        Mockito.when(cloudCredentials.linkedDeviceIds(Mockito.anyLong(),Mockito.anyList())).thenReturn(Set.of());
+        Mockito.when(cloudCredentials.findActiveByDevice(Mockito.anyLong(),Mockito.anyLong())).thenReturn(null);
+        service=new UserDeviceService(sqlSession.getMapper(UserDeviceMapper.class),sqlSession.getMapper(DeviceSyncLogMapper.class),cloudCredentials);
     }
     @AfterEach void cleanup() throws Exception {RequestContext.clear();try{jdbc.execute("DROP ALL OBJECTS");}finally{schemaConnection.close();}}
     DeviceDtos.BindRequest request(String sn){var r=new DeviceDtos.BindRequest();r.setDeviceSn(sn);r.setProvider("HUAWEI");r.setDeviceName("我的设备");return r;}
@@ -73,6 +82,15 @@ class UserDeviceServiceTest {
             gate.countDown();int successes=0;for(var task:tasks)if(task.get(10,TimeUnit.SECONDS))successes++;
             assertEquals(1,successes);assertEquals(1,service.listMine(2L).size()+service.listMine(3L).size());
         }finally{pool.shutdownNow();}
+    }
+    @Test void bindPersistsOptionalCategoryAndModel(){
+        var req=request("SN-CAT");req.setDeviceCategory("bgm");req.setDeviceModel(" Accu-Check ");
+        var item=tx.execute(s->service.bind(2L,req));
+        assertEquals("BGM",item.getDeviceCategory());
+        assertEquals("Accu-Check",item.getDeviceModel());
+        assertEquals("BGM",jdbc.queryForObject("SELECT device_category FROM user_device WHERE device_sn='SN-CAT'",String.class));
+        assertEquals("Accu-Check",jdbc.queryForObject("SELECT device_model FROM user_device WHERE device_sn='SN-CAT'",String.class));
+        assertEquals("BGM",service.listMine(2L).getFirst().getDeviceCategory());
     }
     @Test void realHttpBindingValidationAndAnonymousRejection() throws Exception {
         var mvc=MockMvcBuilders.standaloneSetup(new UserDeviceController(service)).setControllerAdvice(new GlobalExceptionHandler()).build();

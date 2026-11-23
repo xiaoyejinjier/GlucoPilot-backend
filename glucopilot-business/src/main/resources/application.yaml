@@ -187,6 +187,39 @@ ai:
     # 只拦自动抽取；用户当轮亲口说的（save_long_term_memory 工具）不受影响。0 = 关闭。
     deleted-key-cooldown-days: 30
 
+  # AI 并发闸门：多实例共享的「互斥 / 限速 / 去重合并 / 定时任务独占」。
+  #
+  # backend 有两个值：
+  #   redisson（默认）—— 用 Redis 原语，多实例真正互斥；
+  #   memory         —— 只用进程内实现，供单测与没有 Redis 的环境。
+  # 连不上 Redis 时不会整体报错：degrade-on-redis-error=true 会退回进程内实现并打 WARN
+  # （代价是退化成单实例语义，但绝不把"Redis 抖动"升级成"用户发不了消息"）。
+  #
+  # ⚠️ 改速率阈值必须删对应的 Redis 键：RRateLimiter.trySetRate 只在键不存在时生效，
+  #    把 chat-per-minute 从 20 调到 30 之后老键仍按 20 走。相关键：ai:rate:*、ai:quota:*。
+  concurrency:
+    backend: redisson
+    degrade-on-redis-error: true
+    # 单条助手消息的生成权租约：正常一轮 60 秒内结束，给 90 秒留余量；
+    # 过期即视为持有者已死（进程被 kill 时靠它自愈）。
+    round-lease-seconds: 90
+    # 每用户同时进行的流式对话上限：一个人开太多 SSE 会长期占用线程与连接。
+    stream-permits-per-user: 2
+    stream-lease-seconds: 90
+    # 集群同时生成上限：单实例并发太高时一起打上游会触发限流，宁可排队失败也别整体超时。
+    cluster-round-permits: 64
+    # 每分钟问答次数与每日问答轮数：both 429，区分"手太快"和"今天用完了"。
+    chat-per-minute: 20
+    daily-chat-turns: 200
+    # 语音识别：全局 8 路（上游 ASR 并发有限）+ 每人 1 路，识别长音频时租约要够长。
+    speech-cluster-permits: 8
+    speech-lease-seconds: 180
+    # 后台任务的合并标记与独占租约时长：摘要/抽取跑完会主动清标记，这里只是"进程猝死"的兜底。
+    job-dedup-seconds: 600
+    # 工具结果缓存：同一会话同一工具同一入参在多长时间内复用。
+    tool-cache-minutes: 30
+    tool-cache-max-entries: 16
+
   # 医疗安全硬拦截：命中敏感词的请求不会发给模型，直接返回固定话术。
   # 提示词里的合规约束是软约束（模型可能不遵守），这里是硬约束。
   # 词表保持聚焦：不要放单字「药」，否则「二甲双胍能吃吗」这类正常科普问题也会被拦掉。
@@ -454,3 +487,19 @@ payments:
       notify-url: ${ALIPAY_SANDBOX_NOTIFY_URL:}
       transfer-scene-name: ${ALIPAY_SANDBOX_TRANSFER_SCENE_NAME:业务结算}
       transfer-scene-info-type: ${ALIPAY_SANDBOX_TRANSFER_SCENE_INFO_TYPE:结算款项名称}
+
+# 厂商云拉取（首期华为）。密钥与开关仅来自环境变量，禁止写入真实值到仓库。
+device:
+  cloud:
+    token-aes-key: ${DEVICE_CLOUD_TOKEN_AES_KEY:}
+    pull-min-interval-seconds: ${DEVICE_CLOUD_PULL_MIN_INTERVAL_SECONDS:60}
+    huawei:
+      enabled: ${HUAWEI_CLOUD_ENABLED:false}
+      client-id: ${HUAWEI_HEALTH_CLIENT_ID:}
+      client-secret: ${HUAWEI_HEALTH_CLIENT_SECRET:}
+      redirect-uri: ${HUAWEI_HEALTH_REDIRECT_URI:}
+      authorize-base: ${HUAWEI_HEALTH_AUTHORIZE_BASE:https://oauth-login.cloud.huawei.com/oauth2/v3/authorize}
+      token-url: ${HUAWEI_HEALTH_TOKEN_URL:https://oauth-login.cloud.huawei.com/oauth2/v3/token}
+      api-base: ${HUAWEI_HEALTH_API_BASE:https://health-api.cloud.huawei.com/healthkit/v2}
+      scopes: ${HUAWEI_HEALTH_SCOPES:openid https://www.huawei.com/healthkit/bloodglucose.read}
+      return-url: ${MINIPROGRAM_CLOUD_AUTH_RETURN_URL:}

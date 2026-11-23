@@ -11,7 +11,7 @@ import com.threadfit.glucopilot.ai.business.chat.mapper.ChatMessageMapper;
 import com.threadfit.glucopilot.ai.config.properties.AIProperties;
 import com.threadfit.glucopilot.ai.routing.SceneModelResolver;
 import com.threadfit.glucopilot.ai.prompt.service.AiPromptTemplateService;
-import com.threadfit.glucopilot.ai.support.ChatRoundGuard;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyTestSupport;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.exception.GlobalExceptionHandler;
@@ -93,7 +93,7 @@ class UserChatMemorySelfServiceTest {
                 mock(SceneModelResolver.class),
                 aiProperties,
                 new JsonUtils(new ObjectMapper()),
-                new ChatRoundGuard(),
+                AiConcurrencyTestSupport.policy(),
                 Runnable::run);
         RequestContext.clear();
         RequestContext.setUserId(USER_ID);
@@ -457,7 +457,7 @@ class UserChatMemorySelfServiceTest {
                 mock(SceneModelResolver.class),
                 aiProperties,
                 new JsonUtils(new ObjectMapper()),
-                new ChatRoundGuard(),
+                AiConcurrencyTestSupport.policy(),
                 Runnable::run);
     }
 

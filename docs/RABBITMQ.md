@@ -339,7 +339,9 @@ $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::AS
     日志 `任务已投递 jobId=OCR_RECOGNIZE:1` → 消费者 `countPendingTask`/`claimTask` →
     `OCR_GLUCOSE` 走 `qwen3-vl-plus`（`ai_call_log` 里 `prompt=575 completion=44`）→
     `ocr_task.task_status=2`、`ocr_result_json.suggestedValue=7.2`；队列 consumers=2、messages 回 0。
-- 批次 4 是翻译的补丁（拒绝时回 PENDING + 扫过期租约），不换 MQ。
+- 批次 4 是翻译的补丁（拒绝时回 PENDING + 扫过期租约），**不换 MQ**：翻译的「攒批」本身就是成本优化
+  （同类 8 条一起翻），逐条投递给消费者会把批打散、模型调用翻几倍。补丁详见
+  `docs/AI-模块实现说明.md` §13.4.1；这里只需记住它与本文件的队列无关。
 
 ### 9.7 两个已踩过的运行期坑（务必先读）
 

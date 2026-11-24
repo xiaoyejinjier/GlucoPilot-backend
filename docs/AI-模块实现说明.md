@@ -1377,6 +1377,18 @@ UPDATE ... SET ai_status='DONE', is_hidden = ?          -- REJECT→1，PASS/ERR
 - **提示词版本进缓存键**：`source_hash = SHA-256(CACHE_VERSION + promptVersion() + 源文本)`。改一版提示词就等于全量失效重翻，否则旧译文会永远留在库里；`content_localization.prompt_ver`（V54 新增）是为了事后能回答「这条译文是哪版提示词产的」。
 - **必须 `.messages(...)` 不能 `.user(...)`**：`ChatClient.user(String)` 会把入参当模板渲染，而翻译的入参是 `{"title":"…"}` 这样的 JSON——花括号一进来就被 StringTemplate 当变量表达式。`SystemMessage` + `UserMessage` 是唯一安全写法，审核链路同理。
 
+#### 13.4.1 队列满不等于翻不了（2026-11-24 修正）
+
+翻译是**请求驱动**的：没有客户端请求就没有 Job，`LocalizationService` 自己只有 8 个线程的池。原来的实现有两个 bug，都会让内容**永久停在 PENDING**：
+
+| 漏洞 | 原行为 | 现在 |
+| --- | --- | --- |
+| 池满 | `catch (RejectedExecutionException)` 直接 `fail(...)` → 行变 `FAILED`，客户端看到失败就放弃，只有显式 `retry:true` 才会再试 | **改约**：保持 `PENDING`、清 `lease_token`、`lease_until = now + 5s`（`DEFER_SECONDS`），5 秒后任何一次请求都能接手。为什么是 5 秒：大于 0 才不会让同一请求循环反复「认领—拒绝」空转，小于 15 秒是因为「排队」不等于「翻不了」 |
+| 认领后进程崩溃 | 行停在 `PENDING + lease_token`，虽然 `claim` 的条件允许过期租约被接手，但没人知道它卡着 | `@Scheduled(fixedDelay = 60s, initialDelay = 30s) sweepExpiredLeases()` 每分钟清掉「`lease_until` 已过期但 token 还挂着」的行并 INFO 计数，让积压**在日志里可见**；崩溃进程残留的 token 也不会再被 `renew` 心跳续上 |
+
+诚实的边界：`sweepExpiredLeases()` **不代替客户端重翻**——服务端手上没有源文（源文要按查看者身份过 `community.requireReadable`），做无授权的后台重读会把「作者撤回/文章下线」绕过。所以真正的重翻仍由下一次请求触发，巡检只负责「让卡住的行可被接手 + 让运维看得见」。
+
+
 ---
 
 ## 14. 后台管理面：三套「表 + 服务 + 页面」

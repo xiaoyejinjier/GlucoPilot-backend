@@ -322,8 +322,23 @@ $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::AS
     执行走 `UserChatMemoryService.extractNow`（单飞标记 + 窗口抽取，与异步路径同一份实现）。
   - 兜底：`MemoryExtractReconcileSource`（宽限 1 分钟、按数据库时钟）。
   - 漏做的代价与审核不同：审核漏了只是晚几秒，**记忆漏了是永久丢失**（用户下次聊天那些忌口就不在），所以补扫在这里不是可选项。
-- 批次 3 接入 OCR（处理器实现 `JobHandler` + 一个 `JobReconcileSource`，
-  并加 `@RabbitListener(queues = ..., containerFactory = "jobContainerFactory", concurrency = ...)`）。
+- **批次 3（已完成）**：血糖 OCR 接入，并补上原本缺失的「卡住任务回收」。
+  - 派发：`OcrTaskJobs.publish(userId, taskId)`——同样返回 boolean，队列关闭/发不出去时
+    调用方 `OcrTaskServiceImpl.create` 退回本地线程池（用户刚拍的照片不能因为 broker 抖动就没识别）。
+  - 消费：`OcrRecognizeListener`（`concurrency = 2`）→ `OcrRecognizeJobHandler`：
+    认领看 `countPendingTask`（还是 PENDING 才处理），执行走 `OcrTaskService.recognizeNow`。
+  - `recognizeNow` 的三件事：① `claimTask` 条件更新（`task_status=0 → 1`，0 行即放弃——RUNNING 不再
+    无条件覆盖，重复投递在这里挡掉）；② **用任务行上的 `user_id` 当 owner** 做媒体归属校验
+    （补扫信封里的 `userId` 可能是空，不能拿它当真相）；③ 识别结果/失败原因照旧落库。
+  - 回收：`OcrReconcileSource` 每轮先 `requeueStaleRunning`（RUNNING 超 5 分钟 → 打回 PENDING 并写
+    marker「上次识别中断，正在自动重试」），再 `failStaleRunning`（同一个 marker 又超时 → 判 FAILED，
+    原因「识别多次中断，请重新上传图片」），最后才列 `PENDING` 且创建超 1 分钟的任务补投。
+    `ocr_task` 没有 attempt 列，**marker 就写在 `error_msg` 里**：回收本身会刷新 `gmt_modified`，
+    不能靠它判断是第几次。
+  - 验收实测：上传一张写着「7.2 mmol/L」的血糖图 → `POST /api/v1/ocr-tasks` →
+    日志 `任务已投递 jobId=OCR_RECOGNIZE:1` → 消费者 `countPendingTask`/`claimTask` →
+    `OCR_GLUCOSE` 走 `qwen3-vl-plus`（`ai_call_log` 里 `prompt=575 completion=44`）→
+    `ocr_task.task_status=2`、`ocr_result_json.suggestedValue=7.2`；队列 consumers=2、messages 回 0。
 - 批次 4 是翻译的补丁（拒绝时回 PENDING + 扫过期租约），不换 MQ。
 
 ### 9.7 两个已踩过的运行期坑（务必先读）
@@ -351,9 +366,27 @@ JVM 为 +08）。表现极具迷惑性：**审核跑完了、模型也扣了费�
 
 规矩：
 
-- 一切「与库里时间戳比较」的阈值都必须从 `CommunityModerationMapper.selectDbNow()`（`SELECT CURRENT_TIMESTAMP`）取；
+- 一切「与库里时间戳比较」的阈值都必须从 `selectDbNow()`（`SELECT CURRENT_TIMESTAMP`）取；
 - 回收僵尸时必须把 `ai_claimed_at` 一并置 `NULL`（补扫条件是 `ai_claimed_at IS NULL`，否则永久卡在待审）；
 - 单测用 H2 时两个时钟恰好一致，所以**这类 bug 只有真机才暴露**，联调时务必先造一条任务看落库。
+
+**②的续集：`gmt_create` 是应用时钟写的，`CURRENT_TIMESTAMP` 是会话时钟**
+
+2026-11-24 接 OCR 时又撞到同一族问题的另一半：`gmt_create`/`gmt_modified` 由
+`AuditMetaObjectHandler` 用 `LocalDateTime.now()`（JVM +08）填，而 `CURRENT_TIMESTAMP` 取的是
+**MySQL 会话时区**（服务器默认 UTC）。于是 OCR 补扫的 `gmt_create < dbNow - 1min`
+两侧差 8 小时、永远不成立：任务明明 PENDING、回收也把它打回了 PENDING，却一轮轮扫不到。
+
+根治办法是让两者同源——把会话时区掰到应用时区（`application.yaml` 的数据源 URL）：
+
+```text
+...&serverTimezone=Asia/Shanghai&connectionTimeZone=Asia/Shanghai&forceConnectionTimeZoneToSession=true
+```
+
+`serverTimezone` 只影响驱动怎么解释时间，**改不了会话时区**；必须加
+`forceConnectionTimeZoneToSession=true`，`SELECT CURRENT_TIMESTAMP` 才会跟 JVM 一起走 +08。
+注意这会让「历史上由数据库写入的 UTC 时间戳」与新写入的 +08 混在一张表里，
+升级时需要评估是否回填（本项目的处理：只影响僵尸判定与展示，未回填）。
 
 ### 9.8 自检
 

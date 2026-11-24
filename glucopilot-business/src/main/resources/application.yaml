@@ -45,7 +45,13 @@ spring:
 
   datasource:
     # 开发、测试和生产均连接团队统一部署的 MySQL；禁止在代码中写入服务器地址或密码。
-    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:sugar_health}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=${DB_SSL_ENABLED:false}
+    #
+    # connectionTimeZone / forceConnectionTimeZoneToSession（2026-11-24 补）：
+    #   应用侧的 gmt_create/gmt_modified 由 AuditMetaObjectHandler 用 LocalDateTime.now()（JVM 时区 +08）写入，
+    #   而 SQL 里的 CURRENT_TIMESTAMP 取的是**会话时区**（服务器默认 UTC）。两者混用会让「创建时间和当前时间」
+    #   差 8 小时——补扫 SQL `gmt_create < dbNow - 1min` 永远不成立，任务卡在 PENDING 没人处理（OCR 真机踩过）。
+    #   serverTimezone 只告诉驱动怎么解释时间，不会改会话时区；要改会话时区必须用这两个参数。
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:sugar_health}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&connectionTimeZone=Asia/Shanghai&forceConnectionTimeZoneToSession=true&allowPublicKeyRetrieval=true&useSSL=${DB_SSL_ENABLED:false}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver

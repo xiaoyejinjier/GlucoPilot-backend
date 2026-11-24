@@ -38,13 +38,28 @@ class OcrTaskServiceTest {
     private final JsonUtils jsonUtils = new JsonUtils(new ObjectMapper());
     private final IdempotencyStore idempotencyStore = mock(IdempotencyStore.class);
     private final Executor directExecutor = Runnable::run;
+    /** 返回 false = 队列没开，走本地线程池（本类的用例正是要覆盖这条降级路径）。 */
+    private final com.threadfit.glucopilot.ai.business.ocr.mq.OcrTaskJobs taskJobs =
+            mock(com.threadfit.glucopilot.ai.business.ocr.mq.OcrTaskJobs.class);
 
     private OcrTaskService service;
 
     @BeforeEach
     void setUp() {
         service = new OcrTaskServiceImpl(taskMapper, mediaFileService, visionAnalyzer,
-                jsonUtils, idempotencyStore, directExecutor);
+                jsonUtils, idempotencyStore, directExecutor, taskJobs);
+        when(taskJobs.publish(any(), any())).thenReturn(false);
+        // 认领：条件更新抢到任务（抢不到时整条链路应当直接返回，另有专门用例）
+        when(taskMapper.claimTask(any(), any())).thenReturn(1);
+        when(taskMapper.selectById(any())).thenAnswer(invocation -> {
+            OcrTask task = new OcrTask();
+            task.setId(invocation.getArgument(0));
+            task.setUserId(7L);
+            task.setMediaId(1001L);
+            task.setBizType(1);
+            task.setTaskStatus(CodeEnum.TaskStatus.RUNNING.getCode());
+            return task;
+        });
     }
 
     @Test
@@ -67,8 +82,8 @@ class OcrTaskServiceTest {
         assertEquals(CodeEnum.TaskStatus.PENDING.getCode(), created.getTaskStatus());
 
         ArgumentCaptor<OcrTask> updates = ArgumentCaptor.forClass(OcrTask.class);
-        verify(taskMapper, org.mockito.Mockito.times(2)).updateById(updates.capture());
-        OcrTask finished = updates.getAllValues().get(1);
+        verify(taskMapper, org.mockito.Mockito.times(1)).updateById(updates.capture());
+        OcrTask finished = updates.getAllValues().get(0);
         assertEquals(CodeEnum.TaskStatus.SUCCEEDED.getCode(), finished.getTaskStatus());
         OcrDtos.GlucoseResult result = jsonUtils.fromJson(finished.getOcrResultJson(), OcrDtos.GlucoseResult.class);
         assertEquals(new BigDecimal("6.2"), result.getSuggestedValue());
@@ -92,9 +107,9 @@ class OcrTaskServiceTest {
         service.create(request(1001L, 1), 7L);
 
         ArgumentCaptor<OcrTask> updates = ArgumentCaptor.forClass(OcrTask.class);
-        verify(taskMapper, org.mockito.Mockito.times(2)).updateById(updates.capture());
+        verify(taskMapper, org.mockito.Mockito.times(1)).updateById(updates.capture());
         OcrDtos.GlucoseResult result = jsonUtils.fromJson(
-                updates.getAllValues().get(1).getOcrResultJson(), OcrDtos.GlucoseResult.class);
+                updates.getAllValues().get(0).getOcrResultJson(), OcrDtos.GlucoseResult.class);
         assertNull(result.getSuggestedValue());
         assertTrue(result.getConfidence() <= 30);
     }

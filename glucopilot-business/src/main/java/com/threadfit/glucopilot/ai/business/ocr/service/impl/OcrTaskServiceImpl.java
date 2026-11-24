@@ -46,19 +46,23 @@ public class OcrTaskServiceImpl implements OcrTaskService {
     private final JsonUtils jsonUtils;
     private final IdempotencyStore idempotencyStore;
     private final Executor taskExecutor;
+    /** 任务队列的派发口；队列没开时返回 false，这里退回本地线程池。 */
+    private final com.threadfit.glucopilot.ai.business.ocr.mq.OcrTaskJobs taskJobs;
 
     public OcrTaskServiceImpl(OcrTaskMapper taskMapper,
                           MediaFileService mediaFileService,
                           VisionAnalyzer visionAnalyzer,
                           JsonUtils jsonUtils,
                           IdempotencyStore idempotencyStore,
-                          @Qualifier("ocrTaskExecutor") Executor taskExecutor) {
+                          @Qualifier("ocrTaskExecutor") Executor taskExecutor,
+                          com.threadfit.glucopilot.ai.business.ocr.mq.OcrTaskJobs taskJobs) {
         this.taskMapper = taskMapper;
         this.mediaFileService = mediaFileService;
         this.visionAnalyzer = visionAnalyzer;
         this.jsonUtils = jsonUtils;
         this.idempotencyStore = idempotencyStore;
         this.taskExecutor = taskExecutor;
+        this.taskJobs = taskJobs;
     }
 
     @Override
@@ -99,7 +103,10 @@ public class OcrTaskServiceImpl implements OcrTaskService {
             if (snapshotKey != null) {
                 idempotencyStore.complete(snapshotKey, created);
             }
-            taskExecutor.execute(() -> recognize(task.getId(), userId, media));
+            if (!taskJobs.publish(userId, task.getId())) {
+                // 队列没开或这一刻发不出去：退回本地线程池，至少还能出结果
+                taskExecutor.execute(() -> recognizeNow(task.getId(), userId));
+            }
             return created;
         } catch (RuntimeException ex) {
             if (snapshotKey != null) {
@@ -128,15 +135,34 @@ public class OcrTaskServiceImpl implements OcrTaskService {
         taskMapper.purgeByUserId(userId);
     }
 
-    private void recognize(Long taskId, Long userId, MediaFile media) {
-        updateStatus(taskId, userId, TaskStatus.RUNNING, null, null);
+    @Override
+    public void recognizeNow(Long taskId, Long userId) {
+        if (taskId == null) {
+            return;
+        }
+        // 条件更新抢任务：只有 PENDING 能被抢到，重复投递/并发消费者在这一步就被挡掉
+        if (taskMapper.claimTask(taskId, userId == null ? 0L : userId) == 0) {
+            log.debug("OCR 任务已被抢走或已出结果，跳过 taskId={}", taskId);
+            return;
+        }
+        OcrTask task = taskMapper.selectById(taskId);
+        if (task == null) {
+            return;
+        }
+        // 归属以任务行上的 user_id 为准：补扫出来的信封里 userId 可能为空
+        Long owner = task.getUserId();
+        MediaFile media = mediaFileService.findOwnedMedia(task.getMediaId(), owner, MediaBizType.GLUCOSE);
+        if (media == null) {
+            updateStatus(taskId, owner, TaskStatus.FAILED, null, "血糖图片不存在或不可用");
+            return;
+        }
         try {
             String modelOutput = visionAnalyzer.analyze(media, SceneCode.OCR_GLUCOSE, RECOGNIZE_INSTRUCTION);
             GlucoseResult result = normalize(parseModelResult(modelOutput));
-            updateStatus(taskId, userId, TaskStatus.SUCCEEDED, jsonUtils.toJson(result), null);
+            updateStatus(taskId, owner, TaskStatus.SUCCEEDED, jsonUtils.toJson(result), null);
         } catch (RuntimeException e) {
             log.error("血糖 OCR 识别失败 taskId={} mediaId={}", taskId, media.getId(), e);
-            updateStatus(taskId, userId, TaskStatus.FAILED, null, safeError(e));
+            updateStatus(taskId, owner, TaskStatus.FAILED, null, safeError(e));
         }
     }
 

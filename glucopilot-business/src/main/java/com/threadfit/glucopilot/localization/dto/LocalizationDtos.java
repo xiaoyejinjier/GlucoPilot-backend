@@ -10,7 +10,7 @@ public final class LocalizationDtos {
     private LocalizationDtos() {}
 
     public record Item(
-            @NotBlank @Pattern(regexp = "ARTICLE_PREVIEW|ARTICLE_BODY|PROFILE_NAME") String kind,
+            @NotBlank @Pattern(regexp = "ARTICLE_PREVIEW|ARTICLE_BODY|PROFILE_NAME|CONSULTATION_PREVIEW|CONSULTATION_DETAIL|CONSULTATION_REPORT") String kind,
             @NotBlank @Pattern(regexp = "[ub]?[1-9][0-9]{0,18}") String id) {}
 
     public record Request(

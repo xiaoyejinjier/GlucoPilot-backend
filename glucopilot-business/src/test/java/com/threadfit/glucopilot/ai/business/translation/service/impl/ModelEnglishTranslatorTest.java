@@ -151,6 +151,53 @@ class ModelEnglishTranslatorTest {
         assertEquals("translation@v1",new ModelEnglishTranslator(mock(AiChatClientRegistry.class),prompts,resolver,json).promptVersion());
     }
 
+    @Test void longBodyUsesAtMostTwoBatchesAtATimeAndKeepsParagraphOrder() {
+        var model = mock(ChatModel.class);
+        var active = new java.util.concurrent.atomic.AtomicInteger();
+        var peak = new java.util.concurrent.atomic.AtomicInteger();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var firstPair = new java.util.concurrent.CountDownLatch(2);
+        when(model.call(any(Prompt.class))).thenAnswer(invocation -> {
+            int running = active.incrementAndGet();
+            peak.accumulateAndGet(running, Math::max);
+            int call = calls.incrementAndGet();
+            try {
+                if (call <= 2) {
+                    firstPair.countDown();
+                    assertTrue(firstPair.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                }
+                Prompt prompt = invocation.getArgument(0);
+                var out = new LinkedHashMap<String, String>();
+                for (var entry : json.readTree(prompt.getInstructions().getLast().getText()).properties()) {
+                    String number = entry.getValue().asString().split(" ")[1];
+                    out.put(entry.getKey(), "Paragraph " + number + ": glucose 5.2 mmol/L.");
+                }
+                return new ChatResponse(List.of(new Generation(new AssistantMessage(json.writeValueAsString(out)))));
+            } finally {
+                active.decrementAndGet();
+            }
+        });
+        var paragraphs = new ArrayList<String>();
+        var expected = new ArrayList<String>();
+        for (int i = 0; i < 20; i++) {
+            paragraphs.add("段落 " + i + " 血糖 5.2 mmol/L。" + "中".repeat(1000));
+            expected.add("Paragraph " + i + ": glucose 5.2 mmol/L.");
+        }
+        String body = String.join("\n", paragraphs);
+        assertTrue(body.length() > 16000);
+        assertEquals(String.join("\n", expected), translator(model).translate("ARTICLE_BODY", Map.of("body", body)).get("body"));
+        assertTrue(calls.get() > 2);
+        assertEquals(2, peak.get());
+    }
+
+    @Test void oversizedBodyIsRejectedBeforeCallingTheModel() {
+        var clients = mock(AiChatClientRegistry.class);
+        var translator = new ModelEnglishTranslator(clients, prompts, resolver, json);
+        assertThrows(IllegalArgumentException.class,
+                () -> translator.translate("ARTICLE_BODY", Map.of("body", "中".repeat(120001))));
+        verifyNoInteractions(clients);
+    }
+
     /**
      * 用真实 ChatClient（建在 mock 的 ChatModel 上）而不是逐层 mock 链式调用：
      * 断言的 prompt 就是真正发给模型的那一份，链上有没有丢 options 也能一起验证。

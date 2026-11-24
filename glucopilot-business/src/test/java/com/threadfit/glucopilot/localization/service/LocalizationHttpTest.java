@@ -68,6 +68,17 @@ class LocalizationHttpTest {
     }
 
     @Test
+    void acceptsAuthenticatedConsultationKinds() throws Exception {
+        RequestContext.setUserId(2L);
+        when(service.localize(eq(2L), any())).thenReturn(List.of());
+        for (String kind : List.of("CONSULTATION_PREVIEW", "CONSULTATION_DETAIL", "CONSULTATION_REPORT")) {
+            mvc.perform(post("/api/v1/localizations/en").contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"items\":[{\"kind\":\"" + kind + "\",\"id\":\"21\"}]}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.code").value(0));
+        }
+    }
+
+    @Test
     void invalidTypesEmptyBatchAndNegativeIdsAreRejectedBeforeService() throws Exception {
         RequestContext.setUserId(2L);
         for (String payload :

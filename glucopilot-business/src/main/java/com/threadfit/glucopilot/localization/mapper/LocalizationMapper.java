@@ -40,13 +40,14 @@ public interface LocalizationMapper {
      *
      * <p>排序用 {@code updated_at DESC}：翻译表是「同一资源随原文变化不断插入新 hash 行」的追加型缓存，
      * 运营想看的是「最近谁被翻了、翻成什么」，而不是最早的一条。
+     * 问诊译文包含健康隐私及付费内容，通用AI审计权限不授予问诊阅读权，因此仅返回原三类公开内容。
      *
      * @param kind   ARTICLE_PREVIEW / ARTICLE_BODY / PROFILE_NAME，可空
      * @param status PENDING / READY / FAILED，可空
      */
     @Select("<script>"
             + "SELECT kind,resource_id,source_hash,locale,status,prompt_ver,translated_json,updated_at"
-            + " FROM content_localization WHERE 1 = 1"
+            + " FROM content_localization WHERE kind IN ('ARTICLE_PREVIEW','ARTICLE_BODY','PROFILE_NAME')"
             + "<if test='kind != null'> AND kind = #{kind}</if>"
             + "<if test='status != null'> AND status = #{status}</if>"
             + " ORDER BY updated_at DESC, kind ASC, resource_id ASC"

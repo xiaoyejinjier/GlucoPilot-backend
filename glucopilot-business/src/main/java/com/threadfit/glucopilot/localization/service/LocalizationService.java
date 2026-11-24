@@ -7,6 +7,7 @@ import com.threadfit.glucopilot.ai.business.translation.service.EnglishTranslato
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.community.shared.service.CommunityService;
+import com.threadfit.glucopilot.consultation.service.ConsultationService;
 import com.threadfit.glucopilot.localization.mapper.LocalizationMapper;
 
 import jakarta.annotation.PreDestroy;
@@ -30,9 +31,13 @@ public class LocalizationService {
     /** 汉字探测：只用来判断'这段还有中文吗'，与具体实现无关，因此留在本层。 */
     private static final java.util.regex.Pattern HAN = java.util.regex.Pattern.compile("\\p{IsHan}");
     private static final Set<String> KINDS =
-            Set.of("ARTICLE_PREVIEW", "ARTICLE_BODY", "PROFILE_NAME");
+            Set.of("ARTICLE_PREVIEW", "ARTICLE_BODY", "PROFILE_NAME",
+                    "CONSULTATION_PREVIEW", "CONSULTATION_DETAIL", "CONSULTATION_REPORT");
+    private static final Set<String> LONG_KINDS =
+            Set.of("ARTICLE_BODY", "CONSULTATION_DETAIL", "CONSULTATION_REPORT");
     private final LocalizationMapper mapper;
     private final CommunityService community;
+    private final ConsultationService consultations;
     private final EnglishTranslator translator;
     private final ObjectMapper json;
     private volatile boolean closing;
@@ -57,14 +62,26 @@ public class LocalizationService {
                         return t;
                     },
                     new ThreadPoolExecutor.AbortPolicy());
+    // 阅读正文不能排在整页的昵称/标题之后；保留有界队列，避免无限堆积模型调用。
+    private final ThreadPoolExecutor bodyWorkers =
+            new ThreadPoolExecutor(
+                    1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(12),
+                    r -> {
+                        var t = new Thread(r, "english-article-body");
+                        t.setDaemon(true);
+                        return t;
+                    },
+                    new ThreadPoolExecutor.AbortPolicy());
 
     public LocalizationService(
             LocalizationMapper mapper,
             CommunityService community,
+            ConsultationService consultations,
             EnglishTranslator translator,
             ObjectMapper json) {
         this.mapper = mapper;
         this.community = community;
+        this.consultations = consultations;
         this.translator = translator;
         this.json = json;
         heartbeat.scheduleWithFixedDelay(this::renewLeases, 20, 20, TimeUnit.SECONDS);
@@ -81,8 +98,10 @@ public class LocalizationService {
             }
         }
         workers.shutdownNow();
+        bodyWorkers.shutdownNow();
         try {
             workers.awaitTermination(5, TimeUnit.SECONDS);
+            bodyWorkers.awaitTermination(5, TimeUnit.SECONDS);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
@@ -120,9 +139,10 @@ public class LocalizationService {
             }
         }
         // Batch short names/previews. Long article bodies retain independent error boundaries.
-        for (String kind : KINDS) {
+        for (String kind : List.of("CONSULTATION_DETAIL", "CONSULTATION_REPORT", "ARTICLE_BODY",
+                "CONSULTATION_PREVIEW", "ARTICLE_PREVIEW", "PROFILE_NAME")) {
             var matching = jobs.stream().filter(job -> job.item().kind().equals(kind)).toList();
-            int batchSize = kind.equals("ARTICLE_BODY") ? 1 : 8;
+            int batchSize = LONG_KINDS.contains(kind) ? 1 : 8;
             for (int start = 0; start < matching.size(); start += batchSize) {
                 var batch =
                         List.copyOf(
@@ -130,7 +150,8 @@ public class LocalizationService {
                                         start, Math.min(start + batchSize, matching.size())));
                 batch.forEach(job -> activeJobs.put(job.lease(), job));
                 try {
-                    workers.execute(() -> translate(batch));
+                    (LONG_KINDS.contains(kind) ? bodyWorkers : workers)
+                            .execute(() -> translate(batch));
                 } catch (RejectedExecutionException ex) {
                     batch.forEach(
                             job -> {
@@ -154,6 +175,7 @@ public class LocalizationService {
             source = source(viewer, item);
         } catch (BizException ex) {
             if (ex.getErrorCode() == ErrorCode.NOT_FOUND
+                    || (item.kind().startsWith("CONSULTATION_") && ex.getErrorCode() == ErrorCode.FORBIDDEN)
                     || ex.getErrorCode() == ErrorCode.BAD_REQUEST) {
                 return new Result(item.kind(), item.id(), "UNAVAILABLE", "", Map.of(), Map.of());
             }
@@ -205,6 +227,9 @@ public class LocalizationService {
     }
 
     private Map<String, String> source(long viewer, Item item) {
+        if (item.kind().startsWith("CONSULTATION_")) {
+            return consultationSource(viewer, item);
+        }
         if (item.kind().equals("PROFILE_NAME")) {
             if (!item.id().matches("[ub][1-9][0-9]{0,18}")) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "无效的用户标识");
@@ -238,6 +263,33 @@ public class LocalizationService {
         }
         if (result.values().stream().mapToInt(String::length).sum() > 120000) {
             throw new BizException(ErrorCode.BAD_REQUEST, "文章过长，暂不支持英文阅读");
+        }
+        return result;
+    }
+
+    /** 从问诊业务已授权的视图取原文；先校验身份和付费权限，再读取任何共享译文缓存。 */
+    private Map<String, String> consultationSource(long viewer, Item item) {
+        var view = consultations.detail(viewer, Long.parseLong(item.id()));
+        if (view == null) throw new BizException(ErrorCode.NOT_FOUND);
+        var result = new LinkedHashMap<String, String>();
+        switch (item.kind()) {
+            case "CONSULTATION_PREVIEW" -> result.put("title", Objects.toString(view.title(), ""));
+            case "CONSULTATION_DETAIL" -> {
+                if (!view.detailsVisible()) throw new BizException(ErrorCode.NOT_FOUND);
+                result.put("symptoms", Objects.toString(view.symptoms(), ""));
+                result.put("glucoseNote", Objects.toString(view.glucoseNote(), ""));
+                result.put("medicationNote", Objects.toString(view.medicationNote(), ""));
+            }
+            case "CONSULTATION_REPORT" -> {
+                var report = view.report();
+                if (!view.detailsVisible() || report == null || !"UNLOCKED".equals(report.access())) {
+                    throw new BizException(ErrorCode.NOT_FOUND);
+                }
+                result.put("assessment", Objects.toString(report.assessment(), ""));
+                result.put("medicationAdvice", Objects.toString(report.medicationAdvice(), ""));
+                result.put("followUpAdvice", Objects.toString(report.followUpAdvice(), ""));
+            }
+            default -> throw new BizException(ErrorCode.BAD_REQUEST);
         }
         return result;
     }

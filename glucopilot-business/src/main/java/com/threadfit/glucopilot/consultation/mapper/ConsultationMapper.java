@@ -9,6 +9,10 @@ import java.util.List;
 
 @Mapper
 public interface ConsultationMapper {
+    List<ConsultationTopic> topics();
+
+    int enabledTopic(@Param("code") String code);
+
     int ownedImage(@Param("user") long user, @Param("media") long media);
 
     int linkImage(@Param("id") long id, @Param("media") long media, @Param("sort") int sort);

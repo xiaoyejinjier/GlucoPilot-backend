@@ -161,6 +161,18 @@ class ConsultationWorkflowTest {
                 "consultation_request",
                 "consultation_report",
                 "consultation_wallet_entry");
+        tables("V94__consultation_health_topics.sql", "consultation_topic");
+        try (var stream =
+                getClass()
+                        .getResourceAsStream("/db/migration/V94__consultation_health_topics.sql")) {
+            var sql = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            int start = sql.indexOf("INSERT INTO");
+            ddl(sql.substring(start, sql.indexOf(';', start)));
+        }
+        ddl("ALTER TABLE consultation_request DROP CONSTRAINT ck_consultation_topic");
+        ddl(
+                "ALTER TABLE consultation_request ADD CONSTRAINT fk_consultation_request_topic"
+                    + " FOREIGN KEY(topic) REFERENCES consultation_topic(code)");
         tables(
                 "V70__consultation_communication_and_withdrawals.sql",
                 "consultation_request_image",
@@ -224,6 +236,76 @@ class ConsultationWorkflowTest {
         }
     }
 
+    @Test
+    void healthTopicsAreDynamicAndFilteringHappensBeforePagination() {
+        assertEquals(30, service.topics().size());
+        assertEquals("GLUCOSE", service.topics().getFirst().getCode());
+        assertEquals(4, service.topics().stream().map(t -> t.getGroupName()).distinct().count());
+        var old = publish();
+        var form =
+                new PublishRequest(
+                        "餐后血糖问题测试", "POST_MEAL", "这是一份餐后血糖问题的测试描述。", "", "", true, "new_topic_001");
+        var created = service.publish(1, form);
+        assertEquals("餐后血糖", created.topicName());
+        assertEquals("血糖波动", service.detail(1, old.id()).topicName());
+        var page = new PageQuery();
+        page.setPageSize(1);
+        var result = service.list(3, false, false, "POST_MEAL", page);
+        assertEquals(1, result.getTotal());
+        assertEquals(created.id(), result.getRecords().getFirst().id());
+        assertNull(result.getRecords().getFirst().symptoms());
+        jdbc.update("UPDATE consultation_topic SET enabled=0 WHERE code='POST_MEAL'");
+        assertFalse(service.topics().stream().anyMatch(t -> t.getCode().equals("POST_MEAL")));
+        // 停用后历史名称及原请求重放仍有效，新请求必须重新选分类。
+        assertEquals("餐后血糖", service.detail(1, created.id()).topicName());
+        assertEquals(created.id(), service.publish(1, form).id());
+        assertThrows(
+                BizException.class,
+                () ->
+                        service.publish(
+                                1,
+                                new PublishRequest(
+                                        "新发布测试标题",
+                                        "POST_MEAL",
+                                        "这是一份尚未发布的健康问题测试描述。",
+                                        "",
+                                        "",
+                                        true,
+                                        "new_topic_002")));
+        assertThrows(BizException.class, () -> service.list(1, false, false, "POST_MEAL", page));
+        assertThrows(BizException.class, () -> service.list(1, false, false, "' OR 1=1", page));
+        assertThrows(
+                BizException.class,
+                () ->
+                        service.publish(
+                                1,
+                                new PublishRequest(
+                                        "新发布测试标题",
+                                        "UNKNOWN",
+                                        "这是一份尚未发布的健康问题测试描述。",
+                                        "",
+                                        "",
+                                        true,
+                                        "new_topic_003")));
+        assertEquals(
+                2, jdbc.queryForObject("SELECT COUNT(*) FROM consultation_request", Integer.class));
+        jdbc.update(
+                "INSERT INTO consultation_topic(code,name,group_name,sort_no)"
+                    + " VALUES('NEW_TEST','动态测试分类','生活管理',999)");
+        var dynamic =
+                service.publish(
+                        1,
+                        new PublishRequest(
+                                "动态分类测试标题",
+                                "NEW_TEST",
+                                "这是一份动态分类的问题测试描述。",
+                                "",
+                                "",
+                                true,
+                                "new_topic_004"));
+        assertEquals("动态测试分类", dynamic.topicName());
+    }
+
     void approve(long id) {
         var d =
                 service.apply(
@@ -275,7 +357,12 @@ class ConsultationWorkflowTest {
         approve(3);
         var c = publish();
         service.claim(2,c.id());
-        var incoming=service.sendMessage(2,c.id(),new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos.Send("请补充测量时间","chat_notice_0001"));
+        var incoming =
+                service.sendMessage(
+                        2,
+                        c.id(),
+                        new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos
+                                .Send("请补充测量时间", "chat_notice_0001"));
         var mapper=new SqlSessionTemplate(context.getBean(SqlSessionFactory.class)).getMapper(com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.class);
         var inbox=new com.threadfit.glucopilot.consultation.service.ConsultationConversationService(mapper);
         var page=new PageQuery();
@@ -284,13 +371,23 @@ class ConsultationWorkflowTest {
         assertEquals(0,inbox.list(2,page).getRecords().getFirst().getUnreadCount());
         assertEquals(0,inbox.list(3,page).getTotal());
         assertThrows(BizException.class,()->inbox.read(3,c.id(),incoming.getId()));
-        var later=service.sendMessage(2,c.id(),new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos.Send("稍后补充饮食情况","chat_notice_0002"));
+        var later =
+                service.sendMessage(
+                        2,
+                        c.id(),
+                        new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos
+                                .Send("稍后补充饮食情况", "chat_notice_0002"));
         inbox.read(1,c.id(),incoming.getId());
         assertEquals(1,inbox.list(1,page).getRecords().getFirst().getUnreadCount());
         inbox.read(1,c.id(),later.getId());
         inbox.read(1,c.id(),incoming.getId());
         assertEquals(0,inbox.list(1,page).getRecords().getFirst().getUnreadCount());
-        var own=service.sendMessage(1,c.id(),new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos.Send("已补充","chat_notice_0003"));
+        var own =
+                service.sendMessage(
+                        1,
+                        c.id(),
+                        new com.threadfit.glucopilot.consultation.dto.ConsultationConversationDtos
+                                .Send("已补充", "chat_notice_0003"));
         assertThrows(BizException.class,()->inbox.read(1,c.id(),own.getId()));
         jdbc.update("UPDATE consultation_doctor SET status='DISABLED' WHERE user_id=2");
         assertEquals(0,inbox.list(2,page).getTotal());

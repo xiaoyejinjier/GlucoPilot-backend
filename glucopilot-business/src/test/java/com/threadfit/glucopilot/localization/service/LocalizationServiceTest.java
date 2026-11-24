@@ -26,6 +26,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 class LocalizationServiceTest {
     private JdbcTemplate jdbc;
     private LocalizationService service;
+    private final com.threadfit.glucopilot.consultation.service.ConsultationService consultations =
+            org.mockito.Mockito.mock(com.threadfit.glucopilot.consultation.service.ConsultationService.class);
     private java.sql.Connection migrationConnection;
     private final AtomicInteger calls = new AtomicInteger();
 
@@ -78,6 +80,15 @@ class LocalizationServiceTest {
         jdbc.execute("ALTER TABLE content_localization DROP CONSTRAINT chk_cl_kind");
         jdbc.execute("ALTER TABLE content_localization DROP CONSTRAINT chk_cl_status");
         jdbc.execute("ALTER TABLE content_localization ADD COLUMN prompt_ver VARCHAR(32)");
+        // H2的DROP CHECK拼写是DROP CONSTRAINT；其余V95约束扩展使用真实迁移内容。
+        jdbc.execute("ALTER TABLE content_localization ADD CONSTRAINT chk_cl_kind CHECK"
+                + " (kind IN ('ARTICLE_PREVIEW','ARTICLE_BODY','PROFILE_NAME'))");
+        String consultationMigration = new ClassPathResource("db/migration/V95__consultation_english_content.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8)
+                .replace("DROP CHECK", "DROP CONSTRAINT");
+        new ResourceDatabasePopulator(new org.springframework.core.io.ByteArrayResource(
+                consultationMigration.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .populate(migrationConnection);
         jdbc.update("INSERT INTO user_account(id) VALUES(1),(2),(3)");
         jdbc.update(
                 "INSERT INTO user_profile(user_id,nickname)"
@@ -90,6 +101,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
+                        consultations,
                         translator((kind, source) -> {
                             calls.incrementAndGet();
                             var out = new LinkedHashMap<String, String>();
@@ -150,6 +162,118 @@ class LocalizationServiceTest {
             Thread.sleep(10);
         }
         throw new AssertionError("Translation not completed");
+    }
+
+    private com.threadfit.glucopilot.consultation.dto.ConsultationDtos.CaseView consultation(
+            boolean visible, boolean paid) {
+        var report = new com.threadfit.glucopilot.consultation.dto.ConsultationDtos.ReportView(
+                210L, 21L, true, paid ? "UNLOCKED" : "LOCKED", 100, "医生", "内科",
+                paid ? "评估内容 5.2 mmol/L" : null,
+                paid ? "按原方案 10 mg" : null,
+                paid ? "请于 7 天后复查" : null, null);
+        return new com.threadfit.glucopilot.consultation.dto.ConsultationDtos.CaseView(
+                21L, "问诊标题", "GLUCOSE", "REPORT_READY", "问诊标题", "匿名糖友", true, null,
+                visible ? "症状描述" : null, visible ? "血糖 5.2 mmol/L" : null,
+                visible ? "用药 10 mg" : null, visible, visible, false, false,
+                visible ? report : null, "血糖波动");
+    }
+
+    @Test
+    void consultationPublicTitleDoesNotIncludePrivateDetailsOrLockedReport() throws Exception {
+        org.mockito.Mockito.when(consultations.detail(3, 21)).thenReturn(consultation(false, false));
+        var title = ready(3, "CONSULTATION_PREVIEW", "21");
+        assertEquals(Map.of("title", "问诊标题"), title.source());
+        for (String kind : List.of("CONSULTATION_DETAIL", "CONSULTATION_REPORT")) {
+            var denied = get(3, kind, "21");
+            assertEquals("UNAVAILABLE", denied.status());
+            assertTrue(denied.source().isEmpty());
+            assertTrue(denied.translated().isEmpty());
+            assertEquals("", denied.sourceHash());
+        }
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void consultationDetailsAndPaidReportRecheckAccessBeforeReadingCachedTranslation() throws Exception {
+        org.mockito.Mockito.when(consultations.detail(2, 21)).thenReturn(consultation(true, false));
+        assertEquals("READY", ready(2, "CONSULTATION_DETAIL", "21").status());
+        assertEquals("UNAVAILABLE", get(2, "CONSULTATION_REPORT", "21").status());
+        org.mockito.Mockito.when(consultations.detail(2, 21)).thenReturn(consultation(true, true));
+        var report = ready(2, "CONSULTATION_REPORT", "21");
+        assertEquals("评估内容 5.2 mmol/L", report.source().get("assessment"));
+        assertEquals("按原方案 10 mg", report.source().get("medicationAdvice"));
+        assertEquals("请于 7 天后复查", report.source().get("followUpAdvice"));
+        int count = calls.get();
+        assertEquals("READY", get(2, "CONSULTATION_REPORT", "21").status());
+        assertEquals(count, calls.get());
+        org.mockito.Mockito.when(consultations.detail(3, 21)).thenReturn(consultation(false, false));
+        assertEquals("UNAVAILABLE", get(3, "CONSULTATION_DETAIL", "21").status());
+        assertEquals("UNAVAILABLE", get(3, "CONSULTATION_REPORT", "21").status());
+        // 撤销医生资格或付费权限后，已有READY缓存也不能授予访问权。
+        org.mockito.Mockito.when(consultations.detail(2, 21)).thenReturn(consultation(false, false));
+        var denied = get(2, "CONSULTATION_REPORT", "21");
+        assertEquals("UNAVAILABLE", denied.status());
+        assertTrue(denied.source().isEmpty());
+        assertTrue(denied.translated().isEmpty());
+        assertEquals("", denied.sourceHash());
+        assertEquals(count, calls.get());
+    }
+
+    @Test
+    void generalTranslationAuditDoesNotExposeConsultationPrivateCache() throws Exception {
+        org.mockito.Mockito.when(consultations.detail(2, 21)).thenReturn(consultation(true, true));
+        ready(2, "CONSULTATION_REPORT", "21");
+        ready(2, "ARTICLE_PREVIEW", "10");
+        var mapper = MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class);
+        var page = mapper.selectAuditPage(new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(1, 20), null, null);
+        assertEquals(1, page.getRecords().size());
+        assertEquals("ARTICLE_PREVIEW", page.getRecords().getFirst().getKind());
+        assertTrue(mapper.selectAuditPage(new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(1, 20),
+                "CONSULTATION_REPORT", null).getRecords().isEmpty());
+    }
+
+    @Test
+    void articleBodyDoesNotWaitForBusyPreviewAndNameWorkers() throws Exception {
+        service.close();
+        var shortStarted = new CountDownLatch(2);
+        var releaseShort = new CountDownLatch(1);
+        var bodyCalls = new AtomicInteger();
+        service = new LocalizationService(
+                MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
+                CommunityTestMappers.community(jdbc),
+                        consultations,
+                translator((kind, source) -> {
+                    if (kind.equals("ARTICLE_BODY")) {
+                        bodyCalls.incrementAndGet();
+                        return Map.of("body", "Glucose 5.2 mmol/L");
+                    }
+                    shortStarted.countDown();
+                    try {
+                        if (!releaseShort.await(5, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("Test did not release short jobs");
+                        }
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(ex);
+                    }
+                    var output = new LinkedHashMap<String, String>();
+                    source.forEach((key, value) -> output.put(key, "English"));
+                    return output;
+                }),
+                new ObjectMapper());
+        try {
+            get(2, "ARTICLE_PREVIEW", "10");
+            get(2, "PROFILE_NAME", "u1");
+            assertTrue(shortStarted.await(2, TimeUnit.SECONDS));
+            assertEquals("Glucose 5.2 mmol/L",
+                    ready(2, "ARTICLE_BODY", "10").translated().get("body"));
+            assertEquals(1, bodyCalls.get());
+            assertEquals("PENDING", get(2, "ARTICLE_PREVIEW", "10").status());
+            assertEquals("READY", get(3, "ARTICLE_BODY", "10").status());
+            assertEquals(1, bodyCalls.get(), "Reading the cached body must not call the model again");
+        } finally {
+            releaseShort.countDown();
+        }
     }
 
     @Test
@@ -227,6 +351,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
+                        consultations,
                         translator((kind, source) -> {
                             count.incrementAndGet();
                             if (source.containsKey("j0_title") || "文章甲".equals(source.get("title")))
@@ -273,6 +398,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
+                        consultations,
                         translator((kind, source) -> {
                             count.incrementAndGet();
                             entered.countDown();
@@ -375,6 +501,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
+                        consultations,
                         translator((kind, source) -> {
                             count.incrementAndGet();
                             started.countDown();
@@ -412,6 +539,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
+                        consultations,
                         translator((kind, source) -> {
                             entered.countDown();
                             try {
@@ -429,6 +557,7 @@ class LocalizationServiceTest {
                 new LocalizationService(
                         MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
                         CommunityTestMappers.community(jdbc),
+                        consultations,
                         translator((kind, source) ->
                                 Map.of("title", "Recovered title", "summary", "Recovered summary")),
                         new ObjectMapper());

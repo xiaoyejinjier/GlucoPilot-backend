@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.threadfit.glucopilot.consultation.mapper.ConsultationMapper">
+    <select id="topics" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationTopic">
+        SELECT code, name, group_name, sort_no
+        FROM consultation_topic
+        WHERE enabled = 1
+        ORDER BY sort_no, code
+    </select>
+    <select id="enabledTopic" resultType="int">
+        SELECT COUNT(*)
+        FROM consultation_topic
+        WHERE code = #{code} AND enabled = 1
+    </select>
     <select id="ownedImage" resultType="int">
         SELECT COUNT(*) FROM media_file WHERE id=#{media} AND user_id=#{user} AND ops_id IS NULL
         AND biz_type=9 AND is_deleted=0 AND file_status=1 AND size_bytes BETWEEN 1 AND 5242880
@@ -59,6 +70,7 @@
     <sql id="caseScope">
         FROM consultation_request c JOIN user_account u ON u.id=c.patient_id
         LEFT JOIN user_profile p ON p.user_id=u.id AND p.is_deleted=0
+        LEFT JOIN consultation_topic ct ON ct.code=c.topic
         WHERE u.is_deleted=0 AND u.account_status=1
         <if test="mine">AND c.patient_id=#{viewer}</if>
         <if test="assigned">AND c.doctor_user_id=#{viewer}</if>
@@ -69,12 +81,13 @@
     <select id="count" resultType="long">SELECT COUNT(*) <include refid="caseScope"/></select>
     <!-- 广场查询仅投影公开摘要，健康正文在本人/接诊详情中读取。 -->
     <select id="list" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationRow">
-        SELECT c.id,c.patient_id,c.title,c.topic,c.status,c.anonymous,c.doctor_user_id,c.created_at,p.nickname patient_name
+        SELECT c.id,c.patient_id,c.title,c.topic,ct.name topic_name,c.status,c.anonymous,c.doctor_user_id,c.created_at,p.nickname patient_name
         <include refid="caseScope"/> ORDER BY c.id DESC LIMIT #{limit} OFFSET #{offset}
     </select>
     <select id="find" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationRow">
-        SELECT c.*,p.nickname patient_name FROM consultation_request c JOIN user_account u ON u.id=c.patient_id
+        SELECT c.*,ct.name topic_name,p.nickname patient_name FROM consultation_request c JOIN user_account u ON u.id=c.patient_id
         LEFT JOIN user_profile p ON p.user_id=u.id AND p.is_deleted=0
+        LEFT JOIN consultation_topic ct ON ct.code=c.topic
         WHERE c.id=#{id} AND u.is_deleted=0 AND u.account_status=1
     </select>
     <select id="lockCase" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationRow" useCache="false" flushCache="true">

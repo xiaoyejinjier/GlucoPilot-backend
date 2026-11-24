@@ -213,3 +213,109 @@ $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::AS
 - 监控：没开 prometheus 插件、没配队列积压告警（`/api/queues/.../messages` 超过阈值应告警）；
 - 多租户/环境隔离：现在所有环境共用一个 vhost `glucopilot`，本地联调会与 p10 上其它服务
   抢同一条队列——正式接入业务前建议按环境拆 vhost 或拆路由键前缀。
+
+> 上面三条里，「事务性发件箱」「消费端骨架」「vhost 隔离」在**任务队列**（第 9 节）里已经各有对策：
+> 补扫替代 outbox、`JobDispatcher` + manual ack 的容器工厂替代手写消费端、本机联调改用 `glucopilot-dev`。
+> 通用事件队列（`glucopilot.event`）本身仍然保持这节描述的状态。
+
+---
+
+## 9. AI 后台任务队列（`glucopilot.job`）
+
+这一节是给「AI 后台任务」用的独立拓扑，与第 1 节的通用事件队列**互不影响**。
+设计动机：审核 / 记忆抽取 / OCR 这三件事的共同点是「DB 里有状态、MQ 只负责通知」，
+所以它们要的是**可靠派发 + 有限重试 + 按域分桶的死信**，而不是事件广播。
+
+### 9.1 拓扑
+
+| 名称 | 类型 | 绑定 | 说明 |
+| --- | --- | --- | --- |
+| `glucopilot.job` | topic exchange (durable) | — | 任务交换机 |
+| `glucopilot.job.dlx` | topic exchange (durable) | — | 任务死信交换机 |
+| `glucopilot.job.moderation` | queue (durable) | `job.moderation.#` | 文章/评论审核 |
+| `glucopilot.job.memory` | queue (durable) | `job.memory.#` | 会话结束后的长期记忆抽取 |
+| `glucopilot.job.ocr` | queue (durable) | `job.ocr.#` | 图片 OCR |
+| `glucopilot.job.<域>.dlq` | queue (durable) | `#`（在 dlx 上） | 各自失败消息，按域隔离 |
+
+三个业务队列都带 `x-dead-letter-exchange=glucopilot.job.dlx` 与自己的死信路由键，**不设 TTL 与长度上限**：
+任务积压时宁可堆积也不要静默丢（丢弃是显式的 `basicNack(requeue=false)` 决定的结果）。
+
+### 9.2 消息信封
+
+```json
+{
+  "jobId": "MODERATION_ARTICLE:123:r2",
+  "type": "MODERATION_ARTICLE",
+  "refId": 123,
+  "revision": 2,
+  "userId": 5,
+  "reason": "publish",
+  "attempt": 0,
+  "createdAt": "2026-11-24T10:00:00Z"
+}
+```
+
+- **只放标识，不放正文**：审核正文、会话、图片都在库里，消费时按 `refId` 取当前内容；
+  这样消息里不会出现用户内容（合规面小），也不会出现「改稿后审旧文本」。
+- `jobId` 同时写消息头 `messageId`：管理台「消息详情」与业务日志用同一个串对得上。
+- `revision` 只有审核带，用来做乐观并发（同一篇文章的第 2 次审核与第 1 次是两条任务）。
+- `attempt` 是**已经失败过的次数**（首次投递为 0），由重投器递增，用于判定上限。
+
+### 9.3 三态与 ack 策略
+
+| 结论 | 谁产生 | 动作 |
+| --- | --- | --- |
+| `SUCCESS` | 处理器返回 / 认领失败 | `basicAck` |
+| `RETRYABLE` | 处理器返回 / 未捕获异常 | `basicNack(requeue=false)` → DLX → 延迟重投 |
+| `PERMANENT` | 处理器返回 / 无处理器 / 类型未知 | `basicAck`（落终态，不再重投） |
+
+刻意不用 `requeue=true`：它把消息放回**队头**，一条坏消息能堵住整个队列。
+重试一律走「死信收集 → 60 秒后重新发」，等价于排到队尾。
+
+### 9.4 两套兜底
+
+- **补扫**（`JobReconciler`，默认 300 秒一次，单域上限 200 条）：把库里「还等着办」的任务再投一遍。
+  覆盖四种丢消息的窗口：afterCommit 发送失败、broker 丢消息、消费端 ack 前被杀、有人直接改库。
+  各域实现 `JobReconcileSource`，判据分别是：
+  - 审核：`ai_status='PENDING' AND ai_claimed_at IS NULL AND gmt_create < NOW(3) - 1 minute`
+  - 记忆：`session_status=ENDED AND (memory_extracted_upto_msg_id IS NULL OR < 最后一条消息 id)`
+  - OCR：`task_status=PENDING AND gmt_create < NOW(3) - 1 minute`
+- **死信重投**（`JobRetryReplayer`，默认 60 秒一轮）：从三个 `.dlq` 取消息，`attempt+1 <= max-attempts`（默认 3）
+  就重新发布；超限则打一条带完整信封的 WARN 后丢弃——任务真相在库里，人工处置看业务记录 + jobId。
+
+### 9.5 配置（`glucopilot.mq.jobs.*`）
+
+| 键 | 默认 | 作用 |
+| --- | --- | --- |
+| `enabled` | `true` | 任务队列总开关（false 时不注册拓扑/监听器/补扫/重投） |
+| `event-driven` | `true` | 消息是否为主通道；false 时业务回退到轮询/线程池（灰度回退开关） |
+| `reconcile-enabled` | `true` | 补扫开关 |
+| `reconcile-interval-seconds` | `300` | 补扫间隔 |
+| `reconcile-initial-delay-seconds` | `60` | 启动后第一次补扫的延迟（避免启动瞬间抢任务） |
+| `reconcile-batch-size` | `200` | 单域单轮上限 |
+| `replay-interval-ms` | `60000` | 死信重投间隔（同时是重试间隔） |
+| `max-attempts` | `3` | 最多重投次数（不含首次） |
+| `moderation-concurrency` / `memory-concurrency` / `ocr-concurrency` | `4` / `2` / `2` | 三个域的消费者并发 |
+| `prefetch` | `2` | 预取条数（任务耗时长，预取多会让别的实例空等） |
+
+### 9.6 当前进度
+
+- **批次 0（已完成）**：公共骨架 + 拓扑 + 配置 + 单测。
+  `JobEnvelope` / `JobTypes` / `JobOutcome` / `JobHandler` / `JobDispatcher` / `JobPublisher` /
+  `JobReconciler`（无域实现）/ `JobRetryReplayer` / `JobMetrics` / `RabbitJobConfig`（含 manual ack 容器工厂）。
+  **还没有 `@RabbitListener`**：三个队列已在 p10 上声明，但暂时没有消费者，也没有任何 `publish` 调用点。
+- 批次 1~3 依次接入审核、记忆抽取、OCR（每个处理器实现 `JobHandler` + 一个 `JobReconcileSource`，
+  并加 `@RabbitListener(queues = ..., containerFactory = "jobContainerFactory", concurrency = ...)`）。
+- 批次 4 是翻译的补丁（拒绝时回 PENDING + 扫过期租约），不换 MQ。
+
+### 9.7 自检
+
+```powershell
+# 交换机 / 队列 / 绑定（本地 vhost = glucopilot-dev）
+$auth = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("p10_admin:<密码>"))
+Invoke-RestMethod "http://192.168.100.3:1187/api/exchanges/glucopilot-dev" -Headers @{Authorization=$auth} |
+  Where-Object { $_.name -like "glucopilot.job*" }
+Invoke-RestMethod "http://192.168.100.3:1187/api/queues/glucopilot-dev" -Headers @{Authorization=$auth} |
+  Select-Object name, messages, consumers
+```
+

@@ -61,6 +61,46 @@ spring:
         enabled: ${REDIS_SSL_ENABLED:false}
       timeout: ${REDIS_TIMEOUT:3s}
 
+  rabbitmq:
+    # 与 Redis 同样的原则：代理由部署环境提供，本服务只通过环境变量连接。
+    # p10 环境的 AMQP 端口映射在宿主 1186（管理台 1187），凭据与 vhost 见部署文档。
+    host: ${MQ_HOST:127.0.0.1}
+    port: ${MQ_PORT:5672}
+    username: ${MQ_USERNAME:guest}
+    password: ${MQ_PASSWORD:guest}
+    virtual-host: ${MQ_VHOST:/}
+    connection-timeout: ${MQ_CONNECTION_TIMEOUT:3s}
+    requested-heartbeat: ${MQ_REQUESTED_HEARTBEAT:30s}
+    # 发送端：correlated 确认 + 退回回调（配合 rabbitTemplate.setMandatory(true)），
+    # 否则「交换机上没有匹配队列」的消息会被代理直接丢弃、代码侧毫无感知。
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: ${MQ_TEMPLATE_MANDATORY:true}
+      retry:
+        # 发送重试交给业务（MqPublisher 抛 503 让调用方决定），模板层不静默重试，
+        # 否则一次请求可能压住线程好几秒。
+        enabled: false
+    listener:
+      simple:
+        # 手动 ack 会把「什么时候算处理成功」的责任推给每个监听器；基础阶段用 auto，
+        # 处理成功即 ack、抛异常则不重回队列（default-requeue-rejected=false）→ 进死信。
+        acknowledge-mode: auto
+        prefetch: ${MQ_PREFETCH:10}
+        concurrency: ${MQ_CONSUMER_CONCURRENCY:2}
+        max-concurrency: ${MQ_CONSUMER_MAX_CONCURRENCY:8}
+        default-requeue-rejected: false
+        # 队列尚未被声明时监听器启动失败会拖垮整个应用；声明由 AmqpAdmin 在连接后完成，
+        # 这里放宽成「非致命」，只打 WARN。
+        missing-queues-fatal: false
+        retry:
+          enabled: ${MQ_LISTENER_RETRY_ENABLED:true}
+          max-retries: ${MQ_LISTENER_RETRY_MAX:3}
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 10s
+          # stateless=false：重试走容器内的有状态拦截器，失败次数与是否需要死信由容器统一决定。
+          stateless: false
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -445,6 +485,17 @@ ai:
 glucopilot:
   mail:
     from: ${MAIL_FROM:}
+
+  # 消息队列的业务拓扑（与 spring.rabbitmq.* 的运维连接参数分开，理由见 MqProperties）。
+  # 当前只有一条通用队列 + 死信，任何新业务先用 routingKey = "core.xxx" 直接发。
+  mq:
+    enabled: ${MQ_ENABLED:true}
+    exchange: ${MQ_EXCHANGE:glucopilot.event}
+    dead-letter-exchange: ${MQ_DLX:glucopilot.event.dlx}
+    queue: ${MQ_QUEUE:glucopilot.event.core}
+    queue-routing-key: ${MQ_QUEUE_ROUTING_KEY:core.#}
+    dead-letter-queue: ${MQ_DLQ:glucopilot.event.core.dlq}
+    dead-letter-routing-key: ${MQ_DLQ_ROUTING_KEY:#}
 
 # 食品读缓存复用spring.data.redis；版本在MySQL事务中更新，Redis故障自动回源。
 food:

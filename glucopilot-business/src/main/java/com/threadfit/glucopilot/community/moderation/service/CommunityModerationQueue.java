@@ -41,9 +41,9 @@ public class CommunityModerationQueue {
     static final int STALE_MINUTES = 3;
 
     /** 审核目标的两种类型，与 {@code community_moderation_hit.target_type} / 日志表口径一致。 */
-    static final String ARTICLE = "ARTICLE";
+    public static final String ARTICLE = "ARTICLE";
 
-    static final String COMMENT = "COMMENT";
+    public static final String COMMENT = "COMMENT";
 
     /**
      * 一条待审内容。
@@ -102,7 +102,7 @@ public class CommunityModerationQueue {
     public Job claimArticle() {
         return tx.execute(
                 status -> {
-                    mapper.expireArticleClaims(LocalDateTime.now().minusMinutes(STALE_MINUTES));
+                    mapper.expireArticleClaims(dbNow().minusMinutes(STALE_MINUTES));
                     var rows =
                             mapper.claimArticle().stream()
                                     .map(
@@ -140,7 +140,7 @@ public class CommunityModerationQueue {
     public Job claimComment() {
         return tx.execute(
                 status -> {
-                    mapper.expireCommentClaims(LocalDateTime.now().minusMinutes(STALE_MINUTES));
+                    mapper.expireCommentClaims(dbNow().minusMinutes(STALE_MINUTES));
                     var rows =
                             mapper.claimComment().stream()
                                     .map(
@@ -162,6 +162,106 @@ public class CommunityModerationQueue {
                     mapper.markCommentReviewing(row.id());
                     return row;
                 });
+    }
+
+    /**
+     * MQ 消费路径：按消息里的 {@code type + id + revision} 精确抢占一条内容。
+     *
+     * <p>返回 {@code false} 的四种情况都等于"这条消息不必再处理"，调用方直接 ack：已被别的实例抢走（状态已不是待审）、 作者已改稿（版本号对不上）、内容被删、消息本身缺版本号。把它们当失败去重投只会让同一条消息在
+     * DLQ 里打转。
+     */
+    public boolean claimById(String targetType, long id, Integer revision) {
+        return Boolean.TRUE.equals(
+                tx.execute(
+                        status -> {
+                            if (COMMENT.equals(targetType)) {
+                                if (mapper.lockCommentForReview(id).isEmpty()) {
+                                    return false;
+                                }
+                                mapper.markCommentReviewing(id);
+                                return true;
+                            }
+                            if (revision == null) {
+                                return false;
+                            }
+                            if (mapper.lockArticleForReview(id, revision).isEmpty()) {
+                                return false;
+                            }
+                            mapper.markArticleReviewing(id);
+                            return true;
+                        }));
+    }
+
+    /**
+     * 抢占之后再读正文交给审核能力（不加锁：行此刻已经是"审核中"，只有持有者会读）。
+     *
+     * @return 内容已被删除或改版时返回 null，调用方按"不用再审"处理
+     */
+    public Job load(String targetType, long id, Integer revision) {
+        if (COMMENT.equals(targetType)) {
+            var rows = mapper.selectCommentContent(id);
+            return rows.isEmpty()
+                    ? null
+                    : new Job(COMMENT, id, null, null, text(rows.getFirst(), "content"), List.of());
+        }
+        if (revision == null) {
+            return null;
+        }
+        var rows = mapper.selectArticleContent(id, revision);
+        if (rows.isEmpty()) {
+            return null;
+        }
+        var rs = rows.getFirst();
+        return new Job(
+                id,
+                revision,
+                text(rs, "title"),
+                text(rs, "content_body"),
+                publication.tags(id).stream().map(PublicationDtos.Tag::name).toList());
+    }
+
+    /**
+     * 执行失败、准备重试时把内容放回待审队列（条件更新，只回滚自己抢到的那一版）。
+     *
+     * <p>不放回的话，行会一直停在"审核中"，要等 3 分钟僵尸回收才重新可抢——重投的消息那时早就被 ack 掉了。
+     */
+    public void release(String targetType, long id, Integer revision) {
+        tx.execute(
+                status -> {
+                    if (COMMENT.equals(targetType)) {
+                        mapper.releaseCommentClaim(id);
+                    } else if (revision != null) {
+                        mapper.releaseArticleClaim(id, revision);
+                    }
+                    return null;
+                });
+    }
+
+    /**
+     * 僵尸任务回收：把卡在"审核中"超过 {@link #STALE_MINUTES} 的行打回待审。
+     *
+     * <p>MQ 成为主通道后这里仍要跑：消费者进程在"审核中"状态崩溃时，消息已经被 ack（或留在 DLQ 等待重投）， 数据库那一行却不会自己回到待审。
+     */
+    public void reclaimStale() {
+        tx.execute(
+                status -> {
+                    LocalDateTime before = dbNow().minusMinutes(STALE_MINUTES);
+                    mapper.expireArticleClaims(before);
+                    mapper.expireCommentClaims(before);
+                    return null;
+                });
+    }
+
+    /**
+     * 与写入端同一个时钟。
+     *
+     * <p>{@code ai_claimed_at}/{@code created_at} 是数据库的 {@code CURRENT_TIMESTAMP} 写的，而进程时钟在两个容器里
+     * 常常差 8 小时。用 JVM 时间做「多久算旧」的阈值，会把刚抢到的任务立刻判成超时并回收成 PENDING，
+     * 后续 {@code finish} 的 {@code WHERE ai_status='REVIEWING'} 就命中 0 行——表现为审核结论永远写不进去。
+     */
+    private LocalDateTime dbNow() {
+        LocalDateTime db = mapper.selectDbNow();
+        return db != null ? db : LocalDateTime.now();
     }
 
     /**

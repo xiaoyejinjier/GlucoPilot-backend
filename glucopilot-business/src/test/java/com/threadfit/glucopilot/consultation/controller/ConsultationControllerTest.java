@@ -66,6 +66,34 @@ class ConsultationControllerTest {
     }
 
     @Test
+    void topicCatalogueRequiresUserAndUsesExplicitRouteWithNoStore() throws Exception {
+        assertEquals(
+                401,
+                web.perform(get("/api/v1/consultations/topics"))
+                        .andReturn()
+                        .getResponse()
+                        .getStatus());
+        verifyNoInteractions(service);
+        var topic = new com.threadfit.glucopilot.consultation.entity.ConsultationTopic();
+        topic.setCode("POST_MEAL");
+        topic.setName("餐后血糖");
+        topic.setGroupName("血糖管理");
+        when(service.topics()).thenReturn(java.util.List.of(topic));
+        RequestContext.setUserId(1L);
+        var response = web.perform(get("/api/v1/consultations/topics")).andReturn().getResponse();
+        assertEquals(200, response.getStatus());
+        assertEquals("no-store", response.getHeader("Cache-Control"));
+        assertEquals(
+                "POST_MEAL",
+                json.readTree(response.getContentAsString())
+                        .path("data")
+                        .get(0)
+                        .path("code")
+                        .asString());
+        verify(service).topics();
+    }
+
+    @Test
     void invalidRequestsNeverReachFinancialWrites() throws Exception {
         RequestContext.setUserId(1L);
         for (String body :

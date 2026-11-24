@@ -9,8 +9,10 @@ import com.threadfit.glucopilot.device.adapter.DevicePayloadAdapter;
 import com.threadfit.glucopilot.device.adapter.support.DeviceProviders;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
 import com.threadfit.glucopilot.device.entity.DeviceSyncLog;
+import com.threadfit.glucopilot.device.entity.DeviceSyncSample;
 import com.threadfit.glucopilot.device.entity.UserDevice;
 import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncSampleMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import com.threadfit.glucopilot.device.model.UnifiedGlucoseSample;
 import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -55,6 +58,9 @@ public class DeviceSyncFacade {
     /** 设备同步日志 Mapper。 */
     private final DeviceSyncLogMapper deviceSyncLogMapper;
 
+    /** 同步样本快照 Mapper（管理端只读曲线）。 */
+    private final DeviceSyncSampleMapper deviceSyncSampleMapper;
+
     /**
      * 构造器注入。
      *
@@ -65,16 +71,18 @@ public class DeviceSyncFacade {
      * {@link DeviceProviders#normalize(String)} 必须保持同样的规范化规则，
      * 否则会出现「已注册但查不到」的问题。</p>
      *
-     * @param adapterList           所有厂商适配器实现（由 Spring 自动收集）
-     * @param glucoseIngestPort     血糖入库端口
-     * @param userDeviceMapper      用户设备 Mapper
-     * @param deviceSyncLogMapper   同步日志 Mapper
+     * @param adapterList            所有厂商适配器实现（由 Spring 自动收集）
+     * @param glucoseIngestPort      血糖入库端口
+     * @param userDeviceMapper       用户设备 Mapper
+     * @param deviceSyncLogMapper    同步日志 Mapper
+     * @param deviceSyncSampleMapper 同步样本快照 Mapper
      */
     public DeviceSyncFacade(
             List<DevicePayloadAdapter> adapterList,
             GlucoseIngestPort glucoseIngestPort,
             UserDeviceMapper userDeviceMapper,
-            DeviceSyncLogMapper deviceSyncLogMapper) {
+            DeviceSyncLogMapper deviceSyncLogMapper,
+            DeviceSyncSampleMapper deviceSyncSampleMapper) {
         // 将适配器列表转为 Map：key 统一大写，value 为适配器本身；
         // 若两个适配器声明了同一 provider，保留先出现的（(a, b) -> a），避免 toMap 抛重复 key 异常。
         this.adapters = adapterList.stream()
@@ -85,6 +93,7 @@ public class DeviceSyncFacade {
         this.glucoseIngestPort = glucoseIngestPort;
         this.userDeviceMapper = userDeviceMapper;
         this.deviceSyncLogMapper = deviceSyncLogMapper;
+        this.deviceSyncSampleMapper = deviceSyncSampleMapper;
     }
 
     /**
@@ -163,6 +172,7 @@ public class DeviceSyncFacade {
             log.setCreatedCount(createdCount);
             log.setRemark("sync " + items.size() + " samples, created " + createdCount);
             deviceSyncLogMapper.insert(log);
+            persistSyncSamples(log.getId(), userId, bound.getId(), samples);
         }
 
         // 8. 回填响应：规范化后的 provider + 逐条结果
@@ -183,6 +193,28 @@ public class DeviceSyncFacade {
      * @param provider 已规范化的厂商名
      * @return 校验通过的设备；未传 deviceSn 时返回 null
      */
+    private void persistSyncSamples(
+            Long syncLogId, Long userId, Long deviceId, List<UnifiedGlucoseSample> samples) {
+        LocalDateTime now = LocalDateTime.now();
+        for (UnifiedGlucoseSample sample : samples) {
+            if (sample.glucoseMmolL() == null || sample.nodeCode() == null) {
+                continue;
+            }
+            BigDecimal value = sample.glucoseMmolL();
+            if (value.compareTo(BigDecimal.ZERO) <= 0 || value.compareTo(new BigDecimal("40")) >= 0) {
+                continue;
+            }
+            DeviceSyncSample row = new DeviceSyncSample();
+            row.setSyncLogId(syncLogId);
+            row.setUserId(userId);
+            row.setDeviceId(deviceId);
+            row.setRecordedAt(sample.recordedAt() != null ? sample.recordedAt() : now);
+            row.setNodeCode(sample.nodeCode());
+            row.setGlucoseValue(value);
+            deviceSyncSampleMapper.insert(row);
+        }
+    }
+
     private UserDevice resolveBoundDevice(Long userId, String deviceSn, String provider) {
         // 未传设备序列号：视为不绑定设备，跳过后续校验
         if (!StringUtils.hasText(deviceSn)) {

@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.common.mq;
 
 import com.rabbitmq.client.ConnectionFactory;
+import com.threadfit.glucopilot.common.mq.job.JobEnvelope;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Binding;
@@ -8,6 +9,8 @@ import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.amqp.support.converter.DefaultJacksonJavaTypeMapper;
+import org.springframework.amqp.support.converter.JacksonJavaTypeMapper;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.boot.amqp.autoconfigure.RabbitTemplateCustomizer;
@@ -125,20 +128,46 @@ public class RabbitMqConfig {
         JsonMapper mapper = JsonMapper.builder()
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                 .build();
-        return new JacksonJsonMessageConverter(mapper);
+        JacksonJsonMessageConverter converter = new JacksonJsonMessageConverter(mapper);
+        // 只信「调用方声明的目标类型」，不信消息头里的类名：
+        // 头里带类名 + 放开白名单 = 谁能发消息谁就能让消费者加载任意类；不放开白名单则每加一个负载类型
+        // 就得改一次配置（而且要逐个包枚举，因为 setTrustedPackages 是整包精确匹配）。
+        // 设成 INFERRED 后，@RabbitListener 的参数类型 / ParameterizedTypeReference 说了算，
+        // 历史消息里残留的 __TypeId__ 被直接忽略，不再抛 "is not in the trusted packages"。
+        DefaultJacksonJavaTypeMapper typeMapper = new DefaultJacksonJavaTypeMapper();
+        typeMapper.setTypePrecedence(JacksonJavaTypeMapper.TypePrecedence.INFERRED);
+        // spring-rabbit 4.1.1 的 MessagingMessageListenerAdapter.onMessage 会**无条件**先把
+        // amqp Message 转成 messaging Message（字节码里 toMessagingMessage 就在方法入口），
+        // 所以只要历史消息里还带着 __TypeId__、而该类不在信任列表里，监听器在进入我们的代码之前就会抛。
+        // 我们只信任自己的任务信封包——那是本项目自己的 record，没有可被利用的反序列化链；
+        // 仍然不放 *（那才是真正的任意类加载）。
+        typeMapper.setTrustedPackages(MqProperties.class.getPackageName(),
+                JobEnvelope.class.getPackageName());
+        converter.setJavaTypeMapper(typeMapper);
+        return converter;
     }
 
     /**
-     * 发送端定制：强制 mandatory + 确认/退回都留日志。
+     * 发送端定制：强制 mandatory + 去掉类型头 + 确认/退回都留日志。
      *
      * <p>{@code setMandatory(true)} 让「交换机上没有任何队列匹配」的消息触发 return 回调，
      * 而不是被代理静默丢弃；配合 {@code spring.rabbitmq.publisher-returns=true} 才能拿到回调。
      * 两个回调都只 WARN，不抛异常：确认是异步的，抛也抛不回给调用方，留痕交给日志与死信队列。
+     *
+     * <p><b>为什么要把 {@code __TypeId__} 删掉</b>：Spring AMQP 的 JSON 转换器默认把发送端的类名写进这个头，
+     * 消费端带类型提示反序列化时仍会用白名单校验它（默认只信任 {@code java.util}/{@code java.lang}）。
+     * 我们不放开白名单（放开等于允许任意类加载），改成两侧都不依赖类型头：消费方声明目标类型
+     * （{@code ParameterizedTypeReference}），头里那个类名一行用处也没有——留着只会让每个新负载类型
+     * 都要去改一次白名单。删在发送端而不是消费端，是因为重投器读死信时同样会走这条路。
      */
     @Bean
     public RabbitTemplateCustomizer glucopilotRabbitTemplateCustomizer() {
         return template -> {
             template.setMandatory(true);
+            template.setBeforePublishPostProcessors(message -> {
+                message.getMessageProperties().getHeaders().remove("__TypeId__");
+                return message;
+            });
             template.setConfirmCallback((correlationData, ack, cause) -> {
                 if (!ack) {
                     log.warn("消息未被代理确认 correlation={} cause={}",

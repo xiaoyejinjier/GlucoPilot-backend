@@ -1,5 +1,14 @@
 ﻿# API 契约
 
+## 2026-11-24 求助广场健康标签选择
+
+- 新增鉴权 GET `/api/v1/consultations/topics`，返回启用分类数组 `{code,name,groupName,sortNo}`，按 sortNo、code 排序；沿用 ApiResponse 和 no-store。
+- 求助发布和列表筛选的 topic 仍是单个分类编码，保留 GLUCOSE、DIET、MEDICATION、CHECKUP 及历史数据。新增分类来自 consultation_topic 字典，编码限大写字母起始、字母数字下划线、最多16位；新发布和筛选仅接受启用分类。相同请求编号的历史重试仍先核对原内容。
+- CaseView 追加 topicName，历史停用分类仍展示原名称。权限、分页、隐藏本人及医生未接诊筛选不变。
+- V94 新增分类字典，预置30个血糖、饮食、用药复查、生活管理标签，将原四类 CHECK 替换成分类字典外键。
+- 小程序增加“常用标签＋全部标签”选择页，支持搜索、选中筛选、增减及恢复常用标签；发布求助共用目录，单选分类。常用设置按 API 环境及用户 communityKey 保存在本机。目录加载失败显示重试，不将新分类映射成旧分类；修改字典的名称、启用状态或排序后刷新生效。
+
+
 ## 2026-11-19 餐食记录改版 V2（移除血糖预测，新增适食分析）
 
 > 状态：**契约先行，尚未实现**。分阶段实现见 `.trae/documents/plans/2026-11-18-餐食模块改版方案.md` 第 7 节；字段细节以该方案 3.1–3.6 为准，本节只锁定对外字段、判定口径与错误码。
@@ -504,6 +513,10 @@ GET /api/v1/community/following 增加可选keyword（去空白后最多32字，
 POST /api/v1/localizations/en，鉴权，body={items:[{kind:"ARTICLE_PREVIEW"|"ARTICLE_BODY"|"PROFILE_NAME",id:string}],retry?:boolean}；每批最多20项，ID保持字符串，文章用资讯newsId，资料用u/b公开key。仅服务端按ID读取原文，不接受客户端自带原文/提示词。每项返回{kind,id,status:"PENDING"|"READY"|"FAILED"|"UNAVAILABLE",source:{title?,summary?,body?,nickname?},translated:{...},sourceHash:string}。文章预览只含标题/摘要，正文单独请求；返回原文用于客户端精确核对后显示，失败显示原文和可重试提示。单项无权/不存在统一UNAVAILABLE且不返回source/hash，不能通过译文缓存读取隐藏、私密、撤审、删除或无权文章。
 
 按当前用户的阅读权限每次核查后才读缓存。翻译后台排队，PENDING可每2秒重查同接口，重复请求合并；显式retry才重试FAILED且有短暂冷却。V39持久缓存按kind/id/原文SHA-256/en版本隔离，修改文章或昵称自动失效；只写缓存，不改原稿、昵称、发布状态或互动数据。英文昵称采用稳定英文翻译/拉丁字母显示名，中文原名在资料卡保留；相同ID与原文复用结果。AI仅调用不带聊天记忆和工具的独立翻译客户端，保留数值/单位及原文语义，富文本标签与地址不交模型改写。
+
+2026-11-24 英文文章响应优化：正文使用独立有界队列，不被列表标题或昵称任务占满；正文翻译文本支持最多120000字符，按原顺序分批、每篇最多两批并行，完整校验后写入同一缓存。详情页优先提交正文及标题，等待PENDING结果时每800毫秒复查，其他列表保持每2秒复查。接口及权限规则不变；失败仍展示原文并提供重试，不将未完成的译文标为READY。
+
+2026-11-24 问诊英文阅读：同一接口新增CONSULTATION_PREVIEW、CONSULTATION_DETAIL、CONSULTATION_REPORT，id均为问诊ID。PREVIEW只翻译title；DETAIL包含symptoms/glucoseNote/medicationNote，每次读取前须确认当前用户detailsVisible；REPORT包含assessment/medicationAdvice/followUpAdvice，每次读取前须确认report.access=UNLOCKED。原文仅从ConsultationService.detail的授权投影读取，未解锁、非参与者、被撤销医生资格或不存在的私有对象返回UNAVAILABLE且不返回source/hash/translated，即使已存在译文缓存也不能绕过权限或付款。译文不覆盖原稿、编辑表单和聊天原话，按原文与提示词版本复用缓存；通用AI翻译审计不返回问诊隐私缓存。V97仅扩展翻译缓存kind约束，不修改现有问诊及钱包业务数据。
 
 模型内部输入为扁平字符串字典，内容类型单独放在系统说明中；返回必须为同键的扁平译文字典，避免模型将kind/strings外壳一并返回导致误判失败。内部修正不改变用户端请求/响应或缓存表结构；缓存格式按版本隔离，旧失败记录保留，新版本自动重新排队，不要求用户手工清库。
 
@@ -1065,6 +1078,7 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | POST /api/v1/devices/bind | C 端登录 | 自助绑定：SN 空闲则新建并归属当前用户；已有空闲档案可认领；已被他人占用则冲突。建议写操作带 X-Idempotency-Key |
 | POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
 | GET /api/v1/devices/{id}/sync-logs?limit=10 | C 端登录 | 本人设备近 N 次同步流水（默认 10，最大 50）；按时间倒序；他人设备 id 业务拒绝 |
+| GET /api/v1/devices/{id}/sync-logs/{logId}/samples | C 端登录 | 本人某次同步的血糖样本快照（只读）；校验设备与流水归属本人；返回 { syncedAt, sampleCount, points:[{ recordedAt, nodeCode, glucoseValue }] } 按 recordedAt 升序；旧流水无快照时 points 为空数组 |
 
 绑定请求体：`{ deviceSn, provider, deviceName?, deviceCategory?, deviceModel? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceCategory?, deviceModel?, deviceStatus, lastSyncAt, bound, cloudLinked }`（bound 恒为 true；deviceCategory 闭集 CGM/BGM/PUMP/PEN/BAND/WATCH/RING/HUB/SCALE/BP/OXIMETER/OTHER 可空；deviceModel 可空；cloudLinked 表示已关联有效厂商云授权，首期仅 HUAWEI；响应不含 token）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
 
@@ -1087,13 +1101,16 @@ cloud-pull 成功：{ provider, items, devices? }（items 同 SyncResponse；dev
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
 | GET /admin/v1/devices | device:manage | 分页；可选 keyword、deviceStatus、provider、deviceCategory、bound、cloudLinked；列表项含 deviceCategory、deviceModel、cloudLinked、syncHealth（OK/NEVER/STALE，48h）、createdAt |
-| POST /admin/v1/devices | device:manage | 创建；可选 deviceCategory、deviceModel |
-| PUT /admin/v1/devices/{id} | device:manage | 更新名称/厂商/类型/型号/绑定用户 |
+| POST /admin/v1/devices | device:manage | 创建；可选 deviceCategory、deviceModel；未传类型时可按 SN/名称启发式回填 |
+| PUT /admin/v1/devices/{id} | device:manage | 更新名称/厂商/类型/型号/绑定用户；类型为空时可启发式回填 |
 | PUT /admin/v1/devices/{id}/status | device:manage | 启用/禁用 |
 | DELETE /admin/v1/devices/{id} | device:manage | 逻辑删除 |
 | GET /admin/v1/devices/{id}/sync-logs?limit=20 | device:manage | 近 N 次同步流水（默认 20，最大 50） |
+| GET /admin/v1/devices/{id}/sync-logs/{logId}/samples | device:manage | 某次同步的血糖样本快照（只读）；校验 log 属于该设备；返回 { syncedAt, sampleCount, points:[{ recordedAt, nodeCode, glucoseValue }] } 按 recordedAt 升序；旧流水无快照时 points 为空数组 |
 | GET /admin/v1/devices/{id}/cloud-auth | device:manage | { linked, expiresAt, scopes?, vendorSubjectMasked? }；无 token |
 | DELETE /admin/v1/devices/{id}/cloud-auth | device:manage | 撤销云授权 |
+
+设备成功同步且绑定了档案时，除写入 device_sync_log 外，还将本次统一血糖样本快照到 device_sync_sample（与流水同事务），供管理端与小程序只读曲线；历史流水不回填。
 
 ## 服务器资源监控（2026-10-22）
 

@@ -10,6 +10,7 @@ public class ConsultationRow {
     private Long patientId;
     private String title;
     private String topic;
+    private String topicName;
     private String symptoms;
     private String glucoseNote;
     private String medicationNote;

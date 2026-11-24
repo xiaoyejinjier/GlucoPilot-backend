@@ -25,6 +25,18 @@ public class ConsultationService {
         return new Capabilities("ACTIVE", true, true, true, 100, "CNY", "WALLET_SANDBOX");
     }
 
+    public List<ConsultationTopic> topics() {
+        return mapper.topics();
+    }
+
+    /** 只允许启用的字典编码，客户端不能自行创建分类。 */
+    private String topicFilter(String topic) {
+        if (topic == null || topic.isBlank()) return null;
+        if (!topic.matches("[A-Z][A-Z0-9_]{0,15}") || mapper.enabledTopic(topic) != 1)
+            throw new BizException(ErrorCode.BAD_REQUEST, "问题分类已停用或不存在，请重新选择");
+        return topic;
+    }
+
     public DoctorProfile doctor(long user) {
         return mapper.doctor(user);
     }
@@ -89,7 +101,7 @@ public class ConsultationService {
             String topic,
             PageQuery page) {
         checkPage(page);
-        String filter = filter(topic, Set.of("GLUCOSE", "DIET", "MEDICATION", "CHECKUP"));
+        String filter = topicFilter(topic);
         var doctor = mapper.doctor(viewer);
         if (assigned && !approved(doctor))
             throw new BizException(ErrorCode.FORBIDDEN, "请先完成医生身份审核");
@@ -144,6 +156,9 @@ public class ConsultationService {
                 throw conflict();
             return detail(user, previous.getId());
         }
+        // 旧请求可幂等重试；只有新发布需要校验分类当前是否启用。
+        if (topicFilter(form.topic()) == null)
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择问题分类");
         mapper.insertCase(user, form);
         long id = mapper.request(user, form.clientRequestId()).getId();
         int sort = 0;
@@ -357,7 +372,8 @@ public class ConsultationService {
                 visible,
                 !mine && approved(profile) && "WAITING".equals(row.getStatus()),
                 assigned && "IN_PROGRESS".equals(row.getStatus()),
-                detail && (mine || assigned) ? reportView(viewer, row, profile, report) : null);
+                detail && (mine || assigned) ? reportView(viewer, row, profile, report) : null,
+                row.getTopicName());
     }
 
     private ReportView reportView(

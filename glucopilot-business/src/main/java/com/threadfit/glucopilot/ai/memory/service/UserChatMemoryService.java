@@ -256,6 +256,16 @@ public interface UserChatMemoryService {
      *               打开时只回看 {@code ai.memory.keyword-fallback-window-messages} 条
      *               （默认 6）——它由聊天主链路顺带触发，不能像终局复盘那样一次回看整段
      */
+    /**
+     * 同步执行一次抽取（任务队列的消费端用）。
+     *
+     * <p>与 {@link #extractAsync} 的区别只是"谁来调度"：这里不投线程池、不派发消息，
+     * 直接在当前线程把窗口读完并写库。单飞标记仍然生效——同一会话同时只会有一条在跑，
+     * 抢不到直接返回 0（重复投递的消息因此不会二次计费）。
+     *
+     * @return 写入/覆盖的记忆条数
+     */
+    int extractNow(Long userId, Long sessionId, String reason);
     void extractAsync(Long userId, Long sessionId, String reason);
 
     /** 当前是否有抽取任务在跑（E2E/断言用）。 */

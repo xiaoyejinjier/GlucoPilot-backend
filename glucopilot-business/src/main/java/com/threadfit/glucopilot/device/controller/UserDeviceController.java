@@ -50,4 +50,12 @@ public class UserDeviceController {
             @RequestParam(defaultValue = "10") int limit) {
         return ApiResponse.ok(userDeviceService.listSyncLogs(RequestContext.requireUserId(), id, limit));
     }
+
+    /** 本人某次同步的血糖样本快照（只读曲线）。 */
+    @GetMapping("/{id:\\d+}/sync-logs/{logId:\\d+}/samples")
+    public ApiResponse<DeviceDtos.SyncSamplesResponse> syncSamples(
+            @PathVariable Long id, @PathVariable Long logId) {
+        return ApiResponse.ok(
+                userDeviceService.listSyncSamples(RequestContext.requireUserId(), id, logId));
+    }
 }

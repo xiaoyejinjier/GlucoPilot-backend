@@ -20,7 +20,7 @@ public final class ConsultationDtos {
 
     public record PublishRequest(
             @NotBlank @Size(min = 4, max = 80) String title,
-            @NotBlank @Pattern(regexp = "GLUCOSE|DIET|MEDICATION|CHECKUP") String topic,
+            @NotBlank @Pattern(regexp = "[A-Z][A-Z0-9_]{0,15}") String topic,
             @NotBlank @Size(min = 10, max = 3000) String symptoms,
             @Size(max = 300) String glucoseNote,
             @Size(max = 1000) String medicationNote,
@@ -103,5 +103,6 @@ public final class ConsultationDtos {
             boolean detailsVisible,
             boolean canClaim,
             boolean canReply,
-            ReportView report) {}
+            ReportView report,
+            String topicName) {}
 }

@@ -5,12 +5,15 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.device.adapter.support.DeviceCategories;
+import com.threadfit.glucopilot.device.adapter.support.DeviceCategoryHints;
 import com.threadfit.glucopilot.device.adapter.support.DeviceProviders;
 import com.threadfit.glucopilot.device.cloud.DeviceCloudCredentialService;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
 import com.threadfit.glucopilot.device.entity.DeviceSyncLog;
+import com.threadfit.glucopilot.device.entity.DeviceSyncSample;
 import com.threadfit.glucopilot.device.entity.UserDevice;
 import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncSampleMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -40,6 +43,9 @@ public class UserDeviceService {
 
     /** 设备同步日志 Mapper。 */
     private final DeviceSyncLogMapper deviceSyncLogMapper;
+
+    /** 同步血糖样本快照 Mapper。 */
+    private final DeviceSyncSampleMapper deviceSyncSampleMapper;
 
     private final DeviceCloudCredentialService deviceCloudCredentialService;
 
@@ -84,7 +90,9 @@ public class UserDeviceService {
         String name = StringUtils.hasText(request.getDeviceName())
                 ? request.getDeviceName().trim()
                 : defaultName(provider);
-        String category = DeviceCategories.normalize(request.getDeviceCategory());
+        String category = DeviceCategoryHints.resolveOrSuggest(
+                DeviceCategories.normalize(request.getDeviceCategory()), sn, name,
+                StringUtils.hasText(request.getDeviceModel()) ? request.getDeviceModel().trim() : null);
         String model = StringUtils.hasText(request.getDeviceModel()) ? request.getDeviceModel().trim() : null;
 
         // 按 SN 查档案并加行锁（LIMIT 1 FOR UPDATE），防止并发绑定同一设备
@@ -125,6 +133,11 @@ public class UserDeviceService {
             existing.setProvider(provider);
             if (category != null) {
                 existing.setDeviceCategory(category);
+            } else if (!StringUtils.hasText(existing.getDeviceCategory())) {
+                String hinted = DeviceCategoryHints.suggest(sn, name, model);
+                if (hinted != null) {
+                    existing.setDeviceCategory(hinted);
+                }
             }
             if (model != null) {
                 existing.setDeviceModel(model);
@@ -138,6 +151,11 @@ public class UserDeviceService {
         existing.setProvider(provider);
         if (category != null) {
             existing.setDeviceCategory(category);
+        } else if (!StringUtils.hasText(existing.getDeviceCategory())) {
+            String hinted = DeviceCategoryHints.suggest(sn, name, model);
+            if (hinted != null) {
+                existing.setDeviceCategory(hinted);
+            }
         }
         if (model != null) {
             existing.setDeviceModel(model);
@@ -218,6 +236,51 @@ public class UserDeviceService {
                 .stream()
                 .map(UserDeviceService::toSyncLogItem)
                 .toList();
+    }
+
+    /**
+     * 本人某次同步的血糖样本快照（只读），供小程序可视化曲线。
+     *
+     * <p>校验设备归属与流水归属；旧流水无快照时 {@code points} 为空数组。
+     */
+    public DeviceDtos.SyncSamplesResponse listSyncSamples(Long userId, Long deviceId, Long logId) {
+        UserDevice row = userDeviceMapper.selectById(deviceId);
+        if (row == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "设备不存在");
+        }
+        if (row.getUserId() == null || !row.getUserId().equals(userId)) {
+            throw new BizException(ErrorCode.BIZ_REJECTED, "只能查看本人设备同步记录");
+        }
+        DeviceSyncLog log = deviceSyncLogMapper.selectById(logId);
+        if (log == null
+                || !deviceId.equals(log.getDeviceId())
+                || log.getUserId() == null
+                || !log.getUserId().equals(userId)) {
+            throw new BizException(ErrorCode.NOT_FOUND, "同步流水不存在");
+        }
+        List<DeviceDtos.SyncSamplePoint> points =
+                deviceSyncSampleMapper
+                        .selectList(
+                                new LambdaQueryWrapper<DeviceSyncSample>()
+                                        .eq(DeviceSyncSample::getSyncLogId, logId)
+                                        .eq(DeviceSyncSample::getDeviceId, deviceId)
+                                        .eq(DeviceSyncSample::getUserId, userId)
+                                        .orderByAsc(DeviceSyncSample::getRecordedAt)
+                                        .orderByAsc(DeviceSyncSample::getId))
+                        .stream()
+                        .map(
+                                sample ->
+                                        DeviceDtos.SyncSamplePoint.builder()
+                                                .recordedAt(sample.getRecordedAt())
+                                                .nodeCode(sample.getNodeCode())
+                                                .glucoseValue(sample.getGlucoseValue())
+                                                .build())
+                        .toList();
+        return DeviceDtos.SyncSamplesResponse.builder()
+                .syncedAt(log.getGmtCreate())
+                .sampleCount(log.getSampleCount() == null ? points.size() : log.getSampleCount())
+                .points(points)
+                .build();
     }
 
     /** 同步日志实体 → DTO。 */

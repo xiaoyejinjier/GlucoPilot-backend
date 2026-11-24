@@ -7,8 +7,10 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.device.adapter.MockDeviceAdapter;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
 import com.threadfit.glucopilot.device.entity.DeviceSyncLog;
+import com.threadfit.glucopilot.device.entity.DeviceSyncSample;
 import com.threadfit.glucopilot.device.entity.UserDevice;
 import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncSampleMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import com.threadfit.glucopilot.device.port.GlucoseIngestPort;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,6 +40,8 @@ class DeviceSyncFacadeTest {
     private UserDeviceMapper userDeviceMapper;
     @Mock
     private DeviceSyncLogMapper deviceSyncLogMapper;
+    @Mock
+    private DeviceSyncSampleMapper deviceSyncSampleMapper;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private DeviceSyncFacade facade;
@@ -44,7 +49,11 @@ class DeviceSyncFacadeTest {
     @BeforeEach
     void setUp() {
         facade = new DeviceSyncFacade(
-                List.of(new MockDeviceAdapter()), glucoseIngestPort, userDeviceMapper, deviceSyncLogMapper);
+                List.of(new MockDeviceAdapter()),
+                glucoseIngestPort,
+                userDeviceMapper,
+                deviceSyncLogMapper,
+                deviceSyncSampleMapper);
     }
 
     @Test
@@ -78,6 +87,11 @@ class DeviceSyncFacadeTest {
         bound.setProvider("MOCK");
         when(userDeviceMapper.selectOne(any())).thenReturn(bound);
         when(glucoseIngestPort.upsertByNode(any())).thenReturn(new GlucoseIngestPort.IngestResult(1L, true));
+        doAnswer(invocation -> {
+            DeviceSyncLog log = invocation.getArgument(0);
+            log.setId(99L);
+            return 1;
+        }).when(deviceSyncLogMapper).insert(any(DeviceSyncLog.class));
 
         DeviceDtos.SyncRequest request = new DeviceDtos.SyncRequest();
         request.setProvider("MOCK");
@@ -96,6 +110,11 @@ class DeviceSyncFacadeTest {
         assertEquals("MOCK", logCaptor.getValue().getProvider());
         assertEquals(1, logCaptor.getValue().getSampleCount());
         assertEquals(1, logCaptor.getValue().getCreatedCount());
+        ArgumentCaptor<DeviceSyncSample> sampleCaptor = ArgumentCaptor.forClass(DeviceSyncSample.class);
+        verify(deviceSyncSampleMapper).insert(sampleCaptor.capture());
+        assertEquals(99L, sampleCaptor.getValue().getSyncLogId());
+        assertEquals(7L, sampleCaptor.getValue().getDeviceId());
+        assertEquals("before_breakfast", sampleCaptor.getValue().getNodeCode());
     }
 
     @Test

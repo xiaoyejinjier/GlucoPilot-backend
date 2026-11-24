@@ -40,13 +40,14 @@ public interface LocalizationMapper {
      *
      * <p>排序用 {@code updated_at DESC}：翻译表是「同一资源随原文变化不断插入新 hash 行」的追加型缓存，
      * 运营想看的是「最近谁被翻了、翻成什么」，而不是最早的一条。
+     * 问诊译文包含健康隐私及付费内容，通用AI审计权限不授予问诊阅读权，因此仅返回原三类公开内容。
      *
      * @param kind   ARTICLE_PREVIEW / ARTICLE_BODY / PROFILE_NAME，可空
      * @param status PENDING / READY / FAILED，可空
      */
     @Select("<script>"
             + "SELECT kind,resource_id,source_hash,locale,status,prompt_ver,translated_json,updated_at"
-            + " FROM content_localization WHERE 1 = 1"
+            + " FROM content_localization WHERE kind IN ('ARTICLE_PREVIEW','ARTICLE_BODY','PROFILE_NAME')"
             + "<if test='kind != null'> AND kind = #{kind}</if>"
             + "<if test='status != null'> AND status = #{status}</if>"
             + " ORDER BY updated_at DESC, kind ASC, resource_id ASC"
@@ -91,6 +92,30 @@ public interface LocalizationMapper {
             "UPDATE content_localization SET lease_token=NULL,lease_until=NULL WHERE "
                     + LEASE_IDENTITY)
     int release(@Param("item") Item item, @Param("hash") String hash, @Param("lease") String lease);
+
+    @Update(
+            "UPDATE content_localization SET lease_token=NULL,lease_until=#{until} WHERE "
+                    + LEASE_IDENTITY)
+    int defer(
+            @Param("item") Item item,
+            @Param("hash") String hash,
+            @Param("lease") String lease,
+            @Param("until") LocalDateTime until);
+
+    /**
+     * 清掉「租约已过期、但 token 还挂着」的行（定时巡检用）。
+     *
+     * <p>清理本身不改变可认领性（{@code claim} 的条件已经允许 {@code lease_until < now} 的行被接手），
+     * 它的价值是：① 让运维能从 {@code lease_token} 是否为空看出「这张表有没有堆积」；
+     * ② 进程崩溃后残留的 token 不会再被 {@code renew} 心跳续上。
+     *
+     * @return 被清理的行数
+     */
+    @Update(
+            "UPDATE content_localization SET lease_token=NULL,lease_until=NULL"
+                    + " WHERE status='PENDING' AND lease_token IS NOT NULL"
+                    + " AND (lease_until IS NULL OR lease_until<#{now})")
+    int clearExpiredLeases(@Param("now") LocalDateTime now);
 
     @Update(
             "UPDATE content_localization SET status='READY',translated_json=#{translatedJson},"

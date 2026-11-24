@@ -94,7 +94,7 @@ class UserChatMemorySelfServiceTest {
                 aiProperties,
                 new JsonUtils(new ObjectMapper()),
                 AiConcurrencyTestSupport.policy(),
-                Runnable::run);
+                Runnable::run, org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.mq.MemoryExtractJobs.class));
         RequestContext.clear();
         RequestContext.setUserId(USER_ID);
     }
@@ -458,7 +458,7 @@ class UserChatMemorySelfServiceTest {
                 aiProperties,
                 new JsonUtils(new ObjectMapper()),
                 AiConcurrencyTestSupport.policy(),
-                Runnable::run);
+                Runnable::run, org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.mq.MemoryExtractJobs.class));
     }
 
     private static long ROW_SEQ = 0;

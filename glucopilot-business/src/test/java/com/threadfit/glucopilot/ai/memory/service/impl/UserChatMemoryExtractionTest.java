@@ -91,7 +91,7 @@ class UserChatMemoryExtractionTest {
 
         service = new UserChatMemoryServiceImpl(clients, memoryMapper, chatMessageMapper, chatSessionMapper, promptService,
                 resolver, aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), AiConcurrencyTestSupport.policy(),
-                executor);
+                executor, org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.mq.MemoryExtractJobs.class));
     }
 
     @Test

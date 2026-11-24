@@ -70,6 +70,11 @@ class CommunityFeatureWiringTest {
                         CommunityReportManagementMapper.class, CmsNewsMapper.class,
                         CommunityAccountCleanupMapper.class
                     }) registerMock(context, type);
+            // 审核任务派发口只是"通知"，装配校验里给它一个 mock（派发语义由 common/mq/job 与
+            // CommunityModerationJobsTest 覆盖），否则这条纯接线用例会被 MQ 依赖拖死
+            registerMock(
+                    context,
+                    com.threadfit.glucopilot.community.moderation.mq.CommunityModerationJobs.class);
             context.register(
                     Transactions.class,
                     ArticleAccessService.class,

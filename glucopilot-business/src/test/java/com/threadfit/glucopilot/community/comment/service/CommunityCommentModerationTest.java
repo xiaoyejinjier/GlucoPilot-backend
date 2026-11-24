@@ -136,7 +136,8 @@ class CommunityCommentModerationTest {
                         CommunityTestMappers.access(jdbc),
                         CommunityTestMappers.recommendation(jdbc),
                         CommunityTestMappers.reports(jdbc),
-                        CommunityTestMappers.adminComments(jdbc));
+                        CommunityTestMappers.adminComments(jdbc),
+                        CommunityTestMappers.moderationJobs());
         this.publication = publication;
         community = CommunityTestMappers.community(jdbc);
         queue =
@@ -221,6 +222,31 @@ class CommunityCommentModerationTest {
 
         assertNotNull(job);
         assertEquals(id, job.id(), "超时的 REVIEWING 会被收回并重新排队（评论没有人工重试按钮）");
+    }
+
+    @Test
+    void 僵尸回收必须同时清掉claimedAt否则补扫永远扫不到它() {
+        // 真实事故复现：expireCommentClaims 原来只改状态、不清 ai_claimed_at，
+        // 而补扫的条件是 ai_claimed_at IS NULL ⇒ 这条评论既不在 REVIEWING（不会被 finish 命中），
+        // 也不满足补扫条件，永久卡在 PENDING 且没人审。
+        long id = insertComment("某条评论", "c-stale-claimed");
+        jdbc.update(
+                "UPDATE community_comment SET ai_status='REVIEWING',"
+                        + "ai_claimed_at=DATEADD('MINUTE',-10,CURRENT_TIMESTAMP) WHERE id=?",
+                id);
+
+        queue.reclaimStale();
+
+        assertEquals(
+                "PENDING",
+                jdbc.queryForObject(
+                        "SELECT ai_status FROM community_comment WHERE id=?", String.class, id));
+        assertNull(
+                jdbc.queryForObject(
+                        "SELECT ai_claimed_at FROM community_comment WHERE id=?",
+                        java.time.LocalDateTime.class,
+                        id),
+                "回收时把 ai_claimed_at 一起清掉，补扫（ai_claimed_at IS NULL）才认得这条");
     }
 
     @Test

@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.consultation.controller;
 import com.threadfit.glucopilot.common.api.*;
 import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.consultation.dto.ConsultationDtos.*;
+import com.threadfit.glucopilot.consultation.entity.ConsultationTopic;
 import com.threadfit.glucopilot.consultation.entity.DoctorProfile;
 import com.threadfit.glucopilot.consultation.service.ConsultationService;
 import com.threadfit.glucopilot.wallet.dto.WalletDtos;
@@ -17,6 +18,8 @@ import org.springframework.http.*;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @Validated
 @RequiredArgsConstructor
@@ -29,6 +32,12 @@ public class ConsultationController {
     public ResponseEntity<ApiResponse<Capabilities>> capabilities() {
         RequestContext.requireUserId();
         return ok(service.capabilities());
+    }
+
+    @GetMapping("/consultations/topics")
+    public ResponseEntity<ApiResponse<List<ConsultationTopic>>> topics() {
+        RequestContext.requireUserId();
+        return ok(service.topics());
     }
 
     @GetMapping("/consultations")

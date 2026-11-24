@@ -12,6 +12,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.HtmlUtils;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.ObjectMapper;
 
@@ -87,16 +88,28 @@ public class ModelEnglishTranslator implements EnglishTranslator {
             var parts=parts(entry.getValue(),entry.getKey().equals("body"));layout.put(entry.getKey(),parts);
             for(int i=0;i<parts.size();i++)if(parts.get(i).translate())segments.put(entry.getKey()+":"+i,parts.get(i).value());
         }
-        if(segments.values().stream().mapToInt(String::length).sum()>16000)throw new IllegalArgumentException("Article too long for translation");
-        var translated=new LinkedHashMap<String,String>();
+        int maxLength = kind.equals("ARTICLE_BODY") ? 120000 : 16000;
+        if(segments.values().stream().mapToInt(String::length).sum()>maxLength)throw new IllegalArgumentException("Article too long for translation");
+        var batches = new ArrayList<Map<String, String>>();
         var batch=new LinkedHashMap<String,String>();int length=0;
         for(var entry:segments.entrySet()) {
             if(!batch.isEmpty()&&(batch.size()>=24||length+entry.getValue().length()>3200)) {
-                translated.putAll(call(kind,batch));batch.clear();length=0;
+                batches.add(new LinkedHashMap<>(batch));batch.clear();length=0;
             }
             batch.put(entry.getKey(),entry.getValue());length+=entry.getValue().length();
         }
-        if(!batch.isEmpty())translated.putAll(call(kind,batch));
+        if(!batch.isEmpty())batches.add(new LinkedHashMap<>(batch));
+        var translated=new LinkedHashMap<String,String>();
+        if (Set.of("ARTICLE_BODY", "CONSULTATION_DETAIL", "CONSULTATION_REPORT").contains(kind) && batches.size() > 1) {
+            // 每篇最多两批同时翻译，按输入顺序收集；任一批校验失败就不发布整篇译文。
+            var outputs = Flux.fromIterable(batches)
+                    .flatMapSequential(values -> Mono.fromCallable(() -> call(kind, values))
+                            .subscribeOn(Schedulers.boundedElastic()), 2, 1)
+                    .collectList().block();
+            if (outputs != null) outputs.forEach(translated::putAll);
+        } else {
+            for (var values : batches) translated.putAll(call(kind, values));
+        }
         var result=new LinkedHashMap<String,String>();
         for(var entry:layout.entrySet()) {
             var out=new StringBuilder();var parts=entry.getValue();

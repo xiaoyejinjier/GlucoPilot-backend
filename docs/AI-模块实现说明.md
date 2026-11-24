@@ -1085,31 +1085,48 @@ if (updated == 0) { /* 指针已经前进了（别的实例先完成），丢弃
 
 摘要只往「已摘要到哪条」的指针后面推进，`update ... where context_upto < ?` 保证不会用旧摘要覆盖新摘要——这是多实例部署下唯一安全的写法（进程内单飞管不到另一个实例）。
 
-**「攒够再压」的三道门（V76，批次 3 的 T3.2）**：`maybeSummarizeAsync` 每轮回复后都会被调用，而「窗口外只要多出 1 条消息」就算超阈值，所以早期实现实际上是**每轮都调一次摘要模型**。现在在 `runSummarize` 里、`candidates.isEmpty()` 之后加了一道门（`skipReason(sessionId, candidates)`）：
+### 10.3 摘要门：水位模型（2026-11-24 重写）
 
-| 门 | 配置 | 默认 | 语义 |
-| --- | --- | --- | --- |
-| 条数 | `ai.memory.summary-min-pending-messages` | 12 | 待压候选（已扣掉 `keep-recent-messages` 保底）少于 12 条就不压 |
-| 字数 | `ai.memory.summary-min-pending-chars` | 1500 | 候选总字数不到 1500 也不压 |
-| 间隔 | `ai.memory.summary-min-interval-seconds` | 60 | 距上次摘要写入不到 60 秒不压（防抖） |
+**「攒够再压」的水位门**：`maybeSummarizeAsync` 每轮回复后都会被调用，而早期实现「窗口外只要多出 1 条消息」就算超阈值，实际上是**每轮都调一次摘要模型**——既不省钱，还会把摘要块反复重写、连带废掉后面整段历史的前缀缓存（实测：摘要重写那一轮命中率 24%，下一轮回到 93%）。
 
-条数与字数取**或**（任一达标就压），间隔是**与**（还得够久）。`<=0` 表示关掉该门。间隔门的时间戳来自 V76 新增的 `chat_session.summary_updated_at`——刻意不复用 `gmt_modified`（改名会话、结束会话、状态流转都会碰它）。
+这一版把判据换成了**与被保护量同源**的「待压条数」（`protectedTail` = 摘要指针之后、还没被覆盖的消息条数），由装配器在装配当期量出、随 done 路径一起交给摘要服务（`ChatSummaryService.SummarySignal`：待压条数 / 待压字数 / 上一轮被预算挤掉的条数 / 本轮估算 token / 预算）。四层判定，`Decision.run()` 与 `reason` 一条一条往下列：
 
-日志实测（`summary-min-pending-messages=12`）：
+| 层 | 条件（默认值） | 结果 |
+| --- | --- | --- |
+| 0 防抖下限 | 待压 < 6 条 **且** < 800 字 | `TINY`：不值得为这点内容花一次模型调用 |
+| 1 硬触发 | 上一轮被预算挤掉过（`droppedLast > 0`）/ 待压 ≥ 窗口−2（18 条）/ 估算 ≥ 90% 预算 | `DROPPED` / `HIGH_WATER`：**无视冷却、退避、配额** |
+| 2 机会窗 | 待压 ≥ 窗口 × 0.5（10 条），且距上次摘要 ≥ 冷却（30 秒）、没在退避、当天配额还有 | `OPPORTUNISTIC`：压 |
+| 3 其余 | 待压 < 10 条（`BELOW_WATER`）、退避中（`BACKOFF`）、冷却中（`COOLDOWN`）、配额用完（`QUOTA`） | 继续攒 |
 
-```
-暂不摘要（候选 4 条/1167 字，未达 12 条或 1500 字的门）sessionId=181 候选=4条
-暂不摘要（候选 6 条/1435 字，未达 12 条或 1500 字的门）sessionId=181 候选=6条
-会话摘要已更新 userId=27 sessionId=181 压缩消息=6 摘要=800字 覆盖到消息=2031
-```
+**为什么要滞回**：一次只压到「目标水位 = 窗口 × 0.5 = 10 条」，压完还能撑约 4 轮，于是形成「扩到 20 → 收回 10 → 再扩」的锯齿，而不是每轮滑一格。这就是 OpenHands（`max_size=100` 触发、压到 `max_size/2`）与 Cline（0.9 触发、0.7 目标、`preserve 20k recent`）的共同做法。
 
-注意「候选」= 待压条数 − `keep-recent-messages`（6），所以 12 条候选约等于**9 轮对话**（每轮 2 条）才压一次，而不是 6 轮。这一条比阈值本身更容易误读。
+**指针必须连续**：旧实现从「最新往回装」并把指针跳到最新一条，中间更旧的候选既不在摘要里、也不会再被选中，永久丢失。现在 `trimToTarget` **从最旧往后装**、装不下就停，`upto` 取实际覆盖到的最后一条，剩下的下一轮继续——滞回「走到目标水位」正是靠它实现的。
+
+**成本闸（两项都在 `AiConcurrencyPolicy` 里，用 Redis 计数器/缓存实现）**：
+
+| 闸 | key | 语义 |
+| --- | --- | --- |
+| 每日配额 | `ai:summary:quota:{userId}:{yyyyMMdd}` | 默认 200 次/天，`expireAt` 次日 0 点；超额后**只保留第 1 层硬触发** |
+| 失败退避 | `ai:summary:fail:{sessionId}` | 连续失败 1/2/4/8/15 分钟（`base × 2^(n-1)`，封顶 900 秒），成功即清零 |
+
+配置项（`ai.memory.*`，`application.yaml` 里有整段注释）：
+
+| 配置 | 默认 | 语义 |
+| --- | --- | --- |
+| `summary-floor-messages` | 6 | 防抖下限（条） |
+| `summary-floor-chars` | 800 | 防抖下限（字） |
+| `summary-cooldown-seconds` | 30 | 机会窗的最小间隔 |
+| `summary-high-water-ratio` | 0.9 | 估算 token 占预算的比例，到这条线算硬触发 |
+| `summary-target-ratio` | 0.5 | 目标水位 = 窗口 × 该比例 |
+| `summary-daily-quota` | 200 | 每用户每天摘要次数，`<=0` 不限 |
+| `summary-backoff-base-seconds` | 60 | 指数退避基数 |
+| `summary-backoff-max-seconds` | 900 | 指数退避封顶 |
+
+日志与观测：成功时 `会话摘要已更新 … 覆盖到消息=N 触发=OPPORTUNISTIC 待压=12→8`；跳过时 debug 一级 `暂不摘要（BELOW_WATER）sessionId=… 待压=8条/900字 SummarySignal[…]`。`reason` 的取值就是排障时的第一现场：全是 `BELOW_WATER` 说明攒得慢、全是 `COOLDOWN` 说明冷却太长、出现 `DROPPED` 说明预算已经紧到丢消息。
 
 **为什么顺带把 `SUMMARY` 绑到便宜模型（V77）**：摘要的输入是「已有摘要 + 待压原文」，实测 600~1800 输入 token、输出 82~550 token，全程关思维链、温度 0.1——这是典型的「格式整理活」，用最贵的文本默认模型（pro）做纯属浪费。V77 在 `ai_scene_config` 里插了一行 `SUMMARY → deepseek-v4-flash`，并把原本停用的 flash 启用（不影响文本默认仍是 pro）。
 
-**间隔门的例外：窗口将溢出时立即摘要（2026-11-19）**：`skipReason` 先算 `issueDoc = isWindowAboutToOverflow(candidates.size(), memory)`，阈值 = `window-messages − keep-recent-messages − 1`。一旦待压条数逼近窗口容量，60 秒的间隔门**当场让位**——因为装配器的必留带（见 §10.4）装不下时只能二选一：丢未摘要消息（空洞）或超条数上限，而这两者都比「多调一次 flash」贵。`threshold <= 0`（配置自相矛盾，如 window 比 keep 还小）直接视为 urgent，宁可多压一次也不要在错配置下持续丢消息。
-
-**启动期自洽性校验（V76 同批，只 WARN 不阻断）**：`ai/config/AiMemoryConfigCheck.java` 在 `@PostConstruct` 里检查三条关系并把建议值写进日志——①`keep-recent-messages ≥ window-messages`；②`window-messages < keep + summary-min-pending-messages + 2`（+2 是「摘要晚半拍」的抖动余量）；③`max-prompt-tokens < 8000`（固定开销实测 5444~6700，预算比它小则预算判断永远为假，只有 keep-recent 生效）。这三条都是「配错了不报错、只表现为模型健忘或账单变贵」的那类问题，所以值得在启动日志里吼一声。
+**启动期自洽性校验（只 WARN 不阻断）**：`ai/config/AiMemoryConfigCheck.java` 在 `@PostConstruct` 里检查三条关系并把建议值写进日志——①`keep-recent-messages < window-messages`；②`window-messages ≥ keep-recent-messages + round(window × summary-target-ratio) + 2`（+2 是「摘要晚半拍」的抖动余量）；③`max-prompt-tokens ≥ 8000`（固定开销实测 5444~6700，预算比它小则预算判断永远为假，只有 keep-recent 生效）。这三条都是「配错了不报错、只表现为模型健忘或账单变贵」的那类问题，所以值得在启动日志里吼一声。
 
 ### 10.4 `ChatHistoryAssembler`（V81）：必留带 + 窗口滞回
 

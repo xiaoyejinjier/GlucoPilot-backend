@@ -248,7 +248,7 @@ community_comment(1) ──< community_moderation_hit(target_type='COMMENT', tar
 | 7 | `system_prompt_ver` | varchar(32) | YES | — | 本轮/本会话用的提示词版本标签（如 `chat@v1`），用于「这条回复用的是哪版提示词」回溯 |
 | 8 | `context_summary` | mediumtext | YES | — | 滚动摘要正文（超长对话压缩后供模型续用） |
 | 9 | `summary_upto_msg_id` | bigint unsigned | YES | — | 摘要已覆盖至的消息 ID；`updateSummary ... where upto < ?` 的乐观并发指针 |
-| 10 | `summary_updated_at` | datetime(3) | YES | — | V76：最近一次摘要**写入**时间，摘要门控的最小间隔判据（`summary-min-interval-seconds`）。刻意不复用 `gmt_modified`——改名会话、结束会话、状态流转都会碰它 |
+| 10 | `summary_updated_at` | datetime(3) | YES | — | V76：最近一次摘要**写入**时间，摘要门控的冷却判据（`summary-cooldown-seconds`）与滞回互斥的锚点。刻意不复用 `gmt_modified`——改名会话、结束会话、状态流转都会碰它 |
 | 11 | `memory_extracted_upto_msg_id` | bigint unsigned | YES | — | V61：长期记忆**输入窗口的上界消息 ID**（不是「抽全了」的证明）。只由窗口抽取写入、`upto < ?` 只前进；归档补齐据此判断该会话是否还欠一次抽取 |
 | 12 | `window_msg_count` | smallint unsigned | NO | 20 | **已废弃（V21）**：窗口统一由 `ai.memory.window-messages` 决定，读取侧不再读本列 |
 | 13 | `msg_count` | int unsigned | NO | 0 | 消息条数冗余（`touchOnMessage` 时 +1） |

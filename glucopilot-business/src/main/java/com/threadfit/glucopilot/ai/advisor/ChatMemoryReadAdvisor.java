@@ -109,6 +109,14 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
         if (summaryState != null && summaryState.getUptoMsgId() != null) {
             protectedTail = contextReader.countUnsummarized(sessionId, summaryState.getUptoMsgId());
         }
+        // 必留带的字符数：摘要的防抖下限除了条数还要看字数（两三条语音转写就可能上千字）
+        int protectedChars = 0;
+        for (int i = Math.max(0, history.size() - protectedTail); i < history.size() && i >= 0; i++) {
+            String text = history.get(i).getText();
+            if (text != null) {
+                protectedChars += text.length();
+            }
+        }
 
         ChatHistoryAssembler.Assembled assembled = assembler.assemble(history, current, summary, toolDigests,
                 memories, fixedOverhead, protectedTail);
@@ -117,7 +125,7 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
             // 预算与"不漏消息"撞车时，按约定预算优先（cost 可控优先），但必须留下证据：
             // 这条 WARN 说明这一轮确实丢了 N 条未摘要内容，用户可能会发现模型"忘了刚才说的"
             log.warn("预算不足，本轮被迫丢掉 {} 条未摘要消息 sessionId={} 预算={} 估算={}；"
-                            + "可调大 ai.memory.max-prompt-tokens，或调小 summary-min-pending-messages 让摘要更勤",
+                            + "可调大 ai.memory.max-prompt-tokens，或调小 summary-floor-messages / 调大 summary-target-ratio 让摘要更勤",
                     stats.protectedDropped(), sessionId, stats.budgetTokens(), stats.estimatedTokens());
         }
         String summaryLog = summaryLog(sessionId, summaryState, stats.droppedHistory());
@@ -136,6 +144,11 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
                     stats.keptHistory(), stats.estimatedTokens());
         }
         writeBackEstimate(request, stats);
+        // 摘要门的水位信号：待压条数与被预算挤掉的条数。两者都由本轮装配算出，摘要侧不再重算
+        writeBackInt(request, ChatMemoryAdvisorParams.PROTECTED_TAIL, protectedTail);
+        writeBackInt(request, ChatMemoryAdvisorParams.PROTECTED_CHARS, protectedChars);
+        writeBackInt(request, ChatMemoryAdvisorParams.PROTECTED_DROPPED, stats.protectedDropped());
+        writeBackInt(request, ChatMemoryAdvisorParams.PROMPT_BUDGET, stats.budgetTokens());
         // ③ 期：把本轮的分片元数据交给调用方（它会在落库、拿到 assistant_msg_id 之后写 chat_context）
         writeBackShards(request, assembled.shards());
 
@@ -219,6 +232,18 @@ public class ChatMemoryReadAdvisor implements CallAdvisor, StreamAdvisor {
         Object holder = request.context().get(ChatMemoryAdvisorParams.PROMPT_ESTIMATE);
         if (holder instanceof AtomicInteger slot) {
             slot.set(stats.estimatedTokens());
+        }
+    }
+
+    /**
+     * 把一个整型信号写回调用方持有的槽位（{@link ChatMemoryAdvisorParams#PROTECTED_TAIL} 等）。
+     * <p>
+     * 与 {@link #writeBackEstimate} 完全同构——只是这里有两个数要回传，抽出来免得复制两遍。
+     */
+    private static void writeBackInt(ChatClientRequest request, String key, int value) {
+        Object holder = request.context().get(key);
+        if (holder instanceof AtomicInteger slot) {
+            slot.set(value);
         }
     }
 

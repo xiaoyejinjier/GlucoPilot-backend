@@ -44,6 +44,40 @@ public final class ChatMemoryAdvisorParams {
      */
     public static final String CONTEXT_SHARDS = "contextShards";
 
+    /**
+     * 「待压条数」的写回槽（一个 {@code AtomicInteger}）：摘要指针之后、还没被摘要覆盖的消息条数。
+     * <p>
+     * 为什么不直接让 Advisor 决定"要不要摘要"：装配阶段确实已经算出这个数（正是必留带的输入），
+     * 但压不压决定的是<b>异步任务</b>，而 Advisor 只能影响本轮 prompt。写回之后由
+     * {@code ChatCompletionService} 连同预算一起交给摘要服务——判据只有一个来源（同一轮装配算出的
+     * 那个数），不会出现"advisor 说装得下、摘要服务说该压"的自相矛盾。
+     */
+    public static final String PROTECTED_TAIL = "protectedTail";
+
+    /**
+     * 「待压字符数」的写回槽（一个 {@code AtomicInteger}）：必留带里那些消息的正文合计长度。
+     * <p>
+     * 与 {@link #PROTECTED_TAIL} 一起构成防抖下限：语音转写的两三条长消息可能不到 6 条，
+     * 但已经上千字，按条数会被判"太小不值得压"，按字符才不会。
+     */
+    public static final String PROTECTED_CHARS = "protectedChars";
+
+    /**
+     * 「上一轮被预算挤掉的未摘要条数」的写回槽（一个 {@code AtomicInteger}）。
+     * <p>
+     * 这是摘要最强的触发信号：它大于 0 意味着上一轮用户说的话<b>已经</b>没能进 prompt。
+     * 等到下一次"水位过高"再压就晚了——模型已经断片过一次。
+     */
+    public static final String PROTECTED_DROPPED = "protectedDropped";
+
+    /**
+     * 「本轮预算」的写回槽（一个 {@code AtomicInteger}）：{@code ai.memory.max-prompt-tokens}。
+     * <p>
+     * 装配器本来就按预算裁剪，直接把<b>它用的那个数</b>交出来，比调用方自己再读一次配置更可靠
+     * （配置热更新/多实例时以装配为准）；摘要门判断"估算是否顶到预算"要用同一个分母。
+     */
+    public static final String PROMPT_BUDGET = "promptBudget";
+
     private ChatMemoryAdvisorParams() {
     }
 }

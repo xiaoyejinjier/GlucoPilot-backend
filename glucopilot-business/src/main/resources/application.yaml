@@ -156,13 +156,21 @@ ai:
     summary-input-max-chars: 3000
     # 摘要正文只有几百字，封顶可杜绝"模型长篇发挥"拖长生成时间
     summary-max-tokens: 600
-    # 攒够再压：候选（窗口外且未被摘要覆盖的消息）满足「12 条」或「1500 字」才跑一次摘要；
-    # 另加 60 秒最小间隔（<=0 关闭）。两条不设门的话，每轮新增 2 条消息、保底只留 6 条，
-    # 从第 4 轮起每轮都会触发——摘要调用本身不便宜，它还会把摘要块反复重写、
-    # 连带废掉后面整段历史的前缀缓存（实测：摘要重写那轮命中 24%，下一轮 93%）
-    summary-min-pending-messages: 12
-    summary-min-pending-chars: 1500
-    summary-min-interval-seconds: 60
+    # 摘要门（水位模型）：主指标是「待压条数」= 摘要指针之后还没被覆盖的消息条数（装配期的必留带），
+    # 不再用「候选 ≥12 条或 ≥1500 字」——那个判据数的是候选，与"窗口装不装得下"不同源。
+    # 四层：①防抖下限（条数 <6 且 字数 <800 不压）②硬触发（上一轮被预算挤掉 / 待压逼近窗口-2 /
+    # 估算 ≥90% 预算）③机会窗（待压越过 window/2 且过了冷却、没退避、当天配额还有）④否则继续攒。
+    # 目标水位 0.5：一次压到 window/2=10 条，约 4 轮压一次（滞回，不是每轮滑一次）
+    summary-floor-messages: 6
+    summary-floor-chars: 800
+    summary-cooldown-seconds: 30
+    summary-high-water-ratio: 0.9
+    summary-target-ratio: 0.5
+    # 每个用户每天最多 200 次摘要（<=0 关闭）；超额后只保留硬触发
+    summary-daily-quota: 200
+    # 失败退避：第 N 次连续失败后 base×2^(N-1) 秒内不再尝试（封顶 900 秒 = 15 分钟）
+    summary-backoff-base-seconds: 60
+    summary-backoff-max-seconds: 900
     # 工具结果回放（B3 后半）：是否把最近工具调用的结果摘要注入上下文，以及条数/字符上限
     tool-replay-enabled: true
     tool-replay-max-items: 3

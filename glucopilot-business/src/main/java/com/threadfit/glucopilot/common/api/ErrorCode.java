@@ -19,6 +19,7 @@ public enum ErrorCode {
     NOT_FOUND(HttpStatus.NOT_FOUND, 40400, "资源不存在或不属于当前用户"),
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, 40500, "接口不支持此请求方法，请确认后端版本与请求方式"),
     CONFLICT(HttpStatus.CONFLICT, 40900, "冲突（唯一键、乐观锁、账号占用）"),
+    NEED_RECOVER_CONFIRM(HttpStatus.CONFLICT, 40901, "账号处于注销冷静期，需确认恢复"),
     FEATURE_REMOVED(HttpStatus.GONE, 41000, "功能已下线"),
     TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, 42901, "限流或登录锁定"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, 50000, "系统异常"),

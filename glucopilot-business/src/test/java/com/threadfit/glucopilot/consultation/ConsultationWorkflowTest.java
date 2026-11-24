@@ -161,10 +161,10 @@ class ConsultationWorkflowTest {
                 "consultation_request",
                 "consultation_report",
                 "consultation_wallet_entry");
-        tables("V94__consultation_health_topics.sql", "consultation_topic");
+        tables("V96__consultation_health_topics.sql", "consultation_topic");
         try (var stream =
                 getClass()
-                        .getResourceAsStream("/db/migration/V94__consultation_health_topics.sql")) {
+                        .getResourceAsStream("/db/migration/V96__consultation_health_topics.sql")) {
             var sql = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
             int start = sql.indexOf("INSERT INTO");
             ddl(sql.substring(start, sql.indexOf(';', start)));

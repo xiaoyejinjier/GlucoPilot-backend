@@ -5,21 +5,30 @@ import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.meal.service.MealNutritionResolver;
 import com.threadfit.glucopilot.meal.suitability.dto.MealSuitabilityDtos;
+import com.threadfit.glucopilot.meal.suitability.engine.AdviceResolver;
 import com.threadfit.glucopilot.meal.suitability.engine.SuitabilityRuleEngine;
 import com.threadfit.glucopilot.meal.suitability.entity.FoodSuitabilityRule;
+import com.threadfit.glucopilot.meal.suitability.entity.MealPortionAdjustRule;
 import com.threadfit.glucopilot.meal.suitability.mapper.FoodSuitabilityRuleMapper;
 import com.threadfit.glucopilot.meal.suitability.service.MealSuitabilityService;
+import com.threadfit.glucopilot.meal.suitability.service.SuitabilityConfigService;
+import com.threadfit.glucopilot.meal.support.MealAnalysisTexts;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
- * 适食分析实现：只读规则表 + 调纯引擎，无写库、无外部调用。
+ * 适食分析实现：只读规则/配置表 + 调纯引擎，无写库、无外部调用。
  * <p>规则版本：请求显式指定则校验存在并启用；未指定取表内最新启用版本（按字符串序，约定 YYYY.MM.N）。
+ *
+ * <p>V94 起：判定主指标为 per100gGL（resolver 归一化时计算）；份量修正与整餐聚合参数取自
+ * meal_suitability_config / meal_portion_adjust_rule；单项建议与 save 路径共用
+ * {@link AdviceResolver}（不再本地维护兜底建议 map，保证保存前后文案一致）。
  */
 @Service
 @RequiredArgsConstructor
@@ -28,28 +37,17 @@ public class MealSuitabilityServiceImpl implements MealSuitabilityService {
     /** 规则表启用标记 */
     private static final int ENABLED = 1;
 
-    /** 档位文案：只允许这四类表述，禁止「适合/不建议食用」等绝对结论。 */
-    private static final Map<String, String> TIER_LABELS = Map.of(
-            SuitabilityRuleEngine.TIER_LOW, "升糖负担较低",
-            SuitabilityRuleEngine.TIER_MODERATE, "升糖负担中等",
-            SuitabilityRuleEngine.TIER_HIGH, "升糖负担较高",
-            SuitabilityRuleEngine.TIER_UNKNOWN, "信息不足");
-
-    /** 档位兜底建议：规则未配置 advice_text 时使用，保持同一套合规口径。 */
-    private static final Map<String, String> TIER_ADVICES = Map.of(
-            SuitabilityRuleEngine.TIER_LOW, "升糖负担较低，可保持当前份量",
-            SuitabilityRuleEngine.TIER_MODERATE, "升糖负担中等，注意份量并搭配蔬菜和蛋白质",
-            SuitabilityRuleEngine.TIER_HIGH, "升糖负担较高，建议减少份量或替换为低升糖食物",
-            SuitabilityRuleEngine.TIER_UNKNOWN, "信息不足，建议补充重量或改用食品库食物");
-
     /** 免责声明占位文案：定稿需法务/营养师双签（方案 0.2 第 10 项）。 */
     private static final String DISCLAIMER =
             "以上结果为基于食物分类与营养数据的通用参考，不构成医疗建议；具体饮食请遵医嘱。";
 
     private final FoodSuitabilityRuleMapper ruleMapper;
 
-    /** 明细归一化（只读 food_nutrition）：2b-1 起 preview 先归一化再判定。 */
+    /** 明细归一化（只读 food_nutrition）：preview 先归一化再判定。 */
     private final MealNutritionResolver nutritionResolver;
+
+    /** 配置与份量修正规则（与 save 路径共用同一来源）。 */
+    private final SuitabilityConfigService configService;
 
     /** 引擎无状态、不依赖容器，直接持有可避免新增配置类。 */
     private final SuitabilityRuleEngine engine = new SuitabilityRuleEngine();
@@ -67,8 +65,12 @@ public class MealSuitabilityServiceImpl implements MealSuitabilityService {
 
         // preview 路径客户端值优先：只补客户端没给的字段，不覆盖已给值（否则回归用例 2 的 giValue=75 会被库值顶掉）
         List<MealSuitabilityDtos.ItemInput> items = nutritionResolver.resolve(request.getItems(), true);
-        MealSuitabilityDtos.Evaluation evaluation = engine.evaluate(rules, items);
-        return toResponse(evaluation, items, ruleVersion, rules);
+
+        Map<String, String> config = configService.configMap();
+        List<MealPortionAdjustRule> adjustRules = configService.adjustRules();
+        MealSuitabilityDtos.Evaluation evaluation = engine.evaluate(
+                rules, items, adjustRules, configService.aggregationParams(config));
+        return toResponse(evaluation, items, ruleVersion, rules, config);
     }
 
     /** 校验请求版本可用；未指定时取最新启用版本。 */
@@ -89,24 +91,24 @@ public class MealSuitabilityServiceImpl implements MealSuitabilityService {
 
     /**
      * 组装响应：把归一化后的明细回填到判定结果上，前端看到的就是判定实际依据。
-     * <p>引擎签名与输出结构不变；四个展示字段只在这里回填（按位置与 {@code normalizedItems} 对齐）。
+     * <p>建议文案走 {@link AdviceResolver}（与 save 共用）；重点关注文案取配置表。
      */
     private MealSuitabilityDtos.PreviewResponse toResponse(MealSuitabilityDtos.Evaluation evaluation,
                                                            List<MealSuitabilityDtos.ItemInput> normalizedItems,
                                                            String ruleVersion,
-                                                           List<FoodSuitabilityRule> rules) {
-        // 建议文案是规则级内容：按 rule_code 回填，缺失时走档位兜底
-        Map<String, String> adviceByRuleCode = new HashMap<>();
-        for (FoodSuitabilityRule rule : rules) {
-            if (rule.getRuleCode() != null && rule.getAdviceText() != null && !rule.getAdviceText().isBlank()) {
-                adviceByRuleCode.put(rule.getRuleCode(), rule.getAdviceText());
-            }
-        }
+                                                           List<FoodSuitabilityRule> rules,
+                                                           Map<String, String> config) {
+        Map<String, FoodSuitabilityRule> ruleByCode = rules.stream()
+                .filter(rule -> rule.getRuleCode() != null)
+                .collect(Collectors.toMap(FoodSuitabilityRule::getRuleCode, Function.identity(), (a, b) -> a));
+
         MealSuitabilityDtos.PreviewResponse response = new MealSuitabilityDtos.PreviewResponse();
         response.setTier(evaluation.getOverallTier());
-        response.setTierLabel(labelOf(evaluation.getOverallTier()));
+        response.setTierLabel(MealAnalysisTexts.labelOf(evaluation.getOverallTier()));
         response.setRuleVersion(ruleVersion);
         response.setWorstRuleCode(evaluation.getWorstRuleCode());
+        response.setFocusItems(focusItemsOf(evaluation, config));
+
         List<MealSuitabilityDtos.PreviewItem> previewItems = new ArrayList<>(evaluation.getItems().size());
         for (int i = 0; i < evaluation.getItems().size(); i++) {
             MealSuitabilityDtos.ItemResult result = evaluation.getItems().get(i);
@@ -114,18 +116,29 @@ public class MealSuitabilityServiceImpl implements MealSuitabilityService {
             if (normalized != null) {
                 result.setCategoryCode(normalized.getCategoryCode());
                 result.setGiValue(normalized.getGiValue());
+                result.setCarbsG(normalized.getCarbsG());
                 result.setLibraryStatus(normalized.getLibraryStatus());
                 result.setNutritionSource(normalized.getNutritionSource());
             }
+            FoodSuitabilityRule hit = result.getRuleCode() == null ? null : ruleByCode.get(result.getRuleCode());
+
             MealSuitabilityDtos.PreviewItem item = new MealSuitabilityDtos.PreviewItem();
             item.setFoodId(result.getFoodId());
             item.setFoodName(result.getFoodName());
             item.setTier(result.getTier());
-            item.setTierLabel(labelOf(result.getTier()));
-            item.setAdviceText(adviceOf(result.getRuleCode(), result.getTier(), adviceByRuleCode));
+            item.setTierLabel(MealAnalysisTexts.labelOf(result.getTier()));
+            item.setBaseTier(result.getBaseTier());
+            item.setAdviceText(AdviceResolver.resolve(hit, result.getTier(), normalized, i, config));
             item.setRuleCode(result.getRuleCode());
+            item.setPer100gGl(result.getPer100gGl());
+            item.setGiSource(result.getGiSource());
+            item.setGiReliability(result.getGiReliability());
+            item.setMissingFields(result.getMissingFields());
+            item.setFocused(result.getFocused());
+            item.setFocusReason(result.getFocusReason());
             item.setCategoryCode(result.getCategoryCode());
             item.setGiValue(result.getGiValue());
+            item.setCarbsG(result.getCarbsG());
             item.setLibraryStatus(result.getLibraryStatus());
             item.setNutritionSource(result.getNutritionSource());
             previewItems.add(item);
@@ -135,18 +148,13 @@ public class MealSuitabilityServiceImpl implements MealSuitabilityService {
         return response;
     }
 
-    private String labelOf(String tier) {
-        return TIER_LABELS.getOrDefault(tier, TIER_LABELS.get(SuitabilityRuleEngine.TIER_UNKNOWN));
-    }
-
-    /** 规则有文案用规则文案，否则按档位兜底；UNKNOWN 使用信息不足文案。 */
-    private String adviceOf(String ruleCode, String tier, Map<String, String> adviceByRuleCode) {
-        if (ruleCode != null) {
-            String advice = adviceByRuleCode.get(ruleCode);
-            if (advice != null) {
-                return advice;
-            }
+    private List<MealSuitabilityDtos.FocusItem> focusItemsOf(MealSuitabilityDtos.Evaluation evaluation,
+                                                             Map<String, String> config) {
+        List<MealSuitabilityDtos.FocusItem> focusItems = new ArrayList<>();
+        for (MealSuitabilityDtos.FocusItem focus : evaluation.getFocusItems()) {
+            focus.setText(configService.focusText(config, focus.getReason(), focus.getFoodName()));
+            focusItems.add(focus);
         }
-        return TIER_ADVICES.getOrDefault(tier, TIER_ADVICES.get(SuitabilityRuleEngine.TIER_UNKNOWN));
+        return focusItems;
     }
 }

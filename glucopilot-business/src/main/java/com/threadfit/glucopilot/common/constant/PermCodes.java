@@ -16,6 +16,8 @@ public final class PermCodes {
     public static final String FEEDBACK_REPLY = "feedback:reply";
     public static final String EXPORT_TASK_MANAGE = "export:task:manage";
     public static final String USER_MANAGE = "user:manage";
+    /** 取消用户注销（仅恢复，不含强制注销/清理；默认只授予 super_admin）。 */
+    public static final String USER_CANCEL_RECOVER = "user:cancel:recover";
 
     public static final String DEVICE_MANAGE = "device:manage";
     public static final String HEALTH_ARCHIVE_VIEW = "health:archive:view";

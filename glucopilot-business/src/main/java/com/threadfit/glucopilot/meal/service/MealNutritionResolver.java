@@ -4,11 +4,14 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.threadfit.glucopilot.ai.business.meal.service.MealFoodCatalogService;
 import com.threadfit.glucopilot.food.entity.FoodNutrition;
 import com.threadfit.glucopilot.food.mapper.FoodNutritionMapper;
+import com.threadfit.glucopilot.meal.suitability.dto.MealSuitabilityDtos;
 import com.threadfit.glucopilot.meal.suitability.dto.MealSuitabilityDtos.ItemInput;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -31,9 +34,19 @@ import java.util.stream.Collectors;
  *   <li><b>preview（clientValuesFirst=true）</b>：客户端送来的非空值一律保留，只补 null。
  *       预览没有服务端识别结果，客户端值就是唯一事实来源，也不存在伪造动机。</li>
  *   <li><b>save（clientValuesFirst=false）</b>：库内命中结果覆盖客户端值，防止伪造。
+ *       <b>例外</b>：{@code userCorrected=1} 的明细按客户端值优先处理，
+ *       否则用户手工修正会被库值顶掉（与「人工修正」语义矛盾）。
  *       {@code confidence} 例外——服务端在这里拿不到可信置信度，
- *       它必须由「分析快照」提供（引用字段在 2b-2 确定，可能是 mediaId 或 analysisToken）。
- *       因此本方法在 save 模式下<b>不填也不改 confidence</b>，留给调用方注入。</li>
+ *       它必须由「分析快照」提供，因此本方法在 save 模式下<b>不填也不改 confidence</b>。</li>
+ * </ul>
+ *
+ * <h2>per100gGL（每 100g 升糖负荷，判定主指标）</h2>
+ * per100gGL = GI × 每100g碳水 / 100，是食物固有属性，识别重量误差不影响它。
+ * <ul>
+ *   <li>仅当<b>库命中且 carbsPer100g 非空且 GI 非空</b>时计算；碳水密度一律取库值。</li>
+ *   <li>UNRESOLVED（库未命中）→ per100gGL 置空并标记缺失字段，<b>不做客户端 carbsG/weightG 比值兜底</b>
+ *       （比值随重量误差跳变，违反「不依赖精确量」约束）。</li>
+ *   <li>GI 来源透明：客户端 GI 保留时 giSource=CLIENT，与库值差异 &gt;20 时 giReliability=LOW。</li>
  * </ul>
  *
  * <h2>已知边界</h2>
@@ -50,6 +63,12 @@ public class MealNutritionResolver {
      * 超出上限的明细按"未命中"处理（保持零写入、不报错）。
      */
     static final int MAX_IN_SIZE = 500;
+
+    private static final String GI_MISSING = "GI";
+    private static final String CARBS_PER_100G_MISSING = "每100g碳水";
+    private static final String LIBRARY_UNMATCHED = "食品库未匹配";
+    /** 客户端 GI 与库 GI 差异超过该值时 giReliability=LOW（V94 口径，提示「结果仅供参考」）。 */
+    private static final BigDecimal GI_DIVERGENCE_LIMIT = BigDecimal.valueOf(20);
 
     private final FoodNutritionMapper foods;
 
@@ -83,7 +102,10 @@ public class MealNutritionResolver {
 
         List<ItemInput> resolved = new ArrayList<>(targets.size());
         for (ItemInput item : targets) {
-            resolved.add(apply(item, find(item, byId, byName), clientValuesFirst));
+            FoodNutrition row = find(item, byId, byName);
+            // enrich 需要 apply 前的客户端原始值（GI 来源/可信度判断），必须先取快照
+            ItemInput beforeApply = copyOf(item);
+            resolved.add(enrich(beforeApply, row, clientValuesFirst, apply(item, row, clientValuesFirst)));
         }
         return resolved;
     }
@@ -105,11 +127,13 @@ public class MealNutritionResolver {
     }
 
     private ItemInput apply(ItemInput item, FoodNutrition row, boolean clientValuesFirst) {
+        // save 模式下人工修正项按客户端值优先，防止用户修正被库值顶掉
+        boolean clientFirst = clientValuesFirst || Boolean.TRUE.equals(item.getUserCorrected());
         boolean matched = row != null;
         boolean available = matched && Integer.valueOf(1).equals(row.getShelfStatus());
         item.setLibraryStatus(!matched ? "UNRESOLVED" : available ? "AVAILABLE" : "PENDING_REVIEW");
 
-        if (clientValuesFirst) {
+        if (clientFirst) {
             if (!matched) {
                 // 有意行为（非遗漏）：preview/save 遇到库内不存在的 libraryFoodId 一律清空为 null，
                 // 并配 libraryStatus=UNRESOLVED；保留悬空引用会让「未命中营养库」与「有库条目」自相矛盾。
@@ -142,7 +166,56 @@ public class MealNutritionResolver {
             item.setGiValue(null);
             item.setNutritionSource("UNKNOWN");
         }
-        // confidence：save 路径由调用方以分析快照注入（2b-2 定字段），此处不动
+        // confidence：save 路径由调用方以分析快照注入，此处不动
+        return item;
+    }
+
+    /**
+     * 判定字段回填：碳水密度取库值、per100gGL 计算、GI 来源与可信度、缺失字段标记。
+     * <p>apply 只管「值归一化」；本方法管「判定输入」，两者分离便于单测覆盖 per100gGL 口径。
+     *
+     * @param clientInputBeforeApply apply 前的客户端原始输入（浅拷贝），用于判断 GI 是否来自客户端
+     */
+    private ItemInput enrich(ItemInput clientInputBeforeApply, FoodNutrition row,
+                             boolean clientValuesFirst, ItemInput item) {
+        boolean clientFirst = clientValuesFirst || Boolean.TRUE.equals(clientInputBeforeApply.getUserCorrected());
+        boolean matched = row != null;
+        BigDecimal clientGi = clientInputBeforeApply.getGiValue();
+
+        // 碳水密度一律取库值（判定输入不接受客户端 carbsPer100g，保证 per100gGL 是食物固有属性）
+        item.setCarbsPer100g(matched ? row.getCarbsPer100g() : null);
+
+        // GI 来源：客户端值被保留（clientFirst 且客户端有值）→ CLIENT，否则库补全 → LIBRARY
+        boolean giFromClient = clientFirst && clientGi != null;
+        item.setGiSource(item.getGiValue() == null ? null
+                : giFromClient ? MealSuitabilityDtos.GI_SOURCE_CLIENT : MealSuitabilityDtos.GI_SOURCE_LIBRARY);
+
+        // 可信度：客户端 GI 与库 GI 差异过大时置 LOW（只降不升，未知保持 null）
+        if (giFromClient && matched && row.getGiValue() != null
+                && clientGi.subtract(row.getGiValue()).abs().compareTo(GI_DIVERGENCE_LIMIT) > 0) {
+            item.setGiReliability(MealSuitabilityDtos.GI_RELIABILITY_LOW);
+        }
+
+        // per100gGL：仅库命中且 GI 与每100g碳水齐全时计算；缺失置空并说明缺哪个字段，不用 0 冒充
+        if (item.getGiValue() != null && item.getCarbsPer100g() != null) {
+            item.setPer100gGl(item.getGiValue()
+                    .multiply(item.getCarbsPer100g())
+                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP));
+            item.setMissingFields(null);
+        } else {
+            item.setPer100gGl(null);
+            List<String> missing = new ArrayList<>(2);
+            if (!matched) {
+                missing.add(LIBRARY_UNMATCHED);
+            }
+            if (item.getGiValue() == null) {
+                missing.add(GI_MISSING);
+            }
+            if (item.getCarbsPer100g() == null) {
+                missing.add(CARBS_PER_100G_MISSING);
+            }
+            item.setMissingFields(missing);
+        }
         return item;
     }
 
@@ -161,6 +234,11 @@ public class MealNutritionResolver {
         target.setCarbsG(source.getCarbsG());
         target.setCaloriesKcal(source.getCaloriesKcal());
         target.setGiValue(source.getGiValue());
+        target.setCarbsPer100g(source.getCarbsPer100g());
+        target.setPer100gGl(source.getPer100gGl());
+        target.setGiSource(source.getGiSource());
+        target.setGiReliability(source.getGiReliability());
+        target.setMissingFields(source.getMissingFields());
         target.setNutritionSource(source.getNutritionSource());
         target.setConfidence(source.getConfidence());
         target.setUserCorrected(source.getUserCorrected());

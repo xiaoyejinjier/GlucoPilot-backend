@@ -46,6 +46,13 @@ public class AuthController {
         return ApiResponse.ok(authService.loginByEmail(request));
     }
 
+    /** 冷静期内登录被拦截后，用户确认恢复并登录。票据即一次性幂等凭据。 */
+    @PostMapping("/cancel-recovery/sessions")
+    public ApiResponse<AuthDtos.SessionResponse> confirmCancelRecovery(
+            @Valid @RequestBody AuthDtos.ConfirmRecoverRequest request) {
+        return ApiResponse.ok(authService.confirmCancelRecovery(request.getTicket()));
+    }
+
     @DeleteMapping("/sessions/current")
     public ApiResponse<Void> logout(HttpServletRequest request) {
         authService.logout(resolveBearer(request));

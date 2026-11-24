@@ -12,7 +12,9 @@ import com.threadfit.glucopilot.user.controller.AdminUserController;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.convert.ApplicationConversionService;
 import org.springframework.context.annotation.*;
+import org.springframework.core.convert.ConversionService;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -46,6 +48,16 @@ class AdminDataAccessHttpTest {
         @Bean(name = "ss")
         Gate gate() {
             return new Gate();
+        }
+
+        /**
+         * 裸 AnnotationConfigApplicationContext 不带 Boot 的类型转换器，@Value 的
+         * {@code Duration}（如 account.cancellation.safety-margin=5m）无法从 String 转换；
+         * 补一个与运行期一致的转换服务即可，不影响被测的权限注解。
+         */
+        @Bean
+        ConversionService conversionService() {
+            return ApplicationConversionService.getSharedInstance();
         }
     }
 

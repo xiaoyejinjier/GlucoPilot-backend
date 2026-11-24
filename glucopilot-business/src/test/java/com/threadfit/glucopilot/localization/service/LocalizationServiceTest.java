@@ -80,10 +80,10 @@ class LocalizationServiceTest {
         jdbc.execute("ALTER TABLE content_localization DROP CONSTRAINT chk_cl_kind");
         jdbc.execute("ALTER TABLE content_localization DROP CONSTRAINT chk_cl_status");
         jdbc.execute("ALTER TABLE content_localization ADD COLUMN prompt_ver VARCHAR(32)");
-        // H2的DROP CHECK拼写是DROP CONSTRAINT；其余V95约束扩展使用真实迁移内容。
+        // H2的DROP CHECK拼写是DROP CONSTRAINT；其余V97约束扩展使用真实迁移内容。
         jdbc.execute("ALTER TABLE content_localization ADD CONSTRAINT chk_cl_kind CHECK"
                 + " (kind IN ('ARTICLE_PREVIEW','ARTICLE_BODY','PROFILE_NAME'))");
-        String consultationMigration = new ClassPathResource("db/migration/V95__consultation_english_content.sql")
+        String consultationMigration = new ClassPathResource("db/migration/V97__consultation_english_content.sql")
                 .getContentAsString(java.nio.charset.StandardCharsets.UTF_8)
                 .replace("DROP CHECK", "DROP CONSTRAINT");
         new ResourceDatabasePopulator(new org.springframework.core.io.ByteArrayResource(

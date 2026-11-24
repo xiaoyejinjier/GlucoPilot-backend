@@ -2,6 +2,7 @@ package com.threadfit.glucopilot.auth.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -18,6 +19,7 @@ import com.threadfit.glucopilot.auth.entity.UserSession;
 import com.threadfit.glucopilot.auth.mapper.AuthSmsCodeMapper;
 import com.threadfit.glucopilot.auth.mapper.UserSessionMapper;
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
@@ -55,6 +57,7 @@ class AuthServiceTest {
     @Mock private AuthSmsCodeMapper authSmsCodeMapper;
     @Mock private VerificationCodeConsumer verificationCodeConsumer;
     @Mock private AccountCancellationRecovery cancellationRecovery;
+    @Mock private CancelRecoverTicketStore recoverTicketStore;
 
     @InjectMocks private AuthService service;
 
@@ -217,40 +220,60 @@ class AuthServiceTest {
     }
 
     @Test
-    void loginWithinWindowRecoversAndReportsFlag() {
+    void loginWithinWindowIsInterceptedWithOneTimeTicket() {
         UserAccount account = account(1L);
-        account.setAccountStatus(com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode());
+        account.setAccountStatus(CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode());
         account.setPhone("13800000000");
+        account.setUsername("张三");
         when(userAccountMapper.selectOne(any())).thenReturn(account);
-        when(userSettingMapper.selectOne(any())).thenReturn(agreedSetting());
         when(cancellationRecovery.findActive(1L)).thenReturn(activeRecord());
-        when(cancellationRecovery.recoverOnLogin(1L))
-                .thenReturn(new AccountCancellationRecovery.RecoverOutcome(account, true));
+        when(recoverTicketStore.issue(1L, CodeEnum.LoginType.PHONE.getCode())).thenReturn("ticket-1");
 
-        AuthDtos.SessionResponse response =
-                service.loginByPhone(phoneLogin("13800000000", "123456"));
+        BizException error =
+                assertThrows(
+                        BizException.class,
+                        () -> service.loginByPhone(phoneLogin("13800000000", "123456")));
 
-        assertTrue(response.getRecoveredFromCancellation());
-        verify(cancellationRecovery).recoverOnLogin(1L);
+        assertEquals(ErrorCode.NEED_RECOVER_CONFIRM, error.getErrorCode());
+        AuthDtos.CancelRecoverIntercept payload = (AuthDtos.CancelRecoverIntercept) error.getData();
+        assertEquals("ticket-1", payload.getRecoverTicket());
+        assertTrue(payload.getRemainingDays() >= 1);
+        assertEquals(1, payload.getRecoverToStatus());
+        assertFalse(payload.getWillStayDisabled());
+        assertEquals("张**", payload.getUsernameMasked());
+        verify(userSessionMapper, never()).insert(any(UserSession.class));
     }
 
     @Test
-    void concurrentSecondLoginDoesNotReportRecovered() {
-        UserAccount account = account(1L);
-        account.setAccountStatus(com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode());
-        account.setPhone("13800000000");
-        when(userAccountMapper.selectOne(any())).thenReturn(account);
-        when(userSettingMapper.selectOne(any())).thenReturn(agreedSetting());
-        when(cancellationRecovery.findActive(1L)).thenReturn(activeRecord());
-        // 锁内重读发现已被先到者恢复 → recovered=false
+    void confirmRecoveryConsumesTicketAndIssuesSession() {
+        when(recoverTicketStore.consume("ticket-1"))
+                .thenReturn(
+                        new CancelRecoverTicketStore.Ticket(
+                                1L, CodeEnum.LoginType.PHONE.getCode()));
         UserAccount recovered = account(1L);
-        when(cancellationRecovery.recoverOnLogin(1L))
-                .thenReturn(new AccountCancellationRecovery.RecoverOutcome(recovered, false));
+        when(cancellationRecovery.recoverOnConfirm(1L))
+                .thenReturn(new AccountCancellationRecovery.RecoverOutcome(recovered, true));
+        when(userSettingMapper.selectOne(any())).thenReturn(agreedSetting());
 
-        AuthDtos.SessionResponse response =
-                service.loginByPhone(phoneLogin("13800000000", "123456"));
+        AuthDtos.SessionResponse response = service.confirmCancelRecovery("ticket-1");
 
+        assertNotNull(response.getAccessToken());
+        assertEquals(1, response.getAccountStatus());
         assertFalse(response.getRecoveredFromCancellation());
+        verify(cancellationRecovery).recoverOnConfirm(1L);
+        verify(userSessionMapper).insert(any(UserSession.class));
+    }
+
+    @Test
+    void confirmRecoveryRejectsExpiredTicket() {
+        when(recoverTicketStore.consume("gone")).thenReturn(null);
+
+        BizException error =
+                assertThrows(
+                        BizException.class, () -> service.confirmCancelRecovery("gone"));
+
+        assertEquals(ErrorCode.BIZ_REJECTED, error.getErrorCode());
+        verify(userSessionMapper, never()).insert(any(UserSession.class));
     }
 
     @Test
@@ -274,6 +297,7 @@ class AuthServiceTest {
         UserAccountCancellation record = new UserAccountCancellation();
         record.setId(7L);
         record.setUserId(1L);
+        record.setPreStatus(CodeEnum.AccountStatus.NORMAL.getCode());
         record.setIsolateUntil(LocalDateTime.now().plusDays(3));
         return record;
     }

@@ -3,6 +3,7 @@ package com.threadfit.glucopilot.user.dto;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
 
@@ -35,6 +36,21 @@ public final class AdminUserDtos {
         private Long recordCount;
         private Long mealCount;
         private Integer complianceRate;
+
+        /* ---------- 注销字段（仅 accountStatus=4 且存在活跃凭据时有值） ---------- */
+
+        /** 注销申请时间（来自 user_account_cancellation.requested_at，仅用于展示）。 */
+        private LocalDateTime cancelApplyTime;
+        /** 可恢复截止时间 epoch ms（isolate_until）；窗口结束后登录/管理端均不可恢复。 */
+        private Long cancelDeadlineAt;
+        /** Worker 可清理时间 epoch ms（isolate_until + safety-margin）。 */
+        private Long cancelPurgeEligibleAt;
+        /** 当前是否仍在可恢复窗口内（服务端判定，避免客户端时钟漂移）。 */
+        private Boolean cancelRecoverable;
+        /** 是否已超过安全边际仍未被清理（前端红色提示依据）。 */
+        private Boolean cancelPurgeOverdue;
+        /** 恢复后的账号状态（凭据表 pre_status：0/1）。 */
+        private Integer recoverToStatus;
     }
 
     @Data
@@ -50,6 +66,21 @@ public final class AdminUserDtos {
     @Builder
     public static class UpdatedResult {
         private Boolean updated;
+    }
+
+    /** 管理端取消注销：备注选填，仅进审计，禁止放健康内容。 */
+    @Data
+    public static class RecoverRequest {
+        @Size(max = 200, message = "备注不能超过 200 字")
+        private String remark;
+    }
+
+    @Data
+    @Builder
+    public static class RecoverResult {
+        private Boolean recovered;
+        private Integer accountStatus;
+        private LocalDateTime recoveredAt;
     }
 
     /**

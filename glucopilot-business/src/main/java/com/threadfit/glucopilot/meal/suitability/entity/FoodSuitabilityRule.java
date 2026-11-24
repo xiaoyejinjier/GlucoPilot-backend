@@ -21,14 +21,22 @@ import java.math.BigDecimal;
 @TableName("food_suitability_rule")
 public class FoodSuitabilityRule extends BaseEntity {
 
-    /** 规则编码：CAT{n}_xxx / GI_xxx / CARB_xxx；同版本内唯一 */
+    /** 规则编码：GL_xxx / GI_xxx / CARB_xxx；同版本内唯一 */
     private String ruleCode;
+    /** 判定指标：GL=每100g升糖负荷|GI=升糖指数|CARB=每100g碳水；旧行 NULL 按 GI 解释 */
+    private String metric;
+    /** 规则作用域：ITEM=单项|MEAL=整餐；旧行 NULL 按 ITEM 解释 */
+    private String scope;
     /** 食物大类 1-9；为空表示不限分类 */
     private Integer categoryCode;
     /** GI 下限（含），可空表示不限 */
     private BigDecimal giMin;
     /** GI 上限（含），可空表示不限 */
     private BigDecimal giMax;
+    /** per100gGL 下限（含），可空表示不限；仅 metric=GL 时生效 */
+    private BigDecimal glMin;
+    /** per100gGL 上限（含），可空表示不限；仅 metric=GL 时生效 */
+    private BigDecimal glMax;
     /** 每 100g 碳水下限（含）g，可空表示不限 */
     private BigDecimal carbsMin;
     /** 每 100g 碳水上限（含）g，可空表示不限 */

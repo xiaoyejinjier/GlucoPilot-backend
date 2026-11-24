@@ -24,6 +24,10 @@ import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.Map;
 
+/**
+ * 支付宝充值网关：封装SDK客户端、签名验签、付款链接/二维码生成和主动查单。
+ * 本类只负责与支付宝通信，订单状态、余额和流水由SandboxRechargeService在事务内处理。
+ */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -35,6 +39,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
 
     private final AlipaySandboxProperties properties;
 
+    // 【交易诊断】仅记录阶段、订单号、错误码和已知交易状态，不输出签名或完整支付报文。
     private void logResult(
             String stage, SandboxRecharge order, String code, String subCode, String status) {
         String safeStatus =
@@ -54,8 +59,10 @@ public class AlipaySandboxGateway implements SandboxGateway {
                 safeStatus);
     }
 
+    /** 创建沙箱SDK客户端；充值和提现共用这里的网关、签名及验签配置。 */
     protected AlipayClient client() throws AlipayApiException {
         if (!properties.ready()) throw new BizException(ErrorCode.PAYMENT_UNAVAILABLE);
+        // 先解析密钥并检查RSA长度，尽早提示配置错误，避免直接把SDK内部异常返回给用户。
         RSAKey applicationPrivateKey = validateKey(properties.getPrivateKey(), true);
         RSAKey alipayPublicKey = validateKey(properties.getPublicKey(), false);
         // 两把密钥来自不同的签名方，模数相同意味着误填了应用公钥。
@@ -66,18 +73,22 @@ public class AlipaySandboxGateway implements SandboxGateway {
                     Map.of("stage", "KEY_PAIR_CHECK", "key", "ALIPAY_PUBLIC_KEY"));
         }
         var config = new AlipayConfig();
+        // 【固定测试环境】此入口只连接沙箱，不接受前端传入支付网关地址。
         config.setServerUrl(AlipaySandboxProperties.GATEWAY);
         config.setAppId(properties.getAppId());
+        // 应用私钥给发出的请求签名；支付宝公钥验证收到的响应，不能误填成应用公钥。
         config.setPrivateKey(key(properties.getPrivateKey()));
         config.setAlipayPublicKey(key(properties.getPublicKey()));
         config.setSignType("RSA2");
         config.setCharset("UTF-8");
         config.setFormat("json");
+        // 为连接和读取设置超时；超时不等于付款失败，后续仍应使用原订单号查证。
         config.setConnectTimeout(3000);
         config.setReadTimeout(10000);
         return new DefaultAlipayClient(config);
     }
 
+    // 兼容环境变量中的字面量换行和PEM头尾，整理为SDK需要的Base64密钥内容。
     private String key(String value) {
         return value.replace("\\r", "\r")
                 .replace("\\n", "\n")
@@ -85,6 +96,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
                 .replaceAll("\\s+", "");
     }
 
+    // 私钥按PKCS8解析、公钥按X509解析，并要求至少2048位；这里只检查格式，不输出密钥。
     private RSAKey validateKey(String value, boolean privateKey) {
         try {
             byte[] bytes = Base64.getDecoder().decode(key(value));
@@ -107,6 +119,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
         }
     }
 
+    // 错误码采用白名单/格式过滤，防止把上游异常报文中的敏感参数带回前端或日志。
     private String safeCode(String value) {
         if (value != null) {
             for (var known : AlipayApiErrorEnum.values())
@@ -119,6 +132,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
                 : "SDK_ERROR";
     }
 
+    // 把支付阶段和安全错误码转换成项目统一异常，供前端显示可定位的失败原因。
     private BizException upstream(String stage, String code, String subCode) {
         String safe = safeCode(subCode == null || subCode.isBlank() ? code : subCode);
         String message =
@@ -142,6 +156,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
                 Map.of("stage", stage, "providerCode", safeCode(code), "providerSubCode", safe));
     }
 
+    // 区分网络、超时、TLS、密钥及验签错误；只返回归类后的信息，不透传原始SDK异常正文。
     BizException sdkFailure(String stage, AlipayApiException exception) {
         Throwable cause = exception;
         for (int depth = 0; cause != null && depth < 8; depth++, cause = cause.getCause()) {
@@ -184,9 +199,11 @@ public class AlipaySandboxGateway implements SandboxGateway {
         return upstream(stage, exception.getErrCode(), null);
     }
 
+    /** 兼容已有扫码订单：向支付宝预下单，得到二维码内容；预下单成功不代表已付款。 */
     @Override
     public String precreate(SandboxRecharge order) {
         var model = new AlipayTradePrecreateModel();
+        // 使用本系统订单号和已保存金额；分精确转元，防止前端临时修改付款金额。
         model.setOutTradeNo(order.getOrderNo());
         model.setTotalAmount(BigDecimal.valueOf(order.getAmountCents(), 2).toPlainString());
         model.setSubject("GlucoPilot沙箱钱包充值（测试资金）");
@@ -194,6 +211,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
         model.setSellerId(properties.getSellerId());
         var request = new AlipayTradePrecreateRequest();
         request.setBizModel(model);
+        // 有公网回调地址时才携带；未配置时仍可通过主动查单核实交易。
         if (!properties.getNotifyUrl().isBlank()) request.setNotifyUrl(properties.getNotifyUrl());
         try {
             var response = client().execute(request);
@@ -213,6 +231,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
     @Override
     public String pagePay(SandboxRecharge order) {
         var model = new AlipayTradePagePayModel();
+        // 【网页付款参数】以保存的订单号、金额和有效期生成收银台链接，付款密码仅在支付宝页面输入。
         model.setOutTradeNo(order.getOrderNo());
         model.setTotalAmount(BigDecimal.valueOf(order.getAmountCents(), 2).toPlainString());
         model.setSubject("GlucoPilot沙箱钱包充值（测试资金）");
@@ -229,6 +248,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
         try {
             // GET返回完整签名URL，生成链接不调用交易创建接口，也不采信浏览器回跳。
             String url = client().pageExecute(request, "GET").getBody();
+            // 返回链接必须属于固定沙箱网关，避免把异常响应作为跳转地址交给小程序。
             if (url == null || !url.startsWith(AlipaySandboxProperties.GATEWAY + "?"))
                 throw upstream("PAGE_PAY", "SDK_INVALID_RESPONSE", null);
             logResult("PAGE_PAY", order, null, null, null);
@@ -238,6 +258,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
         }
     }
 
+    /** 按本系统订单号主动查单；获得支付宝响应后，交给上层校验交易并决定是否入账。 */
     @Override
     public Proof query(SandboxRecharge order) {
         var model = new AlipayTradeQueryModel();
@@ -254,10 +275,12 @@ public class AlipaySandboxGateway implements SandboxGateway {
                     response.getSubCode(),
                     response.getTradeStatus());
             if (!response.isSuccess()) {
+                // 尚未形成支付宝交易时可以查无此单；保留本地待支付状态，不据此认定付款成功。
                 if ("ACQ.TRADE_NOT_EXIST".equals(response.getSubCode())) return null;
                 throw upstream("QUERY", response.getCode(), response.getSubCode());
             }
             // query在签名请求的商户上下文内查询；SDK验证支付宝响应签名。
+            // Proof保存单号、金额、交易状态及买家UID，后续统一用于入账对账和收款身份识别。
             return new Proof(
                     response.getOutTradeNo(),
                     response.getTradeNo(),
@@ -273,6 +296,7 @@ public class AlipaySandboxGateway implements SandboxGateway {
         }
     }
 
+    /** 异步通知来自公网，必须先用支付宝公钥验签；验签通过后仍需核对订单和金额。 */
     @Override
     public boolean verify(Map<String, String> parameters) {
         if (!properties.ready() || !"RSA2".equals(parameters.get("sign_type"))) return false;

@@ -1078,6 +1078,7 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | POST /api/v1/devices/bind | C 端登录 | 自助绑定：SN 空闲则新建并归属当前用户；已有空闲档案可认领；已被他人占用则冲突。建议写操作带 X-Idempotency-Key |
 | POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
 | GET /api/v1/devices/{id}/sync-logs?limit=10 | C 端登录 | 本人设备近 N 次同步流水（默认 10，最大 50）；按时间倒序；他人设备 id 业务拒绝 |
+| GET /api/v1/devices/{id}/sync-logs/{logId}/samples | C 端登录 | 本人某次同步的血糖样本快照（只读）；校验设备与流水归属本人；返回 { syncedAt, sampleCount, points:[{ recordedAt, nodeCode, glucoseValue }] } 按 recordedAt 升序；旧流水无快照时 points 为空数组 |
 
 绑定请求体：`{ deviceSn, provider, deviceName?, deviceCategory?, deviceModel? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceCategory?, deviceModel?, deviceStatus, lastSyncAt, bound, cloudLinked }`（bound 恒为 true；deviceCategory 闭集 CGM/BGM/PUMP/PEN/BAND/WATCH/RING/HUB/SCALE/BP/OXIMETER/OTHER 可空；deviceModel 可空；cloudLinked 表示已关联有效厂商云授权，首期仅 HUAWEI；响应不含 token）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
 
@@ -1100,13 +1101,16 @@ cloud-pull 成功：{ provider, items, devices? }（items 同 SyncResponse；dev
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
 | GET /admin/v1/devices | device:manage | 分页；可选 keyword、deviceStatus、provider、deviceCategory、bound、cloudLinked；列表项含 deviceCategory、deviceModel、cloudLinked、syncHealth（OK/NEVER/STALE，48h）、createdAt |
-| POST /admin/v1/devices | device:manage | 创建；可选 deviceCategory、deviceModel |
-| PUT /admin/v1/devices/{id} | device:manage | 更新名称/厂商/类型/型号/绑定用户 |
+| POST /admin/v1/devices | device:manage | 创建；可选 deviceCategory、deviceModel；未传类型时可按 SN/名称启发式回填 |
+| PUT /admin/v1/devices/{id} | device:manage | 更新名称/厂商/类型/型号/绑定用户；类型为空时可启发式回填 |
 | PUT /admin/v1/devices/{id}/status | device:manage | 启用/禁用 |
 | DELETE /admin/v1/devices/{id} | device:manage | 逻辑删除 |
 | GET /admin/v1/devices/{id}/sync-logs?limit=20 | device:manage | 近 N 次同步流水（默认 20，最大 50） |
+| GET /admin/v1/devices/{id}/sync-logs/{logId}/samples | device:manage | 某次同步的血糖样本快照（只读）；校验 log 属于该设备；返回 { syncedAt, sampleCount, points:[{ recordedAt, nodeCode, glucoseValue }] } 按 recordedAt 升序；旧流水无快照时 points 为空数组 |
 | GET /admin/v1/devices/{id}/cloud-auth | device:manage | { linked, expiresAt, scopes?, vendorSubjectMasked? }；无 token |
 | DELETE /admin/v1/devices/{id}/cloud-auth | device:manage | 撤销云授权 |
+
+设备成功同步且绑定了档案时，除写入 device_sync_log 外，还将本次统一血糖样本快照到 device_sync_sample（与流水同事务），供管理端与小程序只读曲线；历史流水不回填。
 
 ## 服务器资源监控（2026-10-22）
 

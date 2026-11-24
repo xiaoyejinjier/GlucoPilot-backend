@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import com.threadfit.glucopilot.ai.support.lock.AiConcurrencyPolicy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -97,12 +98,12 @@ class ChatSummaryServiceTest {
 
         service = new ChatSummaryServiceImpl(clients, chatSessionMapper, chatMessageMapper,
                 promptTemplateService, sceneModelResolver, properties, AiConcurrencyTestSupport.policy(), directExecutor);
-        // 门控（批次 3 / T3.2）默认是关的吗？不是——线上默认 12 条 / 1500 字 / 60 秒。
-        // 但本类的既有用例都在验证"压缩逻辑本身"，用的是 6~12 条的迷你数据，
-        // 所以这里把三道门关掉；门控自己的行为由本类末尾的四个专用用例覆盖。
-        properties.getMemory().setSummaryMinPendingMessages(0);
-        properties.getMemory().setSummaryMinPendingChars(0);
-        properties.getMemory().setSummaryMinIntervalSeconds(0);
+        // 门控本身由本类末尾的专用用例覆盖，这里先关掉防抖下限、冷却与配额，
+        // 让既有用例继续只验证「压缩逻辑」；水位判据用 SummarySignal 显式传入。
+        properties.getMemory().setSummaryFloorMessages(0);
+        properties.getMemory().setSummaryFloorChars(0);
+        properties.getMemory().setSummaryCooldownSeconds(0);
+        properties.getMemory().setSummaryDailyQuota(0);
     }
 
     private static ChatMessage message(long id, int role, String text) {
@@ -279,71 +280,179 @@ class ChatSummaryServiceTest {
     }
 
     // ---------------- 批次 3 / T3.2：攒够再压（条数 / 字数 / 间隔） ----------------
+    // ---------------- 摘要门（水位模型）：判据是「待压条数」，不是候选条数 ----------------
 
+    /** 待压 4 条 / 40 字：连防抖下限都没到（6 条 / 800 字），不该为它花一次模型调用。 */
     @Test
-    void 候选不足阈值时不该调摘要模型() {
+    void 待压不到防抖下限时不该调摘要模型() {
         properties.getMemory().setKeepRecentMessages(6);
-        // 线上默认：12 条或 1500 字
-        properties.getMemory().setSummaryMinPendingMessages(12);
-        properties.getMemory().setSummaryMinPendingChars(1500);
         stubMessages();
         when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
 
-        assertFalse(service.runSummarize(USER_ID, SESSION_ID));
+        assertFalse(service.runSummarize(USER_ID, SESSION_ID, signal(4, 40, 0, 8000)));
 
         verify(chatClient, never()).prompt();
         verify(chatSessionMapper, never()).updateSummary(anyLong(), anyString(), anyLong());
     }
 
+    /** 待压 12 条越过目标水位（window/2=10）且冷却已过：压缩，但只压到目标水位（4 条）。 */
     @Test
-    void 字数达标但条数不足时仍然该压() {
-        properties.getMemory().setKeepRecentMessages(2);
-        properties.getMemory().setSummaryMinPendingMessages(12);
-        properties.getMemory().setSummaryMinPendingChars(1500);
-        // 语音转写的长消息：4 条里窗口外 2 条，但每条 900 字 → 1800 字已过字数门
-        String longText = "血".repeat(900);
-        List<ChatMessage> rows = new ArrayList<>();
-        for (int i = 4; i >= 1; i--) {
-            rows.add(message(i, i % 2 == 0 ? CodeEnum.ChatMsgRole.ASSISTANT.getCode()
-                    : CodeEnum.ChatMsgRole.USER.getCode(), longText));
-        }
-        when(chatMessageMapper.selectRecent(eq(SESSION_ID), anyInt(), anyInt())).thenReturn(rows);
+    void 待压越过目标水位时压缩到目标水位() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setWindowMessages(20);
+        stubMessages();
         when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        when(chatSessionMapper.selectSummaryUpdatedAt(SESSION_ID)).thenReturn(null);
         when(callSpec.content()).thenReturn("摘要");
         when(chatSessionMapper.updateSummary(eq(SESSION_ID), anyString(), anyLong())).thenReturn(1);
 
-        assertTrue(service.runSummarize(USER_ID, SESSION_ID), "字数够了就该压，不必等满 12 条");
+        assertTrue(service.runSummarize(USER_ID, SESSION_ID, signal(12, 1000, 0, 9000)));
+
+        // 12 条待压、目标 10 条 ⇒ 少压 2 条，候选 6 条里取最旧 4 条，指针停在 id=4
+        verify(chatSessionMapper).updateSummary(eq(SESSION_ID), anyString(), eq(4L));
     }
 
+    /** 待压 8 条低于目标水位、上一轮也没丢东西：继续攒，别每轮都压。 */
     @Test
-    void 距上次摘要不足最小间隔时应跳过() {
+    void 待压低于目标水位时应继续攒() {
         properties.getMemory().setKeepRecentMessages(6);
-        properties.getMemory().setSummaryMinPendingMessages(1);
-        properties.getMemory().setSummaryMinPendingChars(0);
-        properties.getMemory().setSummaryMinIntervalSeconds(60);
+        properties.getMemory().setWindowMessages(20);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+
+        assertFalse(service.runSummarize(USER_ID, SESSION_ID, signal(8, 900, 0, 9000)));
+
+        verify(chatClient, never()).prompt();
+    }
+
+    /** 上一轮被预算挤掉了未摘要消息：这是真丢数据，必须无视冷却立刻压。 */
+    @Test
+    void 上一轮被预算挤掉时应无视冷却立刻压缩() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setSummaryCooldownSeconds(30);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        // 刚压过 1 秒，正常该被冷却挡住
+        when(chatSessionMapper.selectSummaryUpdatedAt(SESSION_ID))
+                .thenReturn(java.time.LocalDateTime.now().minusSeconds(1));
+        when(callSpec.content()).thenReturn("摘要");
+        when(chatSessionMapper.updateSummary(eq(SESSION_ID), anyString(), anyLong())).thenReturn(1);
+
+        assertTrue(service.runSummarize(USER_ID, SESSION_ID, signal(8, 900, 2, 9000)));
+    }
+
+    /** 硬触发（待压逼近窗口上限）不受冷却约束。 */
+    @Test
+    void 待压逼近窗口上限时应无视冷却() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setWindowMessages(20);
+        properties.getMemory().setSummaryCooldownSeconds(30);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        when(chatSessionMapper.selectSummaryUpdatedAt(SESSION_ID))
+                .thenReturn(java.time.LocalDateTime.now());
+        when(callSpec.content()).thenReturn("摘要");
+        when(chatSessionMapper.updateSummary(eq(SESSION_ID), anyString(), anyLong())).thenReturn(1);
+
+        assertTrue(service.runSummarize(USER_ID, SESSION_ID, signal(18, 2000, 0, 9000)));
+    }
+
+    /** 距离上次摘要不足冷却时间：跳过，避免"每轮都重写摘要"把前缀缓存反复打掉。 */
+    @Test
+    void 冷却期内应跳过() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setWindowMessages(20);
+        properties.getMemory().setSummaryCooldownSeconds(60);
         stubMessages();
         when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
         when(chatSessionMapper.selectSummaryUpdatedAt(SESSION_ID))
                 .thenReturn(java.time.LocalDateTime.now().minusSeconds(10));
 
-        assertFalse(service.runSummarize(USER_ID, SESSION_ID));
+        assertFalse(service.runSummarize(USER_ID, SESSION_ID, signal(12, 1000, 0, 9000)));
 
         verify(chatClient, never()).prompt();
     }
 
+    /** 连续失败后进入退避：退避期间不再打模型。 */
     @Test
-    void 距上次摘要超过最小间隔时照常压缩() {
+    void 退避期内应跳过() {
         properties.getMemory().setKeepRecentMessages(6);
-        properties.getMemory().setSummaryMinPendingMessages(1);
-        properties.getMemory().setSummaryMinPendingChars(0);
-        properties.getMemory().setSummaryMinIntervalSeconds(60);
+        properties.getMemory().setWindowMessages(20);
         stubMessages();
         when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
-        when(chatSessionMapper.selectSummaryUpdatedAt(SESSION_ID))
-                .thenReturn(java.time.LocalDateTime.now().minusSeconds(120));
+        AiConcurrencyPolicy policy = mock(AiConcurrencyPolicy.class);
+        when(policy.summaryInBackoff(SESSION_ID)).thenReturn(true);
+
+        ChatSummaryServiceImpl guarded = serviceWith(policy);
+
+        assertFalse(guarded.runSummarize(USER_ID, SESSION_ID, signal(12, 1000, 0, 9000)));
+
+        verify(chatClient, never()).prompt();
+    }
+
+    /** 当天摘要配额用完：只保留硬触发，机会窗一律跳过。 */
+    @Test
+    void 当天配额用完时应跳过() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setWindowMessages(20);
+        properties.getMemory().setSummaryDailyQuota(200);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        AiConcurrencyPolicy policy = mock(AiConcurrencyPolicy.class);
+        when(policy.summaryInBackoff(SESSION_ID)).thenReturn(false);
+        when(policy.reserveSummaryQuota(USER_ID, 200)).thenReturn(false);
+
+        ChatSummaryServiceImpl guarded = serviceWith(policy);
+
+        assertFalse(guarded.runSummarize(USER_ID, SESSION_ID, signal(12, 1000, 0, 9000)));
+
+        verify(chatClient, never()).prompt();
+    }
+
+    /** 压缩成功要把连续失败计数清零，否则下一次失败会直接跳到更大的退避。 */
+    @Test
+    void 压缩成功应清零失败计数() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setWindowMessages(20);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        AiConcurrencyPolicy policy = mock(AiConcurrencyPolicy.class);
+        when(policy.reserveSummaryQuota(anyLong(), anyInt())).thenReturn(true);
         when(callSpec.content()).thenReturn("摘要");
         when(chatSessionMapper.updateSummary(eq(SESSION_ID), anyString(), anyLong())).thenReturn(1);
 
-        assertTrue(service.runSummarize(USER_ID, SESSION_ID));
+        ChatSummaryServiceImpl guarded = serviceWith(policy);
+
+        assertTrue(guarded.runSummarize(USER_ID, SESSION_ID, signal(12, 1000, 0, 9000)));
+        verify(policy).clearSummaryFailure(SESSION_ID);
+    }
+
+    /** 压缩失败要把退避记下来（并按指数退避给出下次可试时间）。 */
+    @Test
+    void 压缩失败应记退避() {
+        properties.getMemory().setKeepRecentMessages(6);
+        properties.getMemory().setWindowMessages(20);
+        stubMessages();
+        when(chatSessionMapper.selectSummaryUptoMsgId(SESSION_ID)).thenReturn(null);
+        AiConcurrencyPolicy policy = mock(AiConcurrencyPolicy.class);
+        when(policy.reserveSummaryQuota(anyLong(), anyInt())).thenReturn(true);
+        when(policy.markSummaryFailed(eq(SESSION_ID), anyInt(), anyInt())).thenReturn(120);
+        when(requestSpec.call()).thenThrow(new IllegalStateException("上游挂了"));
+
+        ChatSummaryServiceImpl guarded = serviceWith(policy);
+
+        assertFalse(guarded.runSummarize(USER_ID, SESSION_ID, signal(12, 1000, 0, 9000)));
+        verify(policy).markSummaryFailed(eq(SESSION_ID), anyInt(), anyInt());
+        // 失败时绝不能推进指针，否则这段原文就再也压不进去了
+        verify(chatSessionMapper, never()).updateSummary(anyLong(), anyString(), anyLong());
+    }
+
+    private static ChatSummaryService.SummarySignal signal(int pending, int chars, int dropped, int estimate) {
+        return new ChatSummaryService.SummarySignal(pending, chars, dropped, estimate, 16000);
+    }
+
+    private ChatSummaryServiceImpl serviceWith(AiConcurrencyPolicy policy) {
+        return new ChatSummaryServiceImpl(clients, chatSessionMapper, chatMessageMapper,
+                promptTemplateService, sceneModelResolver, properties, policy, directExecutor);
     }
 }

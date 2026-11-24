@@ -21,7 +21,6 @@ class AiMemoryConfigCheckTest {
         AIProperties.MemoryProperties memory = properties.getMemory();
         memory.setWindowMessages(20);
         memory.setKeepRecentMessages(6);
-        memory.setSummaryMinPendingMessages(12);
         memory.setMaxPromptTokens(16000);
 
         assertThat(AiMemoryConfigCheck.violation(memory)).isNull();
@@ -34,15 +33,14 @@ class AiMemoryConfigCheckTest {
         AIProperties.MemoryProperties memory = properties.getMemory();
         memory.setWindowMessages(10);
         memory.setKeepRecentMessages(6);
-        memory.setSummaryMinPendingMessages(12);
         memory.setMaxPromptTokens(16000);
 
         String violation = AiMemoryConfigCheck.violation(memory);
 
         assertThat(violation).isNotNull();
         assertThat(violation).contains("window-messages(10)");
-        // 6 + 12 + 2 = 20
-        assertThat(violation).contains("20");
+        // 目标水位 = 10 × 0.5 = 5，则 6 + 5 + 2 = 13
+        assertThat(violation).contains("13");
     }
 
     @Test
@@ -50,7 +48,6 @@ class AiMemoryConfigCheckTest {
         AIProperties.MemoryProperties memory = properties.getMemory();
         memory.setWindowMessages(6);
         memory.setKeepRecentMessages(6);
-        memory.setSummaryMinPendingMessages(0);
         memory.setMaxPromptTokens(16000);
 
         String violation = AiMemoryConfigCheck.violation(memory);
@@ -64,7 +61,6 @@ class AiMemoryConfigCheckTest {
         AIProperties.MemoryProperties memory = properties.getMemory();
         memory.setWindowMessages(20);
         memory.setKeepRecentMessages(6);
-        memory.setSummaryMinPendingMessages(12);
         memory.setMaxPromptTokens(4096);
 
         String violation = AiMemoryConfigCheck.violation(memory);

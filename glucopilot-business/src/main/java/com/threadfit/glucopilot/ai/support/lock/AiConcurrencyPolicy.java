@@ -174,6 +174,63 @@ public class AiConcurrencyPolicy {
                 Duration.ofSeconds(properties.getJobDedupSeconds())) != null;
     }
 
+    // ---------------- 摘要的成本闸（每日配额 + 失败退避） ----------------
+
+    /**
+     * 摘要的每日配额（按用户、自然日，次日 00:00 过期）。
+     *
+     * <p>为什么按用户而不按会话：一次摘要调用花的是同一个用户的钱，而"开很多短会话"
+     * 恰好是能把调用次数放大的路径。会话维度的配额挡不住它。</p>
+     *
+     * @return true 表示本次仍在额度内（已计数）；false 表示超额，调用方应跳过<b>机会窗</b>压缩
+     */
+    public boolean reserveSummaryQuota(long userId, int dailyLimit) {
+        if (dailyLimit <= 0) {
+            return true;
+        }
+        LocalDate today = LocalDate.now(clock.withZone(ZoneId.systemDefault()));
+        String key = "ai:summary:quota:" + userId + ":" + DAY.format(today);
+        long used = counter.increment(key, 1, startOfNextDay(today));
+        return used <= dailyLimit;
+    }
+
+    /** 这个会话是否处于"摘要失败退避"窗口内。 */
+    public boolean summaryInBackoff(long sessionId) {
+        return cacheStore.get("ai:summary:fail:" + sessionId, "state").isPresent();
+    }
+
+    /**
+     * 记一次摘要失败并进入退避（指数退避：第 N 次失败退避 {@code base × 2^(N-1)} 秒，封顶 {@code max}）。
+     *
+     * <p>为什么用缓存而不是计数器表：退避是纯瞬态信息，重启后重来一次完全可以接受；
+     * 而写一张表反而要处理清理。标记的 TTL 就是本次退避窗口——过期即自动解除。</p>
+     *
+     * @return 本次退避的秒数（用于日志）
+     */
+    public int markSummaryFailed(long sessionId, int baseSeconds, int maxSeconds) {
+        int base = Math.max(baseSeconds, 1);
+        int cap = Math.max(maxSeconds, base);
+        String key = "ai:summary:fail:" + sessionId;
+        int failures = cacheStore.get(key, "state").map(AiConcurrencyPolicy::parseIntOrZero).orElse(0) + 1;
+        int shift = Math.min(failures - 1, 20);
+        int delay = (int) Math.min((long) base << shift, cap);
+        cacheStore.put(key, "state", String.valueOf(failures), Duration.ofSeconds(delay));
+        return delay;
+    }
+
+    /** 摘要成功：清掉退避（连续失败计数归零）。 */
+    public void clearSummaryFailure(long sessionId) {
+        cacheStore.delete("ai:summary:fail:" + sessionId, "state");
+    }
+
+    private static int parseIntOrZero(String text) {
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
     private static java.time.Instant startOfNextDay(LocalDate day) {
         return day.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant();
     }

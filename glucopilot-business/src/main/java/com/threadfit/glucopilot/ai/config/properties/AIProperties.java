@@ -202,32 +202,65 @@ public class AIProperties {
         private int summaryMaxTokens = 600;
 
         /**
-         * 攒够多少条"窗口外"的消息才值得跑一次摘要（默认 12）。
+         * 摘要的防抖下限（条数，默认 6）：待压条数少于它、<b>且</b>待压字符也少于 {@link #summaryFloorChars} 时不值得跑。
          * <p>
-         * 为什么需要这道门：每轮对话会新增 2 条消息（用户 + 助手），而 {@code keepRecentMessages}
-         * 只保底 6 条——没有门的话，从第 4 轮起**每一轮**都有一两条消息溢出窗口，
-         * 于是每轮都调一次摘要模型。摘要本身不便宜（输入 ≤{@code summaryMaxChars} + ≤{@code summaryInputMaxChars}），
-         * 更贵的是它每轮重写摘要块，把后面整段历史的前缀缓存全部作废。
-         * 12 条 ≈ 6 轮对话压一次：调用次数降到原来的 1/6，而窗口外的内容本来也不进 prompt，
-         * 晚几轮压缩不会丢任何还在窗口里的信息。
+         * 这是"水位"模型里唯一的"太小就别压"判据，取代了旧的双门（条数 ≥12 <b>或</b> 字数 ≥1500 才压）。
+         * 旧判据数的是"候选有多少条"，而真正决定该不该压的是"装配器还能不能把它们装进 prompt"——
+         * 两个量不同源，才会出现"候选 13 条但窗口装得下，照样每轮压一次"的浪费。
          */
-        private int summaryMinPendingMessages = 12;
+        private int summaryFloorMessages = 6;
 
         /**
-         * 或者攒够这么多字符也值得压（默认 1500）。与 {@link #summaryMinPendingMessages} 取"或"。
-         * <p>
-         * 语音转写的长消息可能 2 条就到 1500 字，此时等满 12 条太久——两个门取或，
-         * 分别覆盖"消息多但都短"与"消息少但都长"两种真实分布。
+         * 摘要的防抖下限（字符，默认 800）。与 {@link #summaryFloorMessages} 取"或"：
+         * 语音转写的两三条长消息就能过 800 字，不必等满 6 条。
          */
-        private int summaryMinPendingChars = 1500;
+        private int summaryFloorChars = 800;
 
         /**
-         * 两次摘要之间的最小间隔（秒，默认 60）；{@code <= 0} 表示不限制。
+         * 两次摘要之间的冷却（秒，默认 30）；{@code <= 0} 表示不限制。
          * <p>
-         * 兜住"用户连着发很多条短消息"的情形：条数与字数门可能在几十秒内被连续突破，
-         * 而摘要刚写完的下一轮缓存还没被复用，再写一次纯属浪费。
+         * <b>只约束"机会窗"，不约束"硬触发"</b>：硬触发代表"再不压就要丢消息/顶到预算"，
+         * 那时冷却让位。冷却要防的是"用户连发多条短消息，几十秒内水位反复越过半窗"——
+         * 刚写完的摘要下一轮缓存还没被复用，再写一次纯属浪费。
          */
-        private int summaryMinIntervalSeconds = 60;
+        private int summaryCooldownSeconds = 30;
+
+        /**
+         * 高水位（占预算比例，默认 0.9）：本轮估算 token ≥ {@code budget × ratio} 即视为硬触发。
+         * <p>
+         * 这一条独立于"待压条数"：固定开销（提示词 + 工具 schema + 本轮正文）本身就可能把预算顶满，
+         * 那时压历史已经无济于事，但至少别让摘要再往里加内容。
+         */
+        private double summaryHighWaterRatio = 0.9;
+
+        /**
+         * 目标水位（占 {@code window-messages} 比例，默认 0.5）：一次压缩要让待压条数回落到
+         * {@code window × ratio}（默认 20 × 0.5 = 10 条）。
+         * <p>
+         * 这是"滞回"的核心：不追着窗口边界每轮滑一次，而是"涨到半窗以上 → 一次性压到半窗以下"。
+         * 每压一次都会重写摘要块、废掉后面整段历史的前缀缓存（实测：重写那轮命中率 24%，
+         * 下一轮回到 93%），所以压缩次数越少越好；但压完要能撑几轮，否则刚压完又触发，反而更贵。
+         */
+        private double summaryTargetRatio = 0.5;
+
+        /**
+         * 每个用户每天最多跑几次摘要（默认 200）；{@code <= 0} 表示不限制。
+         * <p>
+         * 配额是"成本闸"而不是"功能闸"：超额后<b>硬触发仍然生效</b>（否则会丢消息），
+         * 只是不再做机会窗压缩。200 次/天 ≈ 重度用户 800 轮对话的压缩量，正常使用碰不到。
+         */
+        private int summaryDailyQuota = 200;
+
+        /**
+         * 失败退避的起点（秒，默认 60）：连续第 N 次失败后，{@code base × 2^(N-1)} 秒内不再尝试。
+         * <p>
+         * 为什么需要退避：模型超时/额度耗尽这类故障会持续几分钟，不退避就是每一轮都去撞一次墙
+         * （每轮多付一次超时等待与一堆日志）。退避期间原文一直在窗口里，不会丢内容。
+         */
+        private int summaryBackoffBaseSeconds = 60;
+
+        /** 失败退避的封顶（秒，默认 900 = 15 分钟）。 */
+        private int summaryBackoffMaxSeconds = 900;
 
         /** 是否把最近的工具结果摘要注入上下文（B3 的后半）。 */
         private boolean toolReplayEnabled = true;

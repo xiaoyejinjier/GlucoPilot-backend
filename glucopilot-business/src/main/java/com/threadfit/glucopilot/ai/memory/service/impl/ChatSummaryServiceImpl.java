@@ -96,12 +96,12 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
     }
 
     /**
-     * 本轮回复落库后调用：如果"已经有消息落到窗口之外"，就异步把这段压缩进摘要。
+     * 本轮回复落库后调用：按水位信号决定是否把窗口外的未摘要部分压缩进摘要。
      * <p>
      * <b>不阻塞、不抛异常</b>：这个方法在流式收尾的回调里被调用，任何异常都不该影响这一轮的结果。
      */
     @Override
-    public void maybeSummarizeAsync(Long userId, Long sessionId) {
+    public void maybeSummarizeAsync(Long userId, Long sessionId, SummarySignal signal) {
         if (!clients.utilityAvailable() || sessionId == null) {
             return;
         }
@@ -109,11 +109,12 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
             log.debug("该会话已有摘要任务在跑，跳过 sessionId={}", sessionId);
             return;
         }
+        SummarySignal effective = signal == null ? SummarySignal.unknown() : signal;
         try {
             summaryExecutor.execute(() -> {
                 running.incrementAndGet();
                 try {
-                    runSummarize(userId, sessionId);
+                    runSummarize(userId, sessionId, effective);
                 } finally {
                     running.decrementAndGet();
                     concurrency.finishSummary(sessionId);
@@ -132,6 +133,15 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
      * @return 是否成功写入摘要
      */
     boolean runSummarize(Long userId, Long sessionId) {
+        return runSummarize(userId, sessionId, SummarySignal.unknown());
+    }
+
+    /**
+     * 真正执行一次压缩任务（带水位信号）。
+     *
+     * @return 是否成功写入摘要
+     */
+    boolean runSummarize(Long userId, Long sessionId, SummarySignal signal) {
         if (!clients.utilityAvailable()) {
             return false;
         }
@@ -141,14 +151,22 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
             if (candidates.isEmpty()) {
                 return false;
             }
-            String skipReason = skipReason(sessionId, candidates);
-            if (skipReason != null) {
-                // 攒不够就该让它继续攒：每一轮都压一次既不省钱，还会把摘要块反复重写、
+            // 判据用**装配期量到的水位**，不是这里的候选条数：候选被 max-fetch/keep 截断过，
+            // 而"待压多少条"才是装配时真的装不下的量（两者在长会话里会差很多）
+            int pendingMessages = signal.known() ? signal.pendingMessages() : candidates.size();
+            int pendingChars = signal.known() ? signal.pendingChars() : charCount(candidates);
+            Decision decision = decide(userId, sessionId, signal, pendingMessages, pendingChars);
+            if (!decision.run()) {
+                // 攒不够/还没到水位就该让它继续攒：每一轮都压一次既不省钱，还会把摘要块反复重写、
                 // 连带废掉后面整段历史的前缀缓存（实测：摘要重写的那一轮命中率 24%，下一轮回到 93%）
-                log.debug("暂不摘要（{}）sessionId={} 候选={}条", skipReason, sessionId, candidates.size());
+                log.debug("暂不摘要（{}）sessionId={} 待压={}条/{}字 {}",
+                        decision.reason(), sessionId, pendingMessages, pendingChars, signal);
                 return false;
             }
-            String input = buildInput(existing, candidates);
+            // 只覆盖"走到目标水位"所需的那一段，且从最旧的开始——指针因此是连续推进的，
+            // 不会出现"先压了新的、更旧的候选永远轮不到"的漏洞
+            List<ChatMessage> covered = trimToTarget(candidates, signal);
+            String input = buildInput(existing, covered);
             if (!StringUtils.hasText(input)) {
                 return false;
             }
@@ -158,18 +176,23 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
                 return false;
             }
             String limited = limit(summary, aiProperties.getMemory().getSummaryMaxChars());
-            Long upto = candidates.get(candidates.size() - 1).getId();
+            Long upto = covered.get(covered.size() - 1).getId();
             int updated = chatSessionMapper.updateSummary(sessionId, limited, upto);
             if (updated == 0) {
                 // 指针已经更靠前（有更快的任务写过了）：本次结果丢弃即可
                 log.debug("摘要未写入（指针已前进）sessionId={} upto={}", sessionId, upto);
                 return false;
             }
-            log.info("会话摘要已更新 userId={} sessionId={} 压缩消息={} 摘要={}字 覆盖到消息={}",
-                    userId, sessionId, candidates.size(), limited.length(), upto);
+            concurrency.clearSummaryFailure(sessionId);
+            log.info("会话摘要已更新 userId={} sessionId={} 压缩消息={} 摘要={}字 覆盖到消息={} 触发={} 待压={}→{}",
+                    userId, sessionId, covered.size(), limited.length(), upto, decision.reason(),
+                    pendingMessages, Math.max(0, pendingMessages - covered.size()));
             return true;
         } catch (RuntimeException e) {
-            log.warn("会话摘要任务失败（保留原文窗口，下一轮再试）sessionId={}", sessionId, e);
+            AIProperties.MemoryProperties memory = aiProperties.getMemory();
+            int backoff = concurrency.markSummaryFailed(sessionId,
+                    memory.getSummaryBackoffBaseSeconds(), memory.getSummaryBackoffMaxSeconds());
+            log.warn("会话摘要任务失败（{} 秒内不再尝试，原文仍在窗口里）sessionId={}", backoff, sessionId, e);
             return false;
         }
     }
@@ -210,75 +233,127 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
         return upto;
     }
 
-    /**
-     * 判断"这一轮值不值得跑摘要"；返回 null 表示值得跑，否则返回跳过的原因（用于日志）。
-     *
-     * <p>三道门：</p>
-     * <ol>
-     *   <li><b>条数</b>：候选 ≥ {@code summary-min-pending-messages}（默认 12，≈6 轮对话）；</li>
-     *   <li><b>字数</b>：候选的正文合计 ≥ {@code summary-min-pending-chars}（默认 1500）；</li>
-     *   <li><b>间隔</b>：距上次成功摘要 ≥ {@code summary-min-interval-seconds}（默认 60 秒）。</li>
-     * </ol>
-     *
-     * <p>为什么条数与字数取"或"：语音转写的长消息 2 条就可能过 1500 字，等满 12 条太久；
-     * 反过来纯寒暄的 20 条短消息也压不出什么东西，字数门挡掉它。
-     * 两个门分别对应"消息多但都短"与"消息少但都长"两种真实分布。</p>
-     *
-     * <p>为什么还要间隔门：条数/字数门可能在几十秒内被连续突破（用户连发多条），
-     * 而刚写好的摘要下一轮缓存还没被复用，再写一次纯属浪费。</p>
-     */
-    private String skipReason(Long sessionId, List<ChatMessage> candidates) {
-        AIProperties.MemoryProperties memory = aiProperties.getMemory();
-        int minMessages = memory.getSummaryMinPendingMessages();
-        int minChars = memory.getSummaryMinPendingChars();
-        int pendingChars = 0;
-        for (ChatMessage message : candidates) {
-            String text = replayText(message);
-            if (text != null) {
-                pendingChars += text.length();
-            }
-        }
-        boolean enoughMessages = minMessages <= 0 || candidates.size() >= minMessages;
-        boolean enoughChars = minChars <= 0 || pendingChars >= minChars;
-        if (!enoughMessages && !enoughChars) {
-            return "候选 " + candidates.size() + " 条/" + pendingChars + " 字，未达 "
-                    + minMessages + " 条或 " + minChars + " 字的门";
-        }
-        int minIntervalSeconds = memory.getSummaryMinIntervalSeconds();
-        // 窗口即将溢出让位（2026-11-19 与需求方确认）：装配器给"摘要指针之后的未摘要消息"留了必留带，
-        // 但它自身受 window-messages 与预算两道上限约束。一旦 pending 逼近窗口容量，
-        // 再守 60 秒间隔就会让必留带被挤掉（= 空洞）。此时按"数据优先"立刻摘要：
-        // 代价只是突发连发时摘要调用比 60 秒一次更频繁，比丢消息便宜得多。
-        boolean urgent = isWindowAboutToOverflow(candidates.size(), memory);
-        if (minIntervalSeconds > 0 && !urgent) {
-            java.time.LocalDateTime last = chatSessionMapper.selectSummaryUpdatedAt(sessionId);
-            if (last != null) {
-                long elapsed = java.time.Duration.between(last, java.time.LocalDateTime.now()).getSeconds();
-                // 负数说明库与应用的钟不一致（跨时区/回拨）：这种情况不该把摘要永久卡住，放行
-                if (elapsed >= 0 && elapsed < minIntervalSeconds) {
-                    return "距上次摘要仅 " + elapsed + " 秒（下限 " + minIntervalSeconds + " 秒）";
-                }
-            }
-        }
-        return null;
+    /** 一次门控判定的结果：{@code reason} 只用于日志与测试断言（TINY / BELOW_WATER / COOLDOWN / BACKOFF / QUOTA / HIGH_WATER / DROPPED / UNKNOWN）。 */
+    record Decision(boolean run, String reason) {
     }
 
     /**
-     * 候选条数是否已经逼近窗口容量（逼近即让间隔门让位）。
+     * 判断"这一轮值不值得跑摘要"。
      *
-     * <p>判据推导：「未摘要条数 = 候选 + keep-recent」必须装得进 {@code window-messages}，
-     * 否则装配器就要么丢必留带（空洞）、要么超条数上限。留 1 条余量给"这一轮刚进来的消息"，
-     * 因此阈值取 {@code windowMessages − keepRecent − 1}。
+     * <h2>为什么不是"候选 ≥12 条或 ≥1500 字"</h2>
+     * 旧判据数的是<b>候选条数</b>，而真正决定该不该压的是<b>装配器还能不能把它们装进 prompt</b>
+     * （必留带水位）。两个量不同源，导致两种极端：水位已经很高但候选只有 11 条时死活不压（丢消息），
+     * 或者候选 13 条但其实窗口装得下时每轮都压（白花钱、白废缓存）。现在两者同源。
      *
-     * <p>配置本身不自洽时（阈值 ≤0，例如 window 比 keep 还小）返回 true：宁可多调一次摘要，
-     * 也不要在自相矛盾的配置下持续丢消息。
+     * <h2>四层</h2>
+     * <ol>
+     *   <li><b>防抖下限</b>：待压条数与字符都太小（默认 &lt;6 条且 &lt;800 字）→ 不值得压；</li>
+     *   <li><b>硬触发</b>（无视冷却与退避）：上一轮被预算挤掉过 / 待压逼近窗口 / 估算顶到预算；</li>
+     *   <li><b>机会窗</b>：待压越过半窗（默认 20/2=10 条），且过了冷却、没在退避、当天配额还有；</li>
+     *   <li><b>否则继续攒</b>。</li>
+     * </ol>
      */
-    private static boolean isWindowAboutToOverflow(int pendingMessages, AIProperties.MemoryProperties memory) {
-        int threshold = memory.getWindowMessages() - memory.getKeepRecentMessages() - 1;
-        if (threshold <= 0) {
-            return true;
+    Decision decide(Long userId, Long sessionId, SummarySignal signal, int pendingMessages, int pendingChars) {
+        AIProperties.MemoryProperties memory = aiProperties.getMemory();
+        if (pendingMessages < memory.getSummaryFloorMessages() && pendingChars < memory.getSummaryFloorChars()) {
+            return new Decision(false, "TINY");
         }
-        return pendingMessages >= threshold;
+        if (!signal.known()) {
+            // 调用方没能提供水位（老接口/测试）：有候选就压，保持旧行为
+            return new Decision(true, "UNKNOWN");
+        }
+        int window = Math.max(memory.getWindowMessages(), 1);
+        int highWaterMessages = Math.max(window - 2, 1);
+        boolean budgetHigh = signal.budgetTokens() > 0
+                && signal.estimateTokens() >= signal.budgetTokens() * memory.getSummaryHighWaterRatio();
+        boolean dropped = signal.droppedLast() > 0;
+        if (dropped) {
+            // 最强信号：上一轮用户说的话已经没进 prompt。此时任何冷却/退避/配额都得让位
+            return new Decision(true, "DROPPED");
+        }
+        if (pendingMessages >= highWaterMessages || budgetHigh) {
+            // 硬触发不受冷却与退避约束，否则会一路滑到"必留带被预算截断"
+            return new Decision(true, "HIGH_WATER");
+        }
+        if (pendingMessages < targetWater(window, memory)) {
+            return new Decision(false, "BELOW_WATER");
+        }
+        if (concurrency.summaryInBackoff(sessionId)) {
+            return new Decision(false, "BACKOFF");
+        }
+        int cooldown = memory.getSummaryCooldownSeconds();
+        if (cooldown > 0) {
+            java.time.LocalDateTime last = chatSessionMapper.selectSummaryUpdatedAt(sessionId);
+            if (last != null) {
+                long elapsed = Math.abs(java.time.Duration.between(last, java.time.LocalDateTime.now()).getSeconds());
+                if (elapsed < cooldown) {
+                    return new Decision(false, "COOLDOWN");
+                }
+            }
+        }
+        if (!concurrency.reserveSummaryQuota(userId, memory.getSummaryDailyQuota())) {
+            return new Decision(false, "QUOTA");
+        }
+        return new Decision(true, "OPPORTUNISTIC");
+    }
+
+    /** 目标水位：压一次要回落到 {@code window × summary-target-ratio}（默认 10 条）。 */
+    private static int targetWater(int window, AIProperties.MemoryProperties memory) {
+        double ratio = memory.getSummaryTargetRatio();
+        return Math.max(1, (int) Math.round(window * (ratio <= 0 || ratio >= 1 ? 0.5 : ratio)));
+    }
+
+    /**
+     * 从最旧的候选开始挑出"本次要压进摘要"的那一段。
+     *
+     * <h2>为什么从最旧开始</h2>
+     * 指针只能连续前进。若像旧实现那样"取最新的 N 字、指针跳到最新那条"，中间更旧的候选
+     * 就既不在摘要里、也不会再被选中——永久丢失。反过来"从最旧往后装、装不下就停"，
+     * 剩下的留到下一轮继续，指针永远连续。
+     *
+     * <h2>为什么还要停在水位</h2>
+     * 一次压到目标水位（而不是能压多少压多少）正是滞回：压完至少还能撑几轮，
+     * 而摘要块只会被重写一次——重写次数决定前缀缓存被废掉几次。
+     */
+    List<ChatMessage> trimToTarget(List<ChatMessage> candidates, SummarySignal signal) {
+        AIProperties.MemoryProperties memory = aiProperties.getMemory();
+        int budget = Math.max(memory.getSummaryInputMaxChars(), 500);
+        int target = signal.known() ? targetWater(Math.max(memory.getWindowMessages(), 1), memory) : 0;
+        int drop = signal.known() ? Math.max(0, signal.pendingMessages() - target) : Integer.MAX_VALUE;
+        int want = Math.max(1, Math.min(candidates.size(), candidates.size() - drop));
+        if (!signal.known()) {
+            want = candidates.size();
+        }
+        List<ChatMessage> covered = new ArrayList<>();
+        int chars = 0;
+        for (ChatMessage message : candidates) {
+            if (covered.size() >= want) {
+                break;
+            }
+            String text = replayText(message);
+            int cost = text == null ? 0 : text.length();
+            if (!covered.isEmpty() && chars + cost > budget) {
+                break;
+            }
+            covered.add(message);
+            chars += cost;
+        }
+        if (covered.isEmpty()) {
+            covered.add(candidates.get(0));
+        }
+        return covered;
+    }
+
+    /** 候选正文合计字符数（防抖下限用）。 */
+    private int charCount(List<ChatMessage> messages) {
+        int total = 0;
+        for (ChatMessage message : messages) {
+            String text = replayText(message);
+            if (text != null) {
+                total += text.length();
+            }
+        }
+        return total;
     }
 
     /**
@@ -295,8 +370,10 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
         }
         sb.append("【需要压缩的对话原文（时间正序）】\n");
         int budget = Math.max(aiProperties.getMemory().getSummaryInputMaxChars(), 500);
-        // 超长时只取最近的部分：越新的原文对"接下来怎么回答"越重要
-        List<String> lines = new ArrayList<>();
+        // 从最旧的往后装：调用方（trimToTarget）已经按"连续覆盖"挑好这一段，
+        // 这里再截一次只为兜住"单条消息就超预算"的极端情况；一旦装不下就停，
+        // 让剩下的留在窗口里等下一轮——指针因此不会跳过任何一条。
+        int total = 0;
         for (ChatMessage message : messages) {
             String text = replayText(message);
             if (!StringUtils.hasText(text)) {
@@ -304,21 +381,12 @@ public class ChatSummaryServiceImpl implements ChatSummaryService {
             }
             String role = message.getMsgRole() != null && message.getMsgRole() == CodeEnum.ChatMsgRole.USER.getCode()
                     ? "用户" : "助手";
-            lines.add(role + "：" + text.replaceAll("\\s+", " ").trim());
-        }
-        int total = 0;
-        List<String> kept = new ArrayList<>();
-        for (int i = lines.size() - 1; i >= 0; i--) {
-            String line = lines.get(i);
-            if (total + line.length() > budget && !kept.isEmpty()) {
+            String line = role + "：" + text.replaceAll("\\s+", " ").trim();
+            if (total > 0 && total + line.length() > budget) {
                 break;
             }
-            kept.add(line);
-            total += line.length();
-        }
-        java.util.Collections.reverse(kept);
-        for (String line : kept) {
             sb.append(line).append('\n');
+            total += line.length();
         }
         return sb.toString();
     }

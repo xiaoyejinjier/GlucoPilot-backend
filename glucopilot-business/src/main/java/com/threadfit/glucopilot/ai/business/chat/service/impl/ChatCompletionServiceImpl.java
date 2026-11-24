@@ -258,6 +258,11 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
         // 两者都通过 advisor 参数传进去（Advisor 回调不在请求线程上，只能这样传）。
         int fixedOverhead = estimateFixedOverhead(systemPrompt);
         AtomicInteger promptEstimate = new AtomicInteger();
+        // 摘要门的水位信号：装配阶段算出「待压条数 / 被预算挤掉的条数」，这里给槽位、写回后交给摘要
+        AtomicInteger protectedTail = new AtomicInteger();
+        AtomicInteger protectedChars = new AtomicInteger();
+        AtomicInteger protectedDropped = new AtomicInteger();
+        AtomicInteger promptBudget = new AtomicInteger();
         // ③ 期：分片元数据的回传槽（写法同 promptEstimate）——装配阶段算好，落库后才用
         AtomicReference<List<ChatContextShard>> contextShards = new AtomicReference<>(List.of());
         state.contextShards = contextShards;
@@ -273,6 +278,10 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
                         .param(ChatMemoryAdvisorParams.FIXED_OVERHEAD_TOKENS, fixedOverhead)
                         .param(ChatMemoryAdvisorParams.USER_ID, userId)
                         .param(ChatMemoryAdvisorParams.PROMPT_ESTIMATE, promptEstimate)
+                        .param(ChatMemoryAdvisorParams.PROTECTED_TAIL, protectedTail)
+                        .param(ChatMemoryAdvisorParams.PROTECTED_CHARS, protectedChars)
+                        .param(ChatMemoryAdvisorParams.PROTECTED_DROPPED, protectedDropped)
+                        .param(ChatMemoryAdvisorParams.PROMPT_BUDGET, promptBudget)
                         .param(ChatMemoryAdvisorParams.CONTEXT_SHARDS, contextShards))
                 // 工具上下文：当前用户身份由服务端注入，模型看不到也伪造不了。
                 // 缺了这一步，工具一旦被调用就会因取不到 userId 而失败（见 AiToolContext）。
@@ -311,9 +320,13 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
                             userId, sessionId, saved.getId(), latencyMs,
                             state.usage.promptTokens(), state.usage.completionTokens(),
                             state.usage.cacheHitTokens(), finishReason);
-                    // ② 期：本轮已落库 → 若已有消息落在窗口之外，异步把它们压缩进滚动摘要
+                    // ② 期：本轮已落库 → 把装配阶段算出的水位交给摘要服务决定压不压
                     // （不阻塞、失败只记日志，绝不影响这一轮已经成功的回复）
-                    chatSummaryService.maybeSummarizeAsync(userId, sessionId);
+                    chatSummaryService.maybeSummarizeAsync(userId, sessionId,
+                            new ChatSummaryService.SummarySignal(
+                                    protectedTail.get(), protectedChars.get(),
+                                    protectedDropped.get(), state.estimatedPromptTokens,
+                                    promptBudget.get()));
                     // ③ 期：用户显式要求记住时立刻抽一次长期记忆（用户主动表达最可信；其余时机是会话结束时）
                     if (UserChatMemoryService.looksExplicit(input.promptText())) {
                         userChatMemoryService.extractAsync(userId, sessionId, "explicit");

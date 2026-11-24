@@ -185,4 +185,44 @@ class AiConcurrencyPolicyTest {
         assertThat(policy.markJob("x")).isTrue();
         assertThat(Duration.ofSeconds(1)).isPositive();
     }
+    // ---------------- 摘要的成本闸：每日配额 + 失败退避 ----------------
+
+    @Test
+    void 摘要每日配额用完后应拒绝() {
+        AiConcurrencyPolicy policy = policy(new InMemoryLeaseGuard(), properties());
+
+        assertThat(policy.reserveSummaryQuota(1L, 2)).isTrue();
+        assertThat(policy.reserveSummaryQuota(1L, 2)).isTrue();
+        assertThat(policy.reserveSummaryQuota(1L, 2)).isFalse();
+        // 换个人不受影响：额度是按用户算的
+        assertThat(policy.reserveSummaryQuota(2L, 2)).isTrue();
+        // 0/负数 = 不限（本地调试与老配置都走这条）
+        assertThat(policy.reserveSummaryQuota(1L, 0)).isTrue();
+    }
+
+    @Test
+    void 连续失败应按指数退避并封顶() {
+        AiConcurrencyPolicy policy = policy(new InMemoryLeaseGuard(), properties());
+
+        assertThat(policy.summaryInBackoff(9L)).isFalse();
+        assertThat(policy.markSummaryFailed(9L, 60, 240)).isEqualTo(60);
+        assertThat(policy.summaryInBackoff(9L)).isTrue();
+        assertThat(policy.markSummaryFailed(9L, 60, 240)).isEqualTo(120);
+        assertThat(policy.markSummaryFailed(9L, 60, 240)).isEqualTo(240);
+        // 再失败也不会超过封顶值
+        assertThat(policy.markSummaryFailed(9L, 60, 240)).isEqualTo(240);
+    }
+
+    @Test
+    void 摘要成功后应清零失败计数() {
+        AiConcurrencyPolicy policy = policy(new InMemoryLeaseGuard(), properties());
+        policy.markSummaryFailed(9L, 60, 240);
+        assertThat(policy.summaryInBackoff(9L)).isTrue();
+
+        policy.clearSummaryFailure(9L);
+
+        assertThat(policy.summaryInBackoff(9L)).isFalse();
+        // 清零后下一次失败重新从 base 开始，而不是继续翻倍
+        assertThat(policy.markSummaryFailed(9L, 60, 240)).isEqualTo(60);
+    }
 }

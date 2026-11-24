@@ -175,6 +175,17 @@
         </dependency>
 
         <!--
+            RabbitMQ：跨进程事件总线（异步通知、审核派发、导出任务等后续消费者共用的基础设施）。
+            基础配置见 common/mq/RabbitMqConfig：一个 topic exchange + 一条通用队列 + 死信交换机/队列，
+            连接参数全部来自 spring.rabbitmq.*（环境变量注入），业务拓扑名来自 glucopilot.mq.*。
+            只加 starter、不引 spring-rabbit-test：我们自己按需用真实代理做集成验证。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
+        <!--
             Redisson：只用于 AI 模块的「分布式互斥 / 限速 / 去重」原语（信号量、令牌桶、原子计数）。
             刻意用 plain 依赖而不是 redisson-spring-boot-starter：starter 会注册
             RedissonConnectionFactory 顶掉现有 Lettuce，从而改变 StringRedisTemplate 的使用者

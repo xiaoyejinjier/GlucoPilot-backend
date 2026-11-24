@@ -17,6 +17,7 @@ import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.EmailUtils;
 import com.threadfit.glucopilot.common.util.IdUtils;
+import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.entity.UserAccount;
@@ -34,7 +35,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -47,6 +50,7 @@ public class AuthService {
     private static final long SMS_COOLDOWN_MS = 60_000L;
     private static final int EMAIL_EXPIRE_SECONDS = 300;
     private static final long EMAIL_COOLDOWN_MS = 60_000L;
+    private static final long DAY_MS = 86_400_000L;
 
     private final WechatAuthClient wechatAuthClient;
     private final UserAccountMapper userAccountMapper;
@@ -59,6 +63,7 @@ public class AuthService {
     private final EmailCodeMailSender emailCodeMailSender;
     private final VerificationCodeConsumer verificationCodeConsumer;
     private final AccountCancellationRecovery cancellationRecovery;
+    private final CancelRecoverTicketStore recoverTicketStore;
 
     /** 短信发送冷却：phone -> 上次发送时间戳（进程内内存，重启清空） */
     private final ConcurrentHashMap<String, AtomicLong> smsCooldown = new ConcurrentHashMap<>();
@@ -81,7 +86,7 @@ public class AuthService {
             account = createUserWithOpenid(identity.openid(), identity.unionId());
             isNew = true;
         }
-        assertAccountLoginable(account);
+        assertAccountLoginable(account, CodeEnum.LoginType.WECHAT.getCode());
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.WECHAT.getCode());
         return finishLogin(account, session, isNew);
     }
@@ -137,7 +142,7 @@ public class AuthService {
             userAccountMapper.updateById(account);
             isNew = true;
         } else {
-            assertAccountLoginable(account);
+            assertAccountLoginable(account, CodeEnum.LoginType.PHONE.getCode());
         }
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.PHONE.getCode());
         return finishLogin(account, session, isNew);
@@ -195,7 +200,7 @@ public class AuthService {
             userAccountMapper.updateById(account);
             isNew = true;
         } else {
-            assertAccountLoginable(account);
+            assertAccountLoginable(account, CodeEnum.LoginType.EMAIL.getCode());
         }
         UserSession session = createSession(account.getId(), CodeEnum.LoginType.EMAIL.getCode());
         return finishLogin(account, session, isNew);
@@ -405,12 +410,16 @@ public class AuthService {
     }
 
     /**
-     * 登录放行：NORMAL / DISABLED / CANCELLED_RECOVERABLE（仅在反悔期窗口内）可登录，注销中/已注销拒绝。
+     * 登录放行：NORMAL / DISABLED 可登录；注销中(2) / 已注销(3) 拒绝。
+     *
+     * <p>状态 4（冷静期）不再静默恢复：只在窗口内签发一次性票据并返回
+     * {@link ErrorCode#NEED_RECOVER_CONFIRM}，由用户在小程序二次确认后调用
+     * {@link #confirmCancelRecovery(String)}。
      *
      * <p>窗口判定是"能否恢复"的权威依据：{@code now >= isolateUntil} 时即便 worker 还没开始清理，
-     * 也一律拒绝，提示已过反悔期。此处位于验证码消费之后，差异化文案只对被要求持码者可见。
+     * 也一律拒绝；此处位于验证码消费之后，差异化文案只对被要求持码者可见。
      */
-    private void assertAccountLoginable(UserAccount account) {
+    private void assertAccountLoginable(UserAccount account, int loginType) {
         if (account == null) {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
@@ -426,32 +435,75 @@ public class AuthService {
         }
         if (status == CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
             UserAccountCancellation active = cancellationRecovery.findActive(account.getId());
+            LocalDateTime now = LocalDateTime.now();
             if (active == null
                     || active.getIsolateUntil() == null
-                    || !active.getIsolateUntil().isAfter(LocalDateTime.now())) {
+                    || !active.getIsolateUntil().isAfter(now)) {
                 throw new BizException(ErrorCode.FORBIDDEN, "注销申请已过反悔期，账号正在清理中");
             }
+
+            long leftMs = Duration.between(now, active.getIsolateUntil()).toMillis();
+            String ticket = recoverTicketStore.issue(account.getId(), loginType);
+            int preStatus = active.getPreStatus() == null
+                    ? CodeEnum.AccountStatus.NORMAL.getCode()
+                    : active.getPreStatus();
+
+            throw new BizException(
+                    ErrorCode.NEED_RECOVER_CONFIRM,
+                    "账号处于注销冷静期，需确认是否恢复",
+                    AuthDtos.CancelRecoverIntercept.builder()
+                            .recoverRequired(true)
+                            .recoverTicket(ticket)
+                            .ticketExpireIn(CancelRecoverTicketStore.TTL_SECONDS)
+                            .remainingDays((int) Math.max(1, (leftMs + DAY_MS - 1) / DAY_MS))
+                            .cancelDeadlineAt(active.getIsolateUntil()
+                                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
+                            .usernameMasked(PhoneUtils.maskUsername(account.getUsername()))
+                            .phoneMasked(PhoneUtils.mask(account.getPhone()))
+                            .recoverToStatus(preStatus)
+                            .willStayDisabled(
+                                    preStatus == CodeEnum.AccountStatus.DISABLED.getCode())
+                            .build());
         }
     }
 
     /**
-     * 建会话后的收尾：窗口内登录即恢复，然后刷新登录信息并组装响应。
+     * 确认恢复：用户在小程序点击「恢复账号并登录」后调用。
      *
-     * <p>恢复必须在 {@link #createSession} 之后调用——那里已对账号行加锁，
-     * 本方法里的锁内重读才能正确判定并发第二台设备"已被先到者恢复"。
+     * <p>票据在凭证校验通过时签发，只能消费一次；恢复成功后签发正式 Token。
+     * 账号行锁由 {@link #createSession} 获取，恢复核心在其后执行，保证与并发登录 /
+     * 管理端恢复互斥。
      */
+    @Transactional(rollbackFor = Exception.class)
+    public AuthDtos.SessionResponse confirmCancelRecovery(String ticket) {
+        CancelRecoverTicketStore.Ticket parsed = recoverTicketStore.consume(ticket);
+        if (parsed == null) {
+            throw new BizException(ErrorCode.BIZ_REJECTED, "恢复确认已失效，请重新登录");
+        }
+
+        UserSession session = createSession(parsed.userId(), parsed.loginType());
+
+        AccountCancellationRecovery.RecoverOutcome outcome =
+                cancellationRecovery.recoverOnConfirm(parsed.userId());
+        UserAccount account = outcome.account();
+        if (!outcome.recovered()) {
+            int current = account == null ? -1 : account.getAccountStatus();
+            // 已被另一台设备恢复：按幂等成功处理，正常签发本次会话
+            if (current != CodeEnum.AccountStatus.NORMAL.getCode()
+                    && current != CodeEnum.AccountStatus.DISABLED.getCode()) {
+                throw new BizException(ErrorCode.CONFLICT, "账号状态已变化，请重新登录");
+            }
+        }
+
+        touchLogin(account);
+        return toSessionResponse(session, account, false, false);
+    }
+
+    /** 建会话后的收尾：走到这里账号只可能是 0/1，不再做任何注销恢复。 */
     private AuthDtos.SessionResponse finishLogin(
             UserAccount account, UserSession session, boolean isNew) {
-        boolean recovered = false;
-        if (account.getAccountStatus() != null
-                && account.getAccountStatus() == CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
-            AccountCancellationRecovery.RecoverOutcome outcome =
-                    cancellationRecovery.recoverOnLogin(account.getId());
-            account = outcome.account();
-            recovered = outcome.recovered();
-        }
         touchLogin(account);
-        return toSessionResponse(session, account, isNew, recovered);
+        return toSessionResponse(session, account, isNew, false);
     }
 
     private AuthDtos.SessionResponse toSessionResponse(

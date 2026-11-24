@@ -59,6 +59,31 @@ public final class AuthDtos {
         private String emailCode;
     }
 
+    /** 冷静期登录拦截：不下发 Token，只给一次性票据与脱敏信息。 */
+    @Data
+    @Builder
+    public static class CancelRecoverIntercept {
+        private Boolean recoverRequired;
+        private String recoverTicket;
+        /** 票据有效期（秒）。 */
+        private Long ticketExpireIn;
+        /** 剩余冷静期天数，向上取整，最小 1。 */
+        private Integer remainingDays;
+        /** 冷静期截止时间（epoch 毫秒）。 */
+        private Long cancelDeadlineAt;
+        private String usernameMasked;
+        private String phoneMasked;
+        /** 恢复后的账号状态：0=仍禁用，1=正常。 */
+        private Integer recoverToStatus;
+        private Boolean willStayDisabled;
+    }
+
+    @Data
+    public static class ConfirmRecoverRequest {
+        @NotBlank(message = "恢复凭据不能为空")
+        private String ticket;
+    }
+
     @Data
     @Builder
     public static class SessionResponse {

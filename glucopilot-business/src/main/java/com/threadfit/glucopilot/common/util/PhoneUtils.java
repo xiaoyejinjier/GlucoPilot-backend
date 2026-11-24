@@ -17,4 +17,14 @@ public final class PhoneUtils {
         }
         return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
     }
+
+    /**
+     * 用户名脱敏：保留首字（如「张**」）；null / 空白时整体遮蔽。
+     */
+    public static String maskUsername(String username) {
+        if (username == null || username.isBlank()) {
+            return "***";
+        }
+        return username.charAt(0) + "**";
+    }
 }

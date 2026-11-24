@@ -70,10 +70,20 @@
     </insert>
     <sql id="filters">WHERE 1=1 <if test="user != null">AND o.user_id=#{user}</if><if test="status != null">AND o.status=#{status}</if></sql>
     <select id="list" resultType="com.threadfit.glucopilot.wallet.withdrawal.entity.WithdrawalOrder">
-        SELECT o.*,d.real_name doctor_name FROM wallet_withdrawal_order o LEFT JOIN consultation_doctor d ON d.user_id=o.user_id
+        SELECT o.*,d.real_name doctor_name,u.account_status AS account_status
+        FROM wallet_withdrawal_order o
+        LEFT JOIN consultation_doctor d ON d.user_id=o.user_id
+        LEFT JOIN user_account u ON u.id=o.user_id
         <include refid="filters"/> ORDER BY o.created_at DESC,o.order_no DESC LIMIT #{limit} OFFSET #{offset}
     </select>
     <select id="count" resultType="long">SELECT COUNT(*) FROM wallet_withdrawal_order o <include refid="filters"/></select>
+    <select id="countInFlightWithdrawals" resultType="long">
+        SELECT COUNT(*) FROM wallet_withdrawal_order
+        WHERE user_id=#{user} AND status IN ('PENDING','APPROVED')
+    </select>
+    <select id="accountStatus" resultType="int">
+        SELECT account_status FROM user_account WHERE id=#{user} AND is_deleted=0
+    </select>
     <select id="due" resultType="string">
         SELECT order_no FROM wallet_withdrawal_order WHERE status='APPROVED' AND expected_payout_date&lt;=#{today}
             AND provider='ALIPAY_SANDBOX_TRANSFER' AND payee_user_id IS NOT NULL

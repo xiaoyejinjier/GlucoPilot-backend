@@ -19,6 +19,7 @@ import com.threadfit.glucopilot.user.account.service.UserAccountService;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.feedback.service.FeedbackService;
 import com.threadfit.glucopilot.user.settings.service.UserSettingService;
+import com.threadfit.glucopilot.wallet.service.WalletOrderService;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -51,6 +52,7 @@ class AccountDataPurgerTest {
     @Mock private FeedbackService feedbackService;
     @Mock private DataExportService dataExportService;
     @Mock private CommunityService communityService;
+    @Mock private WalletOrderService walletOrderService;
 
     @Test
     void passesPhoneAndEmailToAuthBeforeTombstoneAndFinishesWithAnonymize() {
@@ -75,7 +77,8 @@ class AccountDataPurgerTest {
                         userDeviceService,
                         feedbackService,
                         dataExportService,
-                        communityService);
+                        communityService,
+                        walletOrderService);
 
         purger.purge(9L);
 
@@ -92,6 +95,7 @@ class AccountDataPurgerTest {
         verify(feedbackService).purgeAccountData(9L);
         verify(dataExportService).purgeAccountData(9L);
         verify(communityService).purgeAccountData(9L);
+        verify(walletOrderService).purgeAccountData(9L);
 
         InOrder order = inOrder(authService, userAccountService);
         order.verify(authService).purgeAccountData(9L, "13812345678", "a@b.com");

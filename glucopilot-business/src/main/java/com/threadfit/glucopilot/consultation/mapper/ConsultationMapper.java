@@ -115,6 +115,9 @@ public interface ConsultationMapper {
 
     int markPaid(@Param("no") String no);
 
+    /** 作为医生仍在进行中且未支付的问诊单数量（注销预检第五项阻断）。 */
+    long countInFlight(@Param("doctor") long doctor);
+
     int entry(
             @Param("no") String no,
             @Param("user") long user,

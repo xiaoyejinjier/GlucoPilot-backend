@@ -55,6 +55,8 @@ public class WithdrawalService {
                 || form.clientRequestId() == null
                 || !form.clientRequestId().matches("[A-Za-z0-9_-]{8,64}"))
             throw bad("提现金额或请求编号不合法");
+        // 注销中/已注销账号直接拒绝，避免误导性的"请先开通钱包"
+        rejectIfCancelling(user);
         if (wallets.lockActivatedUser(user) == null) throw bad("请先开通钱包");
         var previous = mapper.byRequest(user, form.clientRequestId());
         if (previous != null) {
@@ -111,6 +113,12 @@ public class WithdrawalService {
                 || form.note() == null
                 || form.note().isBlank()
                 || form.note().length() > 500) throw bad("请填写审核结果和意见");
+        // 申请人已注销/注销中：只能驳回（解冻退款），不可放款
+        if ("APPROVED".equals(form.status())) {
+            Integer applicantStatus = mapper.accountStatus(order.getUserId());
+            if (applicantStatus != null && (applicantStatus == 3 || applicantStatus == 4))
+                throw new BizException(ErrorCode.CONFLICT, "用户注销中，仅可驳回");
+        }
         var balance = mapper.balance(order.getUserId(), true);
         if (balance == null || balance.getFrozenCents() < order.getAmountCents()) throw conflict();
         LocalDate due = "APPROVED".equals(form.status()) ? fifthBusinessDay(today()) : null;
@@ -143,6 +151,14 @@ public class WithdrawalService {
             if (working && ++count == 5) return next;
         }
         throw bad("工作日历配置异常，请联系管理员");
+    }
+
+    /** 账号注销中(2)/已注销(3)/注销可恢复(4) 一律拒绝提现，替代误导性的"请先开通钱包"。 */
+    private void rejectIfCancelling(long user) {
+        Integer accountStatus = mapper.accountStatus(user);
+        if (accountStatus != null
+                && (accountStatus == 2 || accountStatus == 3 || accountStatus == 4))
+            throw bad("账号注销中或已注销，无法提现");
     }
 
     private void validatePayee(String payee) {

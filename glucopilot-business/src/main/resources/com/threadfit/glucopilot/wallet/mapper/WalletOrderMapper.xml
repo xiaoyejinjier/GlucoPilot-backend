@@ -48,4 +48,13 @@
         FROM <include refid="table"/> o
         WHERE o.user_id = #{userId} AND o.order_no = #{orderNo}
     </select>
+    <update id="closePendingRecharges">
+        UPDATE wallet_recharge_order SET status='CLOSED',closed_at=CURRENT_TIMESTAMP(3),version=version+1
+        WHERE user_id=#{userId} AND status='PENDING'
+    </update>
+    <update id="clearWalletAccount">
+        UPDATE wallet_sandbox_account
+        SET balance_cents=0,frozen_cents=0,income_available_cents=0,version=version+1
+        WHERE user_id=#{userId}
+    </update>
 </mapper>

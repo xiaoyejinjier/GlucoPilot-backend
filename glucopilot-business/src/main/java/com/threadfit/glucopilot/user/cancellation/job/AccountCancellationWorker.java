@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationStatus;
 import com.threadfit.glucopilot.user.cancellation.service.AccountDataPurger;
+import com.threadfit.glucopilot.user.cancellation.service.WalletCheckService;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
 import com.threadfit.glucopilot.user.entity.UserCancelLogEntity;
@@ -73,6 +74,7 @@ public class AccountCancellationWorker {
     private final UserAccountMapper userAccountMapper;
     private final UserCancelLogMapper userCancelLogMapper;
     private final AccountDataPurger purger;
+    private final WalletCheckService walletCheckService;
 
     /** 安全边际：worker 在恢复期结束后再多等一段时间，保证没有在途的恢复请求。 */
     @Value("${account.cancellation.safety-margin:5m}")
@@ -141,6 +143,13 @@ public class AccountCancellationWorker {
                     status);
             return;
         }
+        // 二次校验钱包资产：到期执行前仍可能有窗口期新增的未结清资产，此时 purge 尚未开始，
+        // 回滚无副作用，走安全中止而不是直接置 FAILED（避免账号卡死在 status=4 不可恢复）。
+        WalletCheckService.WalletCheckResult wallet = walletCheckService.check(record.getUserId());
+        if (!wallet.passed()) {
+            abort(record, status, wallet.reasonCode());
+            return;
+        }
         try {
             purger.purge(record.getUserId());
             cancellationMapper.markExecuted(id, LocalDateTime.now());
@@ -192,6 +201,59 @@ public class AccountCancellationWorker {
                     record.getUserId(),
                     e);
         }
+    }
+
+    /**
+     * 到期执行时资产仍未结清，安全中止注销（此时 purge 尚未开始，回滚无副作用）。
+     *
+     * <p>三步顺序不可颠倒：<b>先 CAS 回滚账号、再 markFailed、最后写审计</b>。若反序，两步之间崩溃
+     * 会复刻账号停在 status=4、凭据已 FAILED 的永久错位（卡死态）。
+     *
+     * <p>CAS 返回 0 说明账号已被并发改变（如管理端 recoverCancellation），此时凭据已移出 PENDING，
+     * 按"状态已被并发改变，跳过"处理——不算错误、不重试、不写审计。
+     */
+    private void abort(UserAccountCancellation record, int fromStatus, String reasonCode) {
+        int preStatus = record.getPreStatus() == null
+                ? AccountStatus.NORMAL.getCode()
+                : record.getPreStatus();
+
+        int cas = userAccountMapper.casRecoverFromCancellation(record.getUserId(), preStatus);
+        if (cas == 0) {
+            log.warn(
+                    "账号注销中止时账号状态已被并发改变，跳过 id={} userId={}",
+                    record.getId(),
+                    record.getUserId());
+            return;
+        }
+
+        String error = "ASSET_PENDING:" + (reasonCode == null ? "UNKNOWN" : reasonCode);
+        cancellationMapper.markFailed(record.getId(), CancellationStatus.FAILED.getCode(), error);
+
+        try {
+            userCancelLogMapper.insertIgnore(
+                    UserCancelLogEntity.builder()
+                            .userId(record.getUserId())
+                            .cancellationId(record.getId())
+                            .actionType(UserCancelLogEntity.ACTION_SYSTEM_ABORT)
+                            .fromStatus(fromStatus)
+                            .toStatus(preStatus)
+                            .operatorType(UserCancelLogEntity.OPERATOR_SYSTEM)
+                            .operatorId(0L)
+                            .build());
+        } catch (RuntimeException e) {
+            log.warn(
+                    "账号注销中止审计写入失败 id={} userId={}，请用对账 SQL 补齐",
+                    record.getId(),
+                    record.getUserId(),
+                    e);
+        }
+
+        log.error(
+                "账号注销因资产未结清中止 id={} userId={} reasonCode={} preStatus={}",
+                record.getId(),
+                record.getUserId(),
+                error,
+                preStatus);
     }
 
     /** 只保留异常类型与消息，不记录可能含健康内容的堆栈细节。 */

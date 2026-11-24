@@ -21,6 +21,19 @@
     <select id="lockOrder" resultType="com.threadfit.glucopilot.payment.entity.SandboxRecharge" useCache="false" flushCache="true">
         SELECT * FROM wallet_recharge_order WHERE order_no=#{orderNo} FOR UPDATE
     </select>
+    <select id="balanceCents" resultType="long">
+        SELECT balance_cents FROM wallet_sandbox_account WHERE user_id=#{userId}
+    </select>
+    <select id="incomeAvailableCents" resultType="long">
+        SELECT income_available_cents FROM wallet_sandbox_account WHERE user_id=#{userId}
+    </select>
+    <select id="countInFlightRecharges" resultType="long">
+        SELECT COUNT(*) FROM wallet_recharge_order
+        WHERE user_id=#{userId} AND status='PENDING' AND expires_at &gt; CURRENT_TIMESTAMP(3)
+    </select>
+    <select id="accountStatus" resultType="int">
+        SELECT account_status FROM user_account WHERE id=#{userId} AND is_deleted=0
+    </select>
     <insert id="insert">
         INSERT INTO wallet_recharge_order(
             order_no, user_id, amount_cents, client_request_id,

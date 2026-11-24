@@ -126,7 +126,7 @@ public final class CancellationDtos {
         private Long isolateUntil;
     }
 
-    /** 预检单项：账号状态、资产、进行中申请、恢复后间隔。 */
+    /** 预检单项：账号状态、资产、进行中申请、恢复后间隔、进行中接诊。 */
     @Data
     @Builder
     public static class PrecheckCheck {
@@ -134,6 +134,8 @@ public final class CancellationDtos {
         private Boolean passed;
         private String title;
         private String detail;
+        /** 未通过时的细分原因码（可空），供前端按原因弹窗/跳转。 */
+        private String reasonCode;
     }
 
     /** 提交前预检结果：canCancel=false 时前端按 blockCode 阻断并提示。 */
@@ -144,6 +146,8 @@ public final class CancellationDtos {
         /** 阻断码：CANCELLING/ACCOUNT_CANCELLED/ALREADY_APPLIED/ACCOUNT_DISABLED/RECENTLY_RECOVERED/ASSET_PENDING。 */
         private String blockCode;
         private String blockMessage;
+        /** ASSET_PENDING 时的细分原因码（可空）：BALANCE/INCOME_PENDING/WITHDRAWAL_IN_FLIGHT/RECHARGE_IN_FLIGHT/CONSULTATION_IN_FLIGHT。 */
+        private String blockReasonCode;
         /** 已有进行中申请时的注销生效时间（epoch 毫秒），无则为 null。 */
         @JsonSerialize(using = ToStringSerializer.class)
         private Long isolateUntil;

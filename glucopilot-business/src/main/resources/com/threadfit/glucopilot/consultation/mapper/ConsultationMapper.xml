@@ -148,4 +148,14 @@
         INSERT INTO consultation_wallet_entry(order_no,user_id,amount_cents,balance_after_cents)
         VALUES(#{no},#{user},#{amount},#{balance})
     </insert>
+    <!-- 医生注销预检：作为医生仍进行中（IN_PROGRESS/REPORT_READY）且未支付的问诊单数量。
+         REPORT_READY 需有报告，再判断该报告是否已有 PAID 订单；IN_PROGRESS 尚无报告，必然未支付。 -->
+    <select id="countInFlight" resultType="long">
+        SELECT COUNT(*) FROM consultation_request c
+        WHERE c.doctor_user_id=#{doctor} AND c.status IN ('IN_PROGRESS','REPORT_READY')
+          AND NOT EXISTS (
+            SELECT 1 FROM consultation_report r
+            JOIN consultation_order o ON o.report_id=r.id
+            WHERE r.consultation_id=c.id AND o.status='PAID')
+    </select>
 </mapper>

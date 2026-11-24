@@ -10,6 +10,8 @@ import com.threadfit.glucopilot.wallet.dto.WalletDtos;
 
 import lombok.RequiredArgsConstructor;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +24,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class SandboxRechargeService {
+    private static final Logger log = LoggerFactory.getLogger(SandboxRechargeService.class);
+
     private final SandboxPaymentMapper mapper;
     private final AlipaySandboxProperties properties;
 
@@ -36,7 +40,12 @@ public class SandboxRechargeService {
         requireReady();
         if (!"QR".equals(request.paymentMode()) && !"PAGE".equals(request.paymentMode()))
             throw new BizException(ErrorCode.BAD_REQUEST, "付款方式不正确");
-        // 【1. 账号锁】确认本人已开通钱包，并串行处理同一用户并发创建订单的请求。
+        // 【1. 账号锁】注销中/已注销账号直接拒绝，替代误导性的"请先开通钱包"；
+        //              同时确认本人已开通钱包，并串行处理同一用户并发创建订单的请求。
+        Integer accountStatus = mapper.accountStatus(userId);
+        if (accountStatus != null
+                && (accountStatus == 2 || accountStatus == 3 || accountStatus == 4))
+            throw new BizException(ErrorCode.BAD_REQUEST, "账号注销中或已注销，无法充值");
         if (mapper.lockActivatedUser(userId) == null)
             throw new BizException(ErrorCode.BAD_REQUEST, "请先开通钱包");
         // 【2. 幂等创建】同一用户+请求编号对应同一订单；重试不得改变金额或付款方式。
@@ -84,6 +93,12 @@ public class SandboxRechargeService {
         var order = mapper.lockOrder(proof.orderNo());
         if (order == null) throw new BizException(ErrorCode.NOT_FOUND);
         checkMerchant(order);
+        // 【1.5 墓碑拦截】账号已注销（status=3）直接拒绝入账，且不 ensureAccount 新建钱包行。
+        Integer accountStatus = mapper.accountStatus(order.getUserId());
+        if (accountStatus != null && accountStatus == 3) {
+            log.warn("已注销账号充值回调被拒绝 orderNo={} userId={}", order.getOrderNo(), order.getUserId());
+            throw new BizException(ErrorCode.CONFLICT, "账号已注销，拒绝入账");
+        }
         // 【2. 对账】应用、商家、金额和交易号必须匹配；金额使用BigDecimal精确比较。
         if (!Objects.equals(order.getSandboxAppId(), proof.appId())
                 || !Objects.equals(order.getSandboxSellerId(), proof.sellerId())

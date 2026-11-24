@@ -29,4 +29,10 @@ public interface WalletOrderMapper {
             @Param("userId") long userId,
             @Param("recharge") boolean recharge,
             @Param("orderNo") String orderNo);
+
+    /** 注销清理：关闭所有 PENDING 充值单（幂等，阻止墓碑后回调入账）。 */
+    int closePendingRecharges(@Param("userId") long userId);
+
+    /** 注销清理：钱包沙箱余额三字段清零并 version+1（防御性兜底）。 */
+    int clearWalletAccount(@Param("userId") long userId);
 }

@@ -49,6 +49,19 @@ public class WalletOrderService {
         return summary(userId);
     }
 
+    /**
+     * 注销终态处理：关闭 PENDING 充值单 + 清零钱包沙箱余额。
+     *
+     * <p>由 {@code AccountDataPurger} 在墓碑前调用。余额理论值此时已为 0（提交前阻断未结清资产），
+     * 此处是防御性兜底；流水、提现单、充值/问诊订单与 {@code consultation_wallet_entry} 按财务审计
+     * 需要保留，仅以 user_id 关联墓碑。幂等：重复调用只让已是 0 行的更新再返回 0。
+     */
+    @Transactional
+    public void purgeAccountData(long userId) {
+        mapper.closePendingRecharges(userId);
+        mapper.clearWalletAccount(userId);
+    }
+
     @Transactional(readOnly = true)
     public PageResult<WalletDtos.Order> list(
             long userId, boolean recharge, WalletDtos.OrderQuery query) {

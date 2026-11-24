@@ -123,7 +123,20 @@ public final class MealVos {
         private String summary;
         /** 判定所用规则版本 */
         private String ruleVersion;
+        /** 重点关注项列表（单项 HIGH 的标记，只标注元凶不改整餐档位） */
+        private List<AnalysisFocusItem> focusItems;
         private List<AnalysisItem> items;
+    }
+
+    /** 分析快照中的重点关注项。 */
+    @Data
+    @Builder
+    public static class AnalysisFocusItem {
+        private String foodName;
+        /** INTRINSIC=本身偏高|PORTION=份量偏大 */
+        private String reason;
+        /** 展示文案（{foodName} 已替换） */
+        private String text;
     }
 
     /** 分析快照中的单项结论。 */

@@ -56,6 +56,8 @@ public class MealRecord extends BaseEntity {
     private String analysisTier;
     /** 整餐摘要（通用文案），可空 */
     private String analysisSummary;
+    /** 重点关注项快照（JSON 数组：foodName/reason/text），无 HIGH 项为 NULL（V94） */
+    private String analysisFocus;
     /** 判定所用规则版本，历史可追溯，可空 */
     private String analysisRuleVersion;
     /** 分析生成时间，可空 */

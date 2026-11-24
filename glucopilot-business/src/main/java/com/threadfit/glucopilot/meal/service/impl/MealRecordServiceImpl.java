@@ -40,6 +40,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -707,8 +711,24 @@ public class MealRecordServiceImpl implements MealRecordService {
                 .tierLabel(MealAnalysisTexts.labelOf(r.getAnalysisTier()))
                 .summary(r.getAnalysisSummary())
                 .ruleVersion(r.getAnalysisRuleVersion())
+                .focusItems(parseFocusItems(r.getAnalysisFocus()))
                 .items(analysisItems)
                 .build();
+    }
+
+    /** analysis_focus JSON（V94）→ 重点关注项列表；解析失败按无重点关注处理，不阻断历史查询。 */
+    private static List<MealVos.AnalysisFocusItem> parseFocusItems(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return new ObjectMapper()
+                    .readValue(json, new TypeReference<List<MealVos.AnalysisFocusItem>>() {
+                    });
+        } catch (JacksonException e) {
+            log.warn("analysis_focus 解析失败，按无重点关注处理: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     /** analysis_status 数值 → 契约字符串；null 表示历史记录未分析。 */

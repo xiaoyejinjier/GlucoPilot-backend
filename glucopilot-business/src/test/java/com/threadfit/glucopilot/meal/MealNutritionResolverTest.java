@@ -4,6 +4,7 @@ import com.threadfit.glucopilot.ai.business.meal.service.MealFoodCatalogService;
 import com.threadfit.glucopilot.food.entity.FoodNutrition;
 import com.threadfit.glucopilot.food.mapper.FoodNutritionMapper;
 import com.threadfit.glucopilot.meal.service.MealNutritionResolver;
+import com.threadfit.glucopilot.meal.suitability.dto.MealSuitabilityDtos;
 import com.threadfit.glucopilot.meal.suitability.dto.MealSuitabilityDtos.ItemInput;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -146,6 +147,83 @@ class MealNutritionResolverTest {
         when(foods.selectList(any())).thenReturn(List.of(row(1L, "米饭", 1, 1, "MANUAL", "83.2")));
         resolver.resolve(List.of(item("米饭", 1L, 1, null, null, null)), false);
         verifyNoWrites();
+    }
+
+    // ===== V94：per100gGL 判定输入回填 =====
+
+    @Test void per100gGlComputedFromLibraryCarbsAndGi() {
+        // 库命中：GI 83.2 × 每100g碳水 25.9 / 100 = 21.55（HALF_UP 两位）
+        when(foods.selectList(any())).thenReturn(List.of(row(1L, "米饭", 1, 1, "MANUAL", "83.2")));
+        var resolved = resolver.resolve(List.of(item("米饭", 1L, null, null, null, null)), true).get(0);
+        assertEquals(new BigDecimal("21.55"), resolved.getPer100gGl());
+        assertEquals(new BigDecimal("25.9"), resolved.getCarbsPer100g());
+        assertEquals(MealSuitabilityDtos.GI_SOURCE_LIBRARY, resolved.getGiSource());
+        assertNull(resolved.getGiReliability());
+        assertNull(resolved.getMissingFields());
+    }
+
+    @Test void clientGiMarksSourceAndReliability() {
+        // 客户端 GI=50 与库 GI=83.2 差异 >20 → giSource=CLIENT 且 giReliability=LOW
+        when(foods.selectList(any())).thenReturn(List.of(row(1L, "米饭", 1, 1, "MANUAL", "83.2")));
+        var resolved = resolver.resolve(
+                List.of(item("米饭", null, null, new BigDecimal("50"), null, null)), true).get(0);
+        assertEquals(MealSuitabilityDtos.GI_SOURCE_CLIENT, resolved.getGiSource());
+        assertEquals(MealSuitabilityDtos.GI_RELIABILITY_LOW, resolved.getGiReliability());
+        // per100gGL 用客户端 GI 计算：50 × 25.9 / 100 = 12.95
+        assertEquals(new BigDecimal("12.95"), resolved.getPer100gGl());
+    }
+
+    @Test void clientGiWithinDivergenceLimitKeepsHighReliability() {
+        when(foods.selectList(any())).thenReturn(List.of(row(1L, "米饭", 1, 1, "MANUAL", "83.2")));
+        var resolved = resolver.resolve(
+                List.of(item("米饭", null, null, new BigDecimal("75"), null, null)), true).get(0);
+        assertEquals(MealSuitabilityDtos.GI_SOURCE_CLIENT, resolved.getGiSource());
+        assertNull(resolved.getGiReliability());
+    }
+
+    @Test void unresolvedItemHasNoPer100gGlAndMarksMissing() {
+        // UNRESOLVED：per100gGL 置空并标记缺失，不做 carbsG/weightG 比值兜底
+        when(foods.selectList(any())).thenReturn(List.of());
+        var source = item("自定义菜", null, null, null, null, null);
+        source.setCarbsG(new BigDecimal("50"));
+        source.setWeightG(new BigDecimal("200"));
+        var resolved = resolver.resolve(List.of(source), true).get(0);
+        assertNull(resolved.getPer100gGl());
+        assertNull(resolved.getCarbsPer100g());
+        assertEquals(List.of("食品库未匹配", "GI", "每100g碳水"), resolved.getMissingFields());
+    }
+
+    @Test void missingCarbsPer100gMarksOnlyThatField() {
+        // 库命中但缺每100g碳水（GI 由客户端保留）：只标记碳水密度缺失
+        FoodNutrition noCarbs = row(2L, "汤", 1, 1, "MANUAL", null);
+        noCarbs.setCarbsPer100g(null);
+        when(foods.selectList(any())).thenReturn(List.of(noCarbs));
+        var resolved = resolver.resolve(
+                List.of(item("汤", null, null, new BigDecimal("45"), null, null)), true).get(0);
+        assertNull(resolved.getPer100gGl());
+        assertEquals(List.of("每100g碳水"), resolved.getMissingFields());
+        assertEquals(MealSuitabilityDtos.GI_SOURCE_CLIENT, resolved.getGiSource());
+    }
+
+    @Test void saveModeUserCorrectedKeepsClientGi() {
+        // save 模式：userCorrected=1 的行按客户端值优先，人工修正不被库值顶掉
+        when(foods.selectList(any())).thenReturn(List.of(row(1L, "米饭", 1, 1, "MANUAL", "83.2")));
+        var source = item("米饭", null, 4, new BigDecimal("50"), "MANUAL", 95);
+        source.setUserCorrected(Boolean.TRUE);
+        var resolved = resolver.resolve(List.of(source), false).get(0);
+        assertEquals(new BigDecimal("50"), resolved.getGiValue());
+        assertEquals(MealSuitabilityDtos.GI_SOURCE_CLIENT, resolved.getGiSource());
+        assertEquals(MealSuitabilityDtos.GI_RELIABILITY_LOW, resolved.getGiReliability());
+        // 碳水密度仍取库值：per100gGL = 50 × 25.9 / 100
+        assertEquals(new BigDecimal("12.95"), resolved.getPer100gGl());
+    }
+
+    @Test void saveModeNonCorrectedUsesLibraryGi() {
+        when(foods.selectList(any())).thenReturn(List.of(row(1L, "米饭", 1, 1, "MANUAL", "83.2")));
+        var resolved = resolver.resolve(
+                List.of(item("米饭", null, 4, new BigDecimal("50"), "AI_ESTIMATE", 95)), false).get(0);
+        assertEquals(MealSuitabilityDtos.GI_SOURCE_LIBRARY, resolved.getGiSource());
+        assertEquals(new BigDecimal("21.55"), resolved.getPer100gGl());
     }
 
     private void verifyNoWrites() {

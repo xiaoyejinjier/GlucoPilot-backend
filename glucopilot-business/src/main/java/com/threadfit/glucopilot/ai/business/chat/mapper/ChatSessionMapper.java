@@ -21,6 +21,42 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
      */
     String UK_USER_ACTIVE = "uk_user_active";
 
+    /**
+     * 数据库时钟。
+     *
+     * <p>「多久算旧」的阈值必须与写入端同一个时钟：库里的 {@code gmt_modified} 由
+     * {@code CURRENT_TIMESTAMP} 写入（数据库会话时区），而 JVM 的 {@code LocalDateTime.now()}
+     * 是进程时区，容器里两者常差 8 小时——拿进程时间当阈值会让宽限期形同虚设。
+     */
+    @Select("SELECT CURRENT_TIMESTAMP")
+    LocalDateTime selectDbNow();
+
+    /**
+     * 这个会话是否还欠一次记忆抽取。
+     *
+     * <p>三个条件缺一不可：会话已结束（抽取是"终局复盘"）、没被删除、以及
+     * {@code memory_extracted_upto_msg_id} 落后于该会话最后一条消息。
+     * 少了最后一个条件，重复投递的消息会把同一段对话反复送模型（虽然写库是幂等的，
+     * 但每次都是一次真实计费）。
+     */
+    @Select("SELECT COUNT(*) FROM chat_session s WHERE s.id = #{sessionId} AND s.is_deleted = 0 "
+            + "AND s.session_status = 2 AND COALESCE(s.memory_extracted_upto_msg_id, 0) < "
+            + "(SELECT COALESCE(MAX(m.id), 0) FROM chat_message m WHERE m.session_id = s.id AND m.is_deleted = 0)")
+    int countSessionNeedingMemory(@Param("sessionId") Long sessionId);
+
+    /**
+     * 补扫用：列出「已结束但记忆还没抽到位」的会话（按 id 升序）。
+     *
+     * <p>{@code before} 是宽限上限：刚刚结束的会话留给正常派发链路，补扫只捞那些
+     * "派发消息丢了"的漏网之鱼，避免与消费者抢同一批任务。
+     */
+    @Select("SELECT s.id AS sessionId, s.user_id AS userId FROM chat_session s WHERE s.is_deleted = 0 "
+            + "AND s.session_status = 2 AND s.last_msg_at IS NOT NULL AND s.gmt_modified < #{before} "
+            + "AND COALESCE(s.memory_extracted_upto_msg_id, 0) < "
+            + "(SELECT COALESCE(MAX(m.id), 0) FROM chat_message m WHERE m.session_id = s.id AND m.is_deleted = 0) "
+            + "ORDER BY s.id ASC LIMIT #{limit}")
+    java.util.List<java.util.Map<String, Object>> selectSessionsNeedingMemory(
+            @Param("before") LocalDateTime before, @Param("limit") int limit);
     /** 取用户当前「进行中」会话；无则返回 null，由 Service 新建。 */
     @Select("SELECT * FROM chat_session WHERE user_id = #{userId} AND session_status = 1 AND is_deleted = 0 "
             + "ORDER BY COALESCE(last_msg_at, gmt_create) DESC, id DESC LIMIT 1")

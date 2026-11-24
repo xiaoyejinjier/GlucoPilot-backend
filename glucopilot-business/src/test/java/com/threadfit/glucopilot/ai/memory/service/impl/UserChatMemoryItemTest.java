@@ -55,7 +55,7 @@ class UserChatMemoryItemTest {
         service = new UserChatMemoryServiceImpl(clients, memoryMapper, mock(ChatMessageMapper.class),
                 mock(ChatSessionMapper.class), mock(AiPromptTemplateService.class), mock(SceneModelResolver.class),
                 aiProperties, new JsonUtils(new tools.jackson.databind.json.JsonMapper()), AiConcurrencyTestSupport.policy(),
-                Runnable::run);
+                Runnable::run, org.mockito.Mockito.mock(com.threadfit.glucopilot.ai.memory.mq.MemoryExtractJobs.class));
     }
 
     @Test

@@ -312,7 +312,17 @@ $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::AS
   - 轮询降级为兜底：`glucopilot.mq.jobs.event-driven=true` 时 `CommunityModerationWorker` 只做僵尸回收（`reclaimStale`）。
   - 验收实测：发一条「降糖贴三天见效，想买私信我」的评论 → **12 秒内**落 `ai_status=DONE`、
     `ai_verdict=REJECT`、`ai_category=medical_claim`、`ai_severity=3`、`is_hidden=1`。
-- 批次 2~3 依次接入记忆抽取、OCR（每个处理器实现 `JobHandler` + 一个 `JobReconcileSource`，
+- **批次 2（已完成）**：长期记忆抽取接入。
+  - 派发：`MemoryExtractJobs.publish(userId, sessionId, reason)`——**返回 boolean**，
+    队列关闭或这一刻发不出去时调用方退回本地线程池（记忆是增强项，宁可少一次异步也不能丢）。
+    调用点仍是 `UserChatMemoryService.extractAsync`（会话结束 / 惰性归档 / 关键词兜底三条路径共用）。
+  - 消费：`MemoryExtractListener`（`concurrency = 2`）→ `MemoryExtractJobHandler`：
+    认领时回库查 `countSessionNeedingMemory`（已结束 + 未删 + `memory_extracted_upto_msg_id`
+    落后于最后一条消息），重复投递在这一步就返回 false，不会再调模型；
+    执行走 `UserChatMemoryService.extractNow`（单飞标记 + 窗口抽取，与异步路径同一份实现）。
+  - 兜底：`MemoryExtractReconcileSource`（宽限 1 分钟、按数据库时钟）。
+  - 漏做的代价与审核不同：审核漏了只是晚几秒，**记忆漏了是永久丢失**（用户下次聊天那些忌口就不在），所以补扫在这里不是可选项。
+- 批次 3 接入 OCR（处理器实现 `JobHandler` + 一个 `JobReconcileSource`，
   并加 `@RabbitListener(queues = ..., containerFactory = "jobContainerFactory", concurrency = ...)`）。
 - 批次 4 是翻译的补丁（拒绝时回 PENDING + 扫过期租约），不换 MQ。
 

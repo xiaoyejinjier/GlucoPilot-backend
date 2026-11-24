@@ -435,7 +435,7 @@ class AdminChatMemoryServiceTest {
             sql.execute("CREATE TABLE chat_user_memory ("
                     + "id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, "
                     + "memory_key VARCHAR(64) NOT NULL, memory_text VARCHAR(512) NOT NULL, " + "item_hash VARCHAR(64) NULL, "
-                    + "source_session_id BIGINT NULL, confidence TINYINT NOT NULL DEFAULT 100, "
+                    + "source_session_id BIGINT NULL, write_source VARCHAR(16) NULL, " + "confidence TINYINT NOT NULL DEFAULT 100, "
                     + "created_by BIGINT NOT NULL DEFAULT 0, "
                     + "gmt_create TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), "
                     + "updated_by BIGINT NOT NULL DEFAULT 0, "

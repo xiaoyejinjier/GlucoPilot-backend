@@ -205,7 +205,8 @@ class ChatMemoryReadAdvisorTest {
         when(contextReader.summaryState(SESSION_ID)).thenReturn(summary("用户早餐前血糖 6.8", 6L));
         when(contextReader.recentToolDigests(SESSION_ID)).thenReturn(List.of("query_glucose_range → 6.8"));
         when(contextReader.longTermMemory(any())).thenReturn(
-                List.of(new UserChatMemoryService.MemoryItem("diet_taboo", "对花生过敏", 95)));
+                List.of(new UserChatMemoryService.MemoryItem("diet_taboo",
+                        List.of(new UserChatMemoryService.MemoryItem.Entry("对花生过敏", 95)))));
         AtomicReference<List<ChatContextShard>> slot = new AtomicReference<>(List.of());
         ChatClientRequest request = new ChatClientRequest(
                 new Prompt(List.of(new UserMessage("那我晚饭呢"))),

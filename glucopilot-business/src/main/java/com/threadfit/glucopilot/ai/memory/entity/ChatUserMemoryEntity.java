@@ -48,6 +48,16 @@ public class ChatUserMemoryEntity extends BaseEntity {
     /** 来源会话 ID，可空（用户自助添加的记忆没有来源会话）。 */
     private Long sourceSessionId;
 
+    /**
+     * 写入来源（V93）：{@code EXPLICIT}＝用户当轮亲口要求记住，{@code BATCH}＝会话结束/归档时模型抽取。
+     *
+     * <p>为什么这一列必须落库：审计时最关键的一个问题是「这条是用户说的，还是模型猜的」。
+     * 两条路径的可信度差得很远，而 {@code confidence} 只是模型自己给的分数，回答不了这个问题。
+     *
+     * <p>NULL 表示本列上线之前写入的历史行——无法追溯，UI 显示「—」而不是硬猜一个值。
+     */
+    private String writeSource;
+
     /** 置信度 0~100（DDL 有 CHECK）；仅作展示与注入排序用，不作为可信度承诺。 */
     private Integer confidence;
 }

@@ -21,6 +21,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -72,6 +73,29 @@ class UserChatMemoryItemTest {
         assertThat(inserted.get(0).getItemHash()).isNotEqualTo(inserted.get(1).getItemHash());
         assertThat(inserted.get(0).getMemoryText()).isEqualTo("不吃香菜");
         assertThat(inserted.get(1).getMemoryText()).isEqualTo("海鲜过敏");
+        // V93：写入来源必须落库，否则审计分不清「用户说的」与「模型猜的」
+        assertThat(inserted).allSatisfy(row -> assertThat(row.getWriteSource()).isEqualTo("EXPLICIT"));
+    }
+
+    @Test
+    @DisplayName("批量抽取写入时来源记为 BATCH，提升置信度的更新同样落来源")
+    void batchWritesItsSourceOnBothInsertAndUpdate() {
+        when(memoryMapper.selectOne(any())).thenReturn(null);
+        service.write(USER_ID, "habit", "晚饭后散步30分钟", 70, 4L,
+                UserChatMemoryService.WriteSource.BATCH);
+        ArgumentCaptor<ChatUserMemoryEntity> insertCaptor = ArgumentCaptor.forClass(ChatUserMemoryEntity.class);
+        verify(memoryMapper).insert(insertCaptor.capture());
+        assertThat(insertCaptor.getValue().getWriteSource()).isEqualTo("BATCH");
+
+        ChatUserMemoryEntity existing = entity("habit", "晚饭后散步30分钟", 60);
+        when(memoryMapper.selectOne(any())).thenReturn(existing);
+        service.write(USER_ID, "habit", "晚饭后散步30分钟", 90, 5L,
+                UserChatMemoryService.WriteSource.EXPLICIT);
+        ArgumentCaptor<ChatUserMemoryEntity> updateCaptor = ArgumentCaptor.forClass(ChatUserMemoryEntity.class);
+        verify(memoryMapper).updateById(updateCaptor.capture());
+        // 覆盖写要记「现在这条是谁写的」，而不是「最初是谁写的」
+        assertThat(updateCaptor.getValue().getWriteSource()).isEqualTo("EXPLICIT");
+        assertThat(updateCaptor.getValue().getConfidence()).isEqualTo(90);
     }
 
     @Test
@@ -117,23 +141,43 @@ class UserChatMemoryItemTest {
     }
 
     @Test
-    @DisplayName("注入时同类多条合并成一行，避免多条目挤掉历史消息的预算")
-    void injectionMergesItemsOfSameKeyIntoOneLine() {
-        when(memoryMapper.selectActiveByUser(USER_ID, aiProperties.getMemory().getInjectMaxItems()
-                * UserChatMemoryServiceImpl.MAX_ITEMS_PER_KEY_INJECTED))
+    @DisplayName("注入时每类内逐条保留置信度、低置信度条目被过滤、类顺序固定")
+    void injectionKeepsPerItemConfidenceAndFixedKeyOrder() {
+        when(memoryMapper.selectTopPerKey(USER_ID, aiProperties.getMemory().getInjectMaxItemsPerKey()))
                 .thenReturn(List.of(
-                        entity("diet_taboo", "不吃香菜", 95),
-                        entity("diet_taboo", "不吃辣", 90),
-                        entity("diet_taboo", "海鲜过敏", 85),
-                        entity("diet_taboo", "第四条同类不该出现", 80),
+                        // 库里按置信度降序返回：同类多条都留着（不再拼成一行）
+                        entity("diet_taboo", "海鲜过敏", 95),
+                        entity("preference", "喜欢早上测血糖", 88),
+                        entity("diet_taboo", "不吃香菜", 90),
+                        // 低置信度的推断不该注入：模型会把每一条都当作"用户说过的话"复述
+                        entity("glucose_goal", "目标似乎是 7 以下", 40),
                         entity("habit", "晚饭后散步30分钟", 70)));
 
         List<UserChatMemoryService.MemoryItem> items = service.forInjection(USER_ID);
 
-        assertThat(items).hasSize(2);
-        assertThat(items.get(0).key()).isEqualTo("diet_taboo");
-        assertThat(items.get(0).text()).isEqualTo("不吃香菜、不吃辣、海鲜过敏");
-        assertThat(items.get(1).key()).isEqualTo("habit");
+        // 类顺序跟 ALLOWED_KEY_ORDER（忌口 → 目标 → 状况 → 习惯 → 偏好），不是 DB 返回顺序；
+        // glucose_goal 因为唯一一条低于 60 被整类过滤
+        assertThat(items).extracting(UserChatMemoryService.MemoryItem::key)
+                .containsExactly("diet_taboo", "habit", "preference");
+        assertThat(items.get(0).entries()).extracting(UserChatMemoryService.MemoryItem.Entry::text)
+                .containsExactly("海鲜过敏", "不吃香菜");
+        assertThat(items.get(0).entries()).extracting(UserChatMemoryService.MemoryItem.Entry::confidence)
+                .containsExactly(95, 90);
+        assertThat(items.get(0).count()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("注入时每类条数受 inject-max-items-per-key 约束")
+    void injectionRespectsPerKeyLimit() {
+        when(memoryMapper.selectTopPerKey(USER_ID, aiProperties.getMemory().getInjectMaxItemsPerKey()))
+                .thenReturn(List.of(entity("diet_taboo", "不吃香菜", 95)));
+
+        List<UserChatMemoryService.MemoryItem> items = service.forInjection(USER_ID);
+
+        assertThat(items).hasSize(1);
+        assertThat(items.get(0).count()).isEqualTo(1);
+        // 限量交给 SQL 的 ROW_NUMBER 窗口，不该在内存里再截一次（截断会让"另有 N 条"失真）
+        verify(memoryMapper, never()).selectActiveByUser(any(), anyInt());
     }
 
     private static ChatUserMemoryEntity entity(String key, String text, int confidence) {

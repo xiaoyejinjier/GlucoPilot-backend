@@ -19,6 +19,7 @@ import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
 import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserCancelLogMapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -35,6 +36,7 @@ class AccountCancellationRecoveryTest {
 
     @Mock private UserAccountCancellationMapper cancellationMapper;
     @Mock private UserAccountMapper userAccountMapper;
+    @Mock private UserCancelLogMapper userCancelLogMapper;
 
     @InjectMocks private AccountCancellationRecovery recovery;
 

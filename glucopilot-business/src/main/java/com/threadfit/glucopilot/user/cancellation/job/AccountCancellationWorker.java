@@ -6,8 +6,10 @@ import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationStatus;
 import com.threadfit.glucopilot.user.cancellation.service.AccountDataPurger;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
+import com.threadfit.glucopilot.user.entity.UserCancelLogEntity;
 import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserCancelLogMapper;
 
 import lombok.RequiredArgsConstructor;
 
@@ -69,6 +71,7 @@ public class AccountCancellationWorker {
 
     private final UserAccountCancellationMapper cancellationMapper;
     private final UserAccountMapper userAccountMapper;
+    private final UserCancelLogMapper userCancelLogMapper;
     private final AccountDataPurger purger;
 
     /** 安全边际：worker 在恢复期结束后再多等一段时间，保证没有在途的恢复请求。 */
@@ -141,6 +144,9 @@ public class AccountCancellationWorker {
         try {
             purger.purge(record.getUserId());
             cancellationMapper.markExecuted(id, LocalDateTime.now());
+            // 审计尽力而为：purge 本身故意没有大事务，此时因审计失败回退凭据会触发整轮重试，
+            // 风险大于收益；失败只 WARN + 依赖对账 SQL 告警，唯一键防重。
+            recordPurgeLog(record, status);
             log.info("账号注销执行完成 id={} userId={}", id, record.getUserId());
         } catch (RuntimeException e) {
             // 注意：这里不重抛。定时任务里抛出去只会被 Spring 的调度器吞掉并打断后续条目，
@@ -157,6 +163,33 @@ public class AccountCancellationWorker {
                     record.getUserId(),
                     failures,
                     nextStatus,
+                    e);
+        }
+    }
+
+    /**
+     * 清理成功后的 SYSTEM_PURGE 审计；失败不抛出。
+     *
+     * <p>不放在上面的 try 里，避免审计异常被当成"清理失败"去累加 fail_count——
+     * 数据已经删完了，重跑 purge 不会让结果更好。
+     */
+    private void recordPurgeLog(UserAccountCancellation record, int fromStatus) {
+        try {
+            userCancelLogMapper.insertIgnore(
+                    UserCancelLogEntity.builder()
+                            .userId(record.getUserId())
+                            .cancellationId(record.getId())
+                            .actionType(UserCancelLogEntity.ACTION_SYSTEM_PURGE)
+                            .fromStatus(fromStatus)
+                            .toStatus(AccountStatus.CANCELLED.getCode())
+                            .operatorType(UserCancelLogEntity.OPERATOR_SYSTEM)
+                            .operatorId(0L)
+                            .build());
+        } catch (RuntimeException e) {
+            log.warn(
+                    "账号注销审计写入失败 id={} userId={}，请用对账 SQL 补齐",
+                    record.getId(),
+                    record.getUserId(),
                     e);
         }
     }

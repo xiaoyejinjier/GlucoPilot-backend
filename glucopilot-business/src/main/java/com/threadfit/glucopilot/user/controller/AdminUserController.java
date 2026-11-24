@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -42,6 +43,19 @@ public class AdminUserController {
     public ApiResponse<AdminUserDtos.UpdatedResult> updateStatus(
             @PathVariable Long id, @Valid @RequestBody AdminUserDtos.StatusRequest request) {
         return ApiResponse.ok(adminUserService.updateStatus(id, request.getAccountStatus()));
+    }
+
+    /**
+     * 管理员取消注销（仅恢复，不含强制注销/清理）。
+     *
+     * <p>独立权限点 {@code user:cancel:recover}：能看用户不等于能改注销状态；
+     * 彻底清理只能由系统 Worker 按窗口执行，管理端不提供任何绕过入口。
+     */
+    @PostMapping("/{id}/cancellation/recover")
+    @PreAuthorize("@ss.hasPermi('" + PermCodes.USER_CANCEL_RECOVER + "')")
+    public ApiResponse<AdminUserDtos.RecoverResult> recoverCancellation(
+            @PathVariable Long id, @Valid @RequestBody AdminUserDtos.RecoverRequest request) {
+        return ApiResponse.ok(adminUserService.recoverCancellation(id, request.getRemark()));
     }
 
     @GetMapping("/{id}")

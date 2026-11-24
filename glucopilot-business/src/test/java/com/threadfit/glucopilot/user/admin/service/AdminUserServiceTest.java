@@ -15,6 +15,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
+import com.threadfit.glucopilot.common.audit.OpsAuditRecorder;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.glucose.entity.GlucoseNode;
 import com.threadfit.glucopilot.glucose.entity.GlucoseRecord;
@@ -27,7 +28,10 @@ import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserProfile;
+import com.threadfit.glucopilot.user.cancellation.service.AccountCancellationRecovery;
+import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserCancelLogMapper;
 import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
 
 import org.junit.jupiter.api.Test;
@@ -53,6 +57,10 @@ class AdminUserServiceTest {
     @Mock private GlucoseRecordMapper glucoseRecordMapper;
     @Mock private MealRecordService mealRecordService;
     @Mock private GlucosePeriodService glucosePeriodService;
+    @Mock private UserAccountCancellationMapper cancellationMapper;
+    @Mock private UserCancelLogMapper userCancelLogMapper;
+    @Mock private AccountCancellationRecovery cancellationRecovery;
+    @Mock private OpsAuditRecorder opsAuditRecorder;
 
     /** 冻结口径：趋势近 7 日 → 起止相差 6 天；饮食汇总近 30 日 → 相差 29 天。 */
     private static final long TREND_SPAN_DAYS = 6;

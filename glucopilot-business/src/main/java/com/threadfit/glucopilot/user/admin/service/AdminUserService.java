@@ -6,6 +6,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.threadfit.glucopilot.common.api.ErrorCode;
 import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
+import com.threadfit.glucopilot.common.audit.OpsAuditRecorder;
+import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
@@ -18,20 +20,29 @@ import com.threadfit.glucopilot.meal.service.MealRecordService;
 import com.threadfit.glucopilot.meal.vo.MealVos;
 import com.threadfit.glucopilot.profile.health.entity.UserHealth;
 import com.threadfit.glucopilot.profile.health.mapper.UserHealthMapper;
+import com.threadfit.glucopilot.user.cancellation.service.AccountCancellationRecovery;
 import com.threadfit.glucopilot.user.dto.AdminUserDtos;
 import com.threadfit.glucopilot.user.entity.UserAccount;
+import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
+import com.threadfit.glucopilot.user.entity.UserCancelLogEntity;
 import com.threadfit.glucopilot.user.entity.UserProfile;
+import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserCancelLogMapper;
 import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
 
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -60,6 +71,14 @@ public class AdminUserService {
     private final GlucoseRecordMapper glucoseRecordMapper;
     private final MealRecordService mealRecordService;
     private final GlucosePeriodService glucosePeriodService;
+    private final UserAccountCancellationMapper cancellationMapper;
+    private final UserCancelLogMapper userCancelLogMapper;
+    private final AccountCancellationRecovery cancellationRecovery;
+    private final OpsAuditRecorder opsAuditRecorder;
+
+    /** 与 Worker 同一配置项：恢复期结束后再留一段安全边际才允许清理。 */
+    @Value("${account.cancellation.safety-margin:5m}")
+    private Duration safetyMargin = Duration.ofMinutes(5);
 
     public PageResult<AdminUserDtos.UserItem> page(
             String keyword, Integer accountStatus, PageQuery query) {
@@ -130,6 +149,9 @@ public class AdminUserService {
                         .stream()
                         .collect(Collectors.groupingBy(GlucoseRecord::getUserId));
         Map<Long, Long> mealCounts = mealRecordService.countActiveByUserIds(userIds);
+        // 注销字段：本页一次 IN 查询取活跃凭据，避免逐行查询（idx_uac_user_status 已覆盖）
+        Map<Long, UserAccountCancellation> cancellations = loadActiveCancellations(userIds);
+        LocalDateTime now = LocalDateTime.now();
 
         List<AdminUserDtos.UserItem> items =
                 rows.getRecords().stream()
@@ -141,7 +163,9 @@ public class AdminUserService {
                                                 healthRows.get(account.getId()),
                                                 glucoseRows.getOrDefault(
                                                         account.getId(), Collections.emptyList()),
-                                                mealCounts.getOrDefault(account.getId(), 0L)))
+                                                mealCounts.getOrDefault(account.getId(), 0L),
+                                                cancellations.get(account.getId()),
+                                                now))
                         .toList();
         return PageResult.of(rows.getCurrent(), rows.getSize(), rows.getTotal(), items);
     }
@@ -170,6 +194,82 @@ public class AdminUserService {
         return AdminUserDtos.UpdatedResult.builder().updated(true).build();
     }
 
+    /**
+     * 管理端取消注销：把注销中(4)恢复为凭据表的 pre_status。
+     *
+     * <p>并发口径与登录恢复完全一致：先账号 CAS（WHERE account_status = 4）再凭据 CAS
+     * （markRecovered WHERE status = 0），加锁顺序与 {@code AuthService} 的
+     * {@code lockAccount → markRecovered} 一致，避免互为反向锁序导致死锁。
+     *
+     * <p>只允许在 {@code now < isolate_until} 内恢复：窗口外 Worker 即将清理，
+     * 此时放行会与安全边际竞争，出现"用户以为恢复了、数据正在被删"的错位。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public AdminUserDtos.RecoverResult recoverCancellation(Long userId, String remark) {
+        UserAccount account = userAccountMapper.selectById(userId);
+        if (account == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "用户不存在");
+        }
+        if (account.getAccountStatus() == null
+                || account.getAccountStatus()
+                        != CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode()) {
+            throw new BizException(ErrorCode.CONFLICT, "该用户当前不在注销中状态，请刷新后重试");
+        }
+
+        UserAccountCancellation active = cancellationRecovery.findActive(userId);
+        if (active == null || active.getIsolateUntil() == null) {
+            throw new BizException(ErrorCode.CONFLICT, "注销凭据缺失或已处理，无法恢复");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        if (!active.getIsolateUntil().isAfter(now)) {
+            throw new BizException(
+                    ErrorCode.CONFLICT, "注销申请已过反悔期，账号等待系统清理，管理端不可恢复");
+        }
+
+        int preStatus =
+                active.getPreStatus() == null
+                        ? CodeEnum.AccountStatus.NORMAL.getCode()
+                        : active.getPreStatus();
+
+        // ① 账号侧乐观锁：命中 0 行说明已被并发登录恢复/Worker/其它管理员改变
+        if (userAccountMapper.casRecoverFromCancellation(userId, preStatus) != 1) {
+            throw new BizException(ErrorCode.CONFLICT, "用户状态已变化，请刷新后重试");
+        }
+        // ② 凭据侧 CAS：与登录恢复共用唯一裁判；失败则整体回滚，不留半状态
+        if (cancellationMapper.markRecovered(active.getId(), now) != 1) {
+            throw new BizException(ErrorCode.CONFLICT, "注销状态已被其他请求改变，请刷新后重试");
+        }
+        // ③ 强审计：与状态变更同事务，写失败则整体回滚（管理动作必须有据可查）
+        Long opsId = RequestContext.getOpsId();
+        userCancelLogMapper.insertIgnore(
+                UserCancelLogEntity.builder()
+                        .userId(userId)
+                        .cancellationId(active.getId())
+                        .actionType(UserCancelLogEntity.ACTION_ADMIN_RECOVER)
+                        .fromStatus(CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode())
+                        .toStatus(preStatus)
+                        .operatorType(UserCancelLogEntity.OPERATOR_ADMIN)
+                        .operatorId(opsId == null ? 0L : opsId)
+                        .remark(trimToNull(remark))
+                        .requestId(RequestContext.getRequestId())
+                        .clientIp(RequestContext.getClientIp())
+                        .build());
+        // ④ 旁路运营审计：OpsAuditRecorder 自身吞异常，不影响业务事务
+        opsAuditRecorder.record(
+                "user",
+                "user_cancel_recover",
+                "取消用户注销",
+                "user",
+                userId,
+                "{\"from\":4,\"to\":" + preStatus + ",\"cancellationId\":" + active.getId() + "}");
+
+        return AdminUserDtos.RecoverResult.builder()
+                .recovered(true)
+                .accountStatus(preStatus)
+                .recoveredAt(now)
+                .build();
+    }
+
     public AdminUserDtos.UserItem detail(Long userId) {
         UserAccount account = userAccountMapper.selectById(userId);
         if (account == null) throw new BizException(ErrorCode.NOT_FOUND, "用户不存在");
@@ -187,7 +287,9 @@ public class AdminUserService {
                 profile,
                 health,
                 records,
-                mealRecordService.countActiveByUserIds(List.of(userId)).getOrDefault(userId, 0L));
+                mealRecordService.countActiveByUserIds(List.of(userId)).getOrDefault(userId, 0L),
+                cancellationRecovery.findActive(userId),
+                LocalDateTime.now());
     }
 
     /**
@@ -335,12 +437,49 @@ public class AdminUserService {
                 : health.getDiabetesTypeText();
     }
 
-    private static AdminUserDtos.UserItem toItem(
+    /** 一次 IN 查询取本页所有活跃凭据；同一用户多条时保留最新一条（与 findActive 口径一致）。 */
+    private Map<Long, UserAccountCancellation> loadActiveCancellations(List<Long> userIds) {
+        if (userIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        // 用字符串列名而非 LambdaQueryWrapper：本服务在单元测试里以纯 Mockito 构造，
+        // lambda 列名需要 MyBatis-Plus 的实体元数据缓存，会抛 "can not find lambda cache"。
+        return cancellationMapper
+                .selectList(
+                        new QueryWrapper<UserAccountCancellation>()
+                                .in("user_id", userIds)
+                                .in(
+                                        "status",
+                                        CodeEnum.CancellationStatus.PENDING.getCode(),
+                                        CodeEnum.CancellationStatus.RUNNING.getCode())
+                                .orderByDesc("id"))
+                .stream()
+                .collect(
+                        Collectors.toMap(
+                                UserAccountCancellation::getUserId,
+                                Function.identity(),
+                                (first, second) -> first));
+    }
+
+    private static Long toMillis(LocalDateTime time) {
+        return time == null ? null : time.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+    }
+
+    private static String trimToNull(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private AdminUserDtos.UserItem toItem(
             UserAccount account,
             UserProfile profile,
             UserHealth health,
             List<GlucoseRecord> records,
-            long mealCount) {
+            long mealCount,
+            UserAccountCancellation cancellation,
+            LocalDateTime now) {
         String nickname = nicknameOf(account, profile);
         String avatarText =
                 profile != null && StringUtils.hasText(profile.getAvatarText())
@@ -359,21 +498,39 @@ public class AdminUserService {
         int complianceRate =
                 validCount == 0 ? 0 : (int) Math.round(targetCount * 100.0 / validCount);
 
-        return AdminUserDtos.UserItem.builder()
-                .id(String.valueOf(account.getId()))
-                .username(account.getUsername())
-                .nickname(nickname)
-                .avatarText(avatarText)
-                .phone(account.getPhone())
-                .phoneMasked(PhoneUtils.mask(account.getPhone()))
-                .age(health == null ? null : health.getAge())
-                .diabetesTypeText(diabetesTypeTextOf(health))
-                .accountStatus(account.getAccountStatus())
-                .registeredAt(account.getGmtCreate())
-                .lastActiveAt(account.getLastLoginAt())
-                .recordCount((long) records.size())
-                .mealCount(mealCount)
-                .complianceRate(complianceRate)
-                .build();
+        AdminUserDtos.UserItem item =
+                AdminUserDtos.UserItem.builder()
+                        .id(String.valueOf(account.getId()))
+                        .username(account.getUsername())
+                        .nickname(nickname)
+                        .avatarText(avatarText)
+                        .phone(account.getPhone())
+                        .phoneMasked(PhoneUtils.mask(account.getPhone()))
+                        .age(health == null ? null : health.getAge())
+                        .diabetesTypeText(diabetesTypeTextOf(health))
+                        .accountStatus(account.getAccountStatus())
+                        .registeredAt(account.getGmtCreate())
+                        .lastActiveAt(account.getLastLoginAt())
+                        .recordCount((long) records.size())
+                        .mealCount(mealCount)
+                        .complianceRate(complianceRate)
+                        .build();
+
+        // 注销字段只在「状态 4 + 活跃凭据」时输出；脏数据下保持 null，前端据此隐藏按钮而不是硬算天数
+        if (account.getAccountStatus() != null
+                && account.getAccountStatus()
+                        == CodeEnum.AccountStatus.CANCELLED_RECOVERABLE.getCode()
+                && cancellation != null
+                && cancellation.getIsolateUntil() != null) {
+            LocalDateTime deadline = cancellation.getIsolateUntil();
+            LocalDateTime purgeEligible = deadline.plus(safetyMargin);
+            item.setCancelApplyTime(cancellation.getRequestedAt());
+            item.setCancelDeadlineAt(toMillis(deadline));
+            item.setCancelPurgeEligibleAt(toMillis(purgeEligible));
+            item.setCancelRecoverable(now.isBefore(deadline));
+            item.setCancelPurgeOverdue(!now.isBefore(purgeEligible));
+            item.setRecoverToStatus(cancellation.getPreStatus());
+        }
+        return item;
     }
 }

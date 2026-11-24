@@ -2,13 +2,16 @@ package com.threadfit.glucopilot.user.cancellation.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.context.RequestContext;
 import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationStatus;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
+import com.threadfit.glucopilot.user.entity.UserCancelLogEntity;
 import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserCancelLogMapper;
 
 import lombok.RequiredArgsConstructor;
 
@@ -37,6 +40,7 @@ public class AccountCancellationRecovery {
 
     private final UserAccountCancellationMapper cancellationMapper;
     private final UserAccountMapper userAccountMapper;
+    private final UserCancelLogMapper userCancelLogMapper;
 
     /** 恢复结果：{@code recovered=false} 表示锁内重读发现已被并发登录恢复（no-op）。 */
     public record RecoverOutcome(UserAccount account, boolean recovered) {
@@ -72,6 +76,19 @@ public class AccountCancellationRecovery {
                 : record.getPreStatus();
         account.setAccountStatus(preStatus);
         userAccountMapper.updateById(account);
+        // 强审计：与恢复同事务；写失败则恢复回滚（登录失败可重试），避免"状态已改、审计缺失"
+        userCancelLogMapper.insertIgnore(
+                UserCancelLogEntity.builder()
+                        .userId(userId)
+                        .cancellationId(record.getId())
+                        .actionType(UserCancelLogEntity.ACTION_USER_RECOVER)
+                        .fromStatus(AccountStatus.CANCELLED_RECOVERABLE.getCode())
+                        .toStatus(preStatus)
+                        .operatorType(UserCancelLogEntity.OPERATOR_USER)
+                        .operatorId(userId)
+                        .requestId(RequestContext.getRequestId())
+                        .clientIp(RequestContext.getClientIp())
+                        .build());
         return new RecoverOutcome(account, true);
     }
 

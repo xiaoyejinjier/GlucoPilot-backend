@@ -28,6 +28,7 @@ import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
 import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserCancelLogMapper;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,6 +47,7 @@ class AccountCancellationServiceTest {
 
     @Mock private UserAccountMapper userAccountMapper;
     @Mock private UserAccountCancellationMapper cancellationMapper;
+    @Mock private UserCancelLogMapper userCancelLogMapper;
     @Mock private AuthService authService;
     @Mock private CaptchaService captchaService;
     @Mock private WalletCheckService walletCheckService;

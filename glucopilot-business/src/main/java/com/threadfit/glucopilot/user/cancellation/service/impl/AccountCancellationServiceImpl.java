@@ -26,8 +26,10 @@ import com.threadfit.glucopilot.user.dto.CancellationDtos.SubmitRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SubmitView;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
+import com.threadfit.glucopilot.user.entity.UserCancelLogEntity;
 import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
+import com.threadfit.glucopilot.user.mapper.UserCancelLogMapper;
 
 import lombok.RequiredArgsConstructor;
 
@@ -66,6 +68,7 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
 
     private final UserAccountMapper userAccountMapper;
     private final UserAccountCancellationMapper cancellationMapper;
+    private final UserCancelLogMapper userCancelLogMapper;
     private final AuthService authService;
     private final CaptchaService captchaService;
     private final WalletCheckService walletCheckService;
@@ -307,6 +310,20 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         int newStatus = AccountStatus.CANCELLED_RECOVERABLE.getCode();
         account.setAccountStatus(newStatus);
         userAccountMapper.updateById(account);
+
+        // 强审计：与凭据插入/账号更新同事务，写失败则整体回滚（注销申请必须可举证）
+        userCancelLogMapper.insertIgnore(
+                UserCancelLogEntity.builder()
+                        .userId(userId)
+                        .cancellationId(record.getId())
+                        .actionType(UserCancelLogEntity.ACTION_APPLY)
+                        .fromStatus(status)
+                        .toStatus(newStatus)
+                        .operatorType(UserCancelLogEntity.OPERATOR_USER)
+                        .operatorId(userId)
+                        .requestId(RequestContext.getRequestId())
+                        .clientIp(RequestContext.getClientIp())
+                        .build());
 
         // 提交成功即失效全部会话（登录态立即失效）
         authService.revokeAllSessions(userId);

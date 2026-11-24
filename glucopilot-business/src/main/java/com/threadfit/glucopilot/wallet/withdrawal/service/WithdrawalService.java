@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.wallet.withdrawal.service;
 
 import com.threadfit.glucopilot.common.api.*;
+import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.consultation.mapper.ConsultationMapper;
 import com.threadfit.glucopilot.payment.config.AlipaySandboxProperties;
@@ -116,7 +117,9 @@ public class WithdrawalService {
         // 申请人已注销/注销中：只能驳回（解冻退款），不可放款
         if ("APPROVED".equals(form.status())) {
             Integer applicantStatus = mapper.accountStatus(order.getUserId());
-            if (applicantStatus != null && (applicantStatus == 3 || applicantStatus == 4))
+            if (applicantStatus != null
+                    && (applicantStatus == AccountStatus.CANCELLED.getCode()
+                            || applicantStatus == AccountStatus.CANCELLED_RECOVERABLE.getCode()))
                 throw new BizException(ErrorCode.CONFLICT, "用户注销中，仅可驳回");
         }
         var balance = mapper.balance(order.getUserId(), true);
@@ -153,11 +156,13 @@ public class WithdrawalService {
         throw bad("工作日历配置异常，请联系管理员");
     }
 
-    /** 账号注销中(2)/已注销(3)/注销可恢复(4) 一律拒绝提现，替代误导性的"请先开通钱包"。 */
+    /** 账号注销中/已注销/注销可恢复 一律拒绝提现，替代误导性的"请先开通钱包"。 */
     private void rejectIfCancelling(long user) {
         Integer accountStatus = mapper.accountStatus(user);
         if (accountStatus != null
-                && (accountStatus == 2 || accountStatus == 3 || accountStatus == 4))
+                && (accountStatus == AccountStatus.CANCELLING.getCode()
+                        || accountStatus == AccountStatus.CANCELLED.getCode()
+                        || accountStatus == AccountStatus.CANCELLED_RECOVERABLE.getCode()))
             throw bad("账号注销中或已注销，无法提现");
     }
 

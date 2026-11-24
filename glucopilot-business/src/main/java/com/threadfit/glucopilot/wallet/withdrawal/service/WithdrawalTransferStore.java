@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.wallet.withdrawal.service;
 
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.payment.config.AlipaySandboxProperties;
 import com.threadfit.glucopilot.payment.service.SandboxTransferGateway.Proof;
@@ -46,7 +47,9 @@ public class WithdrawalTransferStore {
         if (allowSend) {
             Integer applicantStatus = mapper.accountStatus(order.getUserId());
             if (applicantStatus != null
-                    && (applicantStatus == 2 || applicantStatus == 3 || applicantStatus == 4))
+                    && (applicantStatus == AccountStatus.CANCELLING.getCode()
+                            || applicantStatus == AccountStatus.CANCELLED.getCode()
+                            || applicantStatus == AccountStatus.CANCELLED_RECOVERABLE.getCode()))
                 throw new BizException(ErrorCode.CONFLICT, "账号注销中或已注销，无法出款");
         }
         if (!"ALIPAY_SANDBOX_TRANSFER".equals(order.getProvider())

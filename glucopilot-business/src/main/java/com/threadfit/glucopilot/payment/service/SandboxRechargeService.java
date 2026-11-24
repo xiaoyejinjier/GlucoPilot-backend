@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.payment.service;
 
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.payment.config.AlipaySandboxProperties;
 import com.threadfit.glucopilot.payment.dto.SandboxPaymentDtos.Proof;
@@ -44,7 +45,9 @@ public class SandboxRechargeService {
         //              同时确认本人已开通钱包，并串行处理同一用户并发创建订单的请求。
         Integer accountStatus = mapper.accountStatus(userId);
         if (accountStatus != null
-                && (accountStatus == 2 || accountStatus == 3 || accountStatus == 4))
+                && (accountStatus == AccountStatus.CANCELLING.getCode()
+                        || accountStatus == AccountStatus.CANCELLED.getCode()
+                        || accountStatus == AccountStatus.CANCELLED_RECOVERABLE.getCode()))
             throw new BizException(ErrorCode.BAD_REQUEST, "账号注销中或已注销，无法充值");
         if (mapper.lockActivatedUser(userId) == null)
             throw new BizException(ErrorCode.BAD_REQUEST, "请先开通钱包");
@@ -95,7 +98,7 @@ public class SandboxRechargeService {
         checkMerchant(order);
         // 【1.5 墓碑拦截】账号已注销（status=3）直接拒绝入账，且不 ensureAccount 新建钱包行。
         Integer accountStatus = mapper.accountStatus(order.getUserId());
-        if (accountStatus != null && accountStatus == 3) {
+        if (accountStatus != null && accountStatus == AccountStatus.CANCELLED.getCode()) {
             log.warn("已注销账号充值回调被拒绝 orderNo={} userId={}", order.getOrderNo(), order.getUserId());
             throw new BizException(ErrorCode.CONFLICT, "账号已注销，拒绝入账");
         }

@@ -302,13 +302,50 @@ $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::AS
 
 - **批次 0（已完成）**：公共骨架 + 拓扑 + 配置 + 单测。
   `JobEnvelope` / `JobTypes` / `JobOutcome` / `JobHandler` / `JobDispatcher` / `JobPublisher` /
-  `JobReconciler`（无域实现）/ `JobRetryReplayer` / `JobMetrics` / `RabbitJobConfig`（含 manual ack 容器工厂）。
-  **还没有 `@RabbitListener`**：三个队列已在 p10 上声明，但暂时没有消费者，也没有任何 `publish` 调用点。
-- 批次 1~3 依次接入审核、记忆抽取、OCR（每个处理器实现 `JobHandler` + 一个 `JobReconcileSource`，
+  `JobReconciler` / `JobRetryReplayer` / `JobMetrics` / `RabbitJobConfig`（manual ack 容器工厂）/
+  `JobEnvelopeCodec` / `JobListener`（公共消费端：解码 → 三态 → ack/nack）。
+- **批次 1（已完成）**：审核接入。
+  - 派发：`CommunityModerationJobs`（`articleSubmitted` / `commentCreated`，事务提交后再发；投递失败只 WARN，正确性靠补扫）；
+    调用点在 `CommunityPublicationService.submit/edit/retry` 与 `CommunityCommentService.addComment`。
+  - 消费：`@RabbitListener(queues = "...job.moderation", containerFactory = "jobContainerFactory", concurrency = 4)`
+    落在 `CommunityModerationListener`，实际处理在 `AbstractModerationJobHandler`（`claimById` → `load` → `judge` → `finish`）。
+  - 轮询降级为兜底：`glucopilot.mq.jobs.event-driven=true` 时 `CommunityModerationWorker` 只做僵尸回收（`reclaimStale`）。
+  - 验收实测：发一条「降糖贴三天见效，想买私信我」的评论 → **12 秒内**落 `ai_status=DONE`、
+    `ai_verdict=REJECT`、`ai_category=medical_claim`、`ai_severity=3`、`is_hidden=1`。
+- 批次 2~3 依次接入记忆抽取、OCR（每个处理器实现 `JobHandler` + 一个 `JobReconcileSource`，
   并加 `@RabbitListener(queues = ..., containerFactory = "jobContainerFactory", concurrency = ...)`）。
 - 批次 4 是翻译的补丁（拒绝时回 PENDING + 扫过期租约），不换 MQ。
 
-### 9.7 自检
+### 9.7 两个已踩过的运行期坑（务必先读）
+
+**① `__TypeId__` 与信任列表**
+
+Spring AMQP 的 JSON 转换器默认把发送端类名写进消息头 `__TypeId__`；而 spring-rabbit 4.1.1 的
+`MessagingMessageListenerAdapter.onMessage` 会**无条件**先把 AMQP 消息转成 Spring Messaging 消息
+（字节码里 `toMessagingMessage` 就在方法入口），所以只要这个头在、类又不在信任列表里，监听器会在
+**进入我们的代码之前**就抛 `IllegalArgumentException: The class '...JobEnvelope' is not in the trusted packages`。
+
+两处一起处理：
+
+- 发送端删头：`RabbitTemplate.setBeforePublishPostProcessors(... .remove("__TypeId__"))`（新消息不带）；
+- 消费端只信任自己的信封包：`DefaultJacksonJavaTypeMapper.setTrustedPackages("com.threadfit.glucopilot.common.mq", "com.threadfit.glucopilot.common.mq.job")`
+  —— 这样**历史消息/外来消息**也能被消费；仍然不放 `*`（那才是任意类加载）。
+
+**② 数据库时钟与进程时钟不是一回事**
+
+任务状态里的时间戳（`ai_claimed_at`、`created_at`、`updated_at`）由数据库的 `CURRENT_TIMESTAMP` 写入，
+而「多久算僵尸」「宽限一分钟」如果用 `LocalDateTime.now()` 计算，在容器里经常差 8 小时（DB 会话 UTC、
+JVM 为 +08）。表现极具迷惑性：**审核跑完了、模型也扣了费，但结论永远写不进去**——因为刚 `claim` 的行
+几秒内就被 `expireCommentClaims` 判成超时并改回 `PENDING`，随后 `finish` 的
+`WHERE ai_status='REVIEWING'` 命中 0 行。
+
+规矩：
+
+- 一切「与库里时间戳比较」的阈值都必须从 `CommunityModerationMapper.selectDbNow()`（`SELECT CURRENT_TIMESTAMP`）取；
+- 回收僵尸时必须把 `ai_claimed_at` 一并置 `NULL`（补扫条件是 `ai_claimed_at IS NULL`，否则永久卡在待审）；
+- 单测用 H2 时两个时钟恰好一致，所以**这类 bug 只有真机才暴露**，联调时务必先造一条任务看落库。
+
+### 9.8 自检
 
 ```powershell
 # 交换机 / 队列 / 绑定（本地 vhost = glucopilot-dev）

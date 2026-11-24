@@ -34,8 +34,8 @@ public interface CommunityModerationMapper extends BaseMapper<CommunityModeratio
     int markArticleReviewing(@Param("newsId") long newsId);
 
     @Update(
-            "UPDATE community_comment SET ai_status='PENDING' WHERE ai_status='REVIEWING' AND"
-                    + " ai_claimed_at<#{before} ")
+            "UPDATE community_comment SET ai_status='PENDING',ai_claimed_at=NULL WHERE"
+                    + " ai_status='REVIEWING' AND ai_claimed_at<#{before} ")
     int expireCommentClaims(@Param("before") LocalDateTime before);
 
     @Select(
@@ -98,6 +98,80 @@ public interface CommunityModerationMapper extends BaseMapper<CommunityModeratio
                 + " separator=','>(#{hit.targetType},#{hit.targetId},#{hit.revision},'AI',#{hit.categoryCode},#{hit.severity},#{hit.confidence},#{hit.reason},#{hit.modelCode},#{hit.promptVer})</foreach></script>"
                 + " ")
     int insertHits(@Param("hits") List<CommunityModerationHit> hits);
+
+    /**
+     * 按投递信里的 {@code news_id + revision} 精确抢一条文章（MQ 消费路径）。
+     *
+     * <p>与 {@link #claimArticle()} 的区别：那个是"随便给我一条"，这个是"只审这一条"。条件里带 {@code
+     * revision} 很关键——消息在队列里排队期间作者可能已经改稿，旧版本号抢不到， 于是这条消息会被当成幂等重复 ack 掉，不会拿旧正文去审新版本。
+     */
+    @Select(
+            "SELECT a.news_id,a.revision,n.title,n.content_body FROM community_article a JOIN"
+                + " cms_news n ON n.id=a.news_id WHERE a.news_id=#{newsId} AND"
+                + " a.revision=#{revision} AND a.state='AI_PENDING' AND n.community_managed=1 AND"
+                + " n.is_deleted=0 FOR UPDATE")
+    @Options(useCache = false, flushCache = Options.FlushCachePolicy.TRUE)
+    List<Map<String, Object>> lockArticleForReview(
+            @Param("newsId") long newsId, @Param("revision") Integer revision);
+
+    /**
+     * 数据库时钟。
+     *
+     * <p>僵尸回收与补扫的「多久算旧」必须和写入端同一个时钟：{@code ai_claimed_at}/{@code created_at} 由
+     * {@code CURRENT_TIMESTAMP} 写入（数据库会话时区），而 JVM 的 {@code LocalDateTime.now()} 是进程时区。
+     * 两者在容器里经常差 8 小时——拿 JVM 时间当阈值，会把刚抢到的任务判成「超时」，几秒内就被回收成待审，
+     * 于是审核结论永远写不进去（{@code WHERE ai_status='REVIEWING'} 命中 0 行，前端一直看到 PENDING）。
+     */
+    @Select("SELECT CURRENT_TIMESTAMP")
+    LocalDateTime selectDbNow();
+
+    /** 按 id 精确抢一条评论（MQ 消费路径）；已被人抢走时返回空。 */
+    @Select(
+            "SELECT id,content FROM community_comment WHERE id=#{id} AND ai_status='PENDING' AND"
+                    + " is_deleted=0 FOR UPDATE")
+    @Options(useCache = false, flushCache = Options.FlushCachePolicy.TRUE)
+    List<Map<String, Object>> lockCommentForReview(@Param("id") long id);
+
+    /** 读文章正文（不加锁）：抢占与执行是两次独立调用，执行时行已经是 REVIEWING 状态。 */
+    @Select(
+            "SELECT n.title,n.content_body FROM community_article a JOIN cms_news n ON"
+                    + " n.id=a.news_id WHERE a.news_id=#{newsId} AND a.revision=#{revision} ")
+    List<Map<String, Object>> selectArticleContent(
+            @Param("newsId") long newsId, @Param("revision") Integer revision);
+
+    /** 读评论正文（不加锁）。 */
+    @Select("SELECT content FROM community_comment WHERE id=#{id} AND is_deleted=0 ")
+    List<Map<String, Object>> selectCommentContent(@Param("id") long id);
+
+    /** 执行失败要重试时，把文章放回待审队列（条件更新：只回滚自己抢到的那一版）。 */
+    @Update(
+            "UPDATE community_article SET state='AI_PENDING',updated_at=CURRENT_TIMESTAMP WHERE"
+                    + " news_id=#{newsId} AND revision=#{revision} AND state='AI_REVIEWING' ")
+    int releaseArticleClaim(@Param("newsId") long newsId, @Param("revision") Integer revision);
+
+    /** 执行失败要重试时，把评论放回待审队列。 */
+    @Update(
+            "UPDATE community_comment SET ai_status='PENDING',ai_claimed_at=NULL WHERE id=#{id} AND"
+                    + " ai_status='REVIEWING' ")
+    int releaseCommentClaim(@Param("id") long id);
+
+    /**
+     * 补扫用：超过一分钟还停在待审、且没人抢过的文章。
+     *
+     * <p>{@code updated_at} 而不是创建时间——文章被驳回改稿重投时会原地更新，用它才能覆盖"重投后没人审"。
+     */
+    @Select(
+            "SELECT news_id,revision FROM community_article WHERE state='AI_PENDING' AND"
+                    + " updated_at<#{before} ORDER BY updated_at,news_id LIMIT #{limit} ")
+    List<Map<String, Object>> pendingArticleJobs(
+            @Param("before") LocalDateTime before, @Param("limit") int limit);
+
+    /** 补扫用：超过一分钟还停在待审、且从没被抢过的评论（{@code ai_claimed_at IS NULL} 排除正在审的）。 */
+    @Select(
+            "SELECT id,user_id FROM community_comment WHERE ai_status='PENDING' AND ai_claimed_at IS NULL"
+                    + " AND created_at<#{before} AND is_deleted=0 ORDER BY id LIMIT #{limit} ")
+    List<Map<String, Object>> pendingCommentJobs(
+            @Param("before") LocalDateTime before, @Param("limit") int limit);
 
     /**
      * 审计分页（管理端「AI 审计 → 内容审核」）：只读，按 id 倒序。

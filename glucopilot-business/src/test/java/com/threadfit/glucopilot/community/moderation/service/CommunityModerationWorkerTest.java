@@ -14,6 +14,7 @@ import com.threadfit.glucopilot.ai.business.moderation.service.ContentModeration
 import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationRequest;
 import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationResult;
 import com.threadfit.glucopilot.ai.business.moderation.dto.ModerationVerdict;
+import com.threadfit.glucopilot.common.mq.job.JobProperties;
 
 import org.junit.jupiter.api.Test;
 
@@ -48,16 +49,28 @@ class CommunityModerationWorkerTest {
                                     "test",
                                     java.util.Map.of(
                                             "community.moderation.initial-delay", "3600000")));
+            var queue = mock(CommunityModerationQueue.class);
+            var moderation = mock(ContentModerationService.class);
+            context.registerBean(CommunityModerationQueue.class, () -> queue);
+            context.registerBean(ContentModerationService.class, () -> moderation);
             context.registerBean(
-                    CommunityModerationQueue.class, () -> mock(CommunityModerationQueue.class));
-            context.registerBean(
-                    ContentModerationService.class, () -> mock(ContentModerationService.class));
+                    CommunityModerationJudge.class, () -> new CommunityModerationJudge(moderation));
+            context.registerBean(JobProperties.class, JobProperties::new);
             context.register(CommunityModerationWorker.class);
             context.refresh();
 
             assertNotNull(context.getBean(CommunityModerationWorker.class));
-            verifyNoInteractions(context.getBean(CommunityModerationQueue.class));
+            verifyNoInteractions(queue);
         }
+    }
+
+    /** 单测验证的是轮询路径，因此把 {@code event-driven} 关掉（打开时只会做僵尸回收）。 */
+    private static CommunityModerationWorker worker(
+            CommunityModerationQueue queue, ContentModerationService moderation) {
+        JobProperties properties = new JobProperties();
+        properties.setEventDriven(false);
+        return new CommunityModerationWorker(
+                queue, new CommunityModerationJudge(moderation), properties);
     }
 
     @Test
@@ -66,7 +79,7 @@ class CommunityModerationWorkerTest {
         var moderation = mock(ContentModerationService.class);
         when(queue.claim()).thenReturn(null);
 
-        new CommunityModerationWorker(queue, moderation).runOnce();
+        worker(queue, moderation).runOnce();
 
         verifyNoInteractions(moderation);
     }
@@ -85,7 +98,7 @@ class CommunityModerationWorkerTest {
                                                 && !r.isComment())))
                 .thenReturn(passResult());
 
-        new CommunityModerationWorker(queue, moderation).runOnce();
+        worker(queue, moderation).runOnce();
 
         verify(queue)
                 .finish(
@@ -104,7 +117,7 @@ class CommunityModerationWorkerTest {
         when(moderation.judge(org.mockito.ArgumentMatchers.any()))
                 .thenThrow(new IllegalStateException("boom"));
 
-        new CommunityModerationWorker(queue, moderation).runOnce();
+        worker(queue, moderation).runOnce();
 
         verify(queue).finish(eq(job), argThat(ModerationVerdict::isError), eq(""), eq(""));
     }
@@ -115,7 +128,7 @@ class CommunityModerationWorkerTest {
         var moderation = mock(ContentModerationService.class);
         when(queue.claim()).thenThrow(new IllegalStateException("db down"));
 
-        new CommunityModerationWorker(queue, moderation).runOnce();
+        worker(queue, moderation).runOnce();
 
         verifyNoInteractions(moderation);
     }

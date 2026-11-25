@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.threadfit.glucopilot.food.gi.FoodGiMapper">
+    <!-- 管理端新建、识别待审新增、直接导入的数据均会被扫描；食品改名后重新匹配。 -->
+    <insert id="enqueueMissing">
+        INSERT INTO food_gi_lookup(food_id, food_name, category_code, status, next_attempt_at)
+        SELECT f.id, f.food_name, f.category_code, 'PENDING', CURRENT_TIMESTAMP(3)
+        FROM food_nutrition f
+        LEFT JOIN food_gi_lookup g ON g.food_id = f.id
+        WHERE f.is_deleted = 0 AND f.gi_value IS NULL
+          AND (g.food_id IS NULL OR g.food_name != f.food_name
+               OR COALESCE(g.category_code, 0) != COALESCE(f.category_code, 0))
+        ON DUPLICATE KEY UPDATE
+            food_name = VALUES(food_name), category_code = VALUES(category_code),
+            status = 'PENDING', next_attempt_at = CURRENT_TIMESTAMP(3), lease_token = NULL,
+            gi_value = NULL, reference_food = NULL, source_url = NULL, note = NULL
+    </insert>
+    <select id="pending" resultType="com.threadfit.glucopilot.food.gi.FoodGiMapper$Candidate">
+        SELECT g.food_id, g.food_name, g.category_code
+        FROM food_gi_lookup g JOIN food_nutrition f ON f.id = g.food_id
+        WHERE f.is_deleted = 0 AND f.gi_value IS NULL
+          AND g.food_name = f.food_name
+          AND COALESCE(g.category_code, 0) = COALESCE(f.category_code, 0)
+          AND g.next_attempt_at &lt;= CURRENT_TIMESTAMP(3)
+        ORDER BY g.next_attempt_at, g.food_id
+        LIMIT 3
+    </select>
+    <select id="reference" resultType="com.threadfit.glucopilot.food.gi.FoodGiMapper$Reference">
+        SELECT status, gi_value, reference_food, source_url, note
+        FROM food_gi_reference
+        WHERE food_name = #{name} AND category_code = #{category} AND enabled = 1
+    </select>
+    <!-- 原子领取，避免多个后端实例同时联网；异常退出后10分钟租约自动到期。 -->
+    <update id="claim">
+        UPDATE food_gi_lookup
+        SET lease_token = #{lease}, status = 'LOOKING_UP',
+            next_attempt_at = TIMESTAMPADD(MINUTE, 10, CURRENT_TIMESTAMP(3))
+        WHERE food_id = #{item.foodId} AND food_name = #{item.foodName}
+          AND next_attempt_at &lt;= CURRENT_TIMESTAMP(3)
+    </update>
+    <select id="lockClaim" resultType="long">
+        SELECT food_id FROM food_gi_lookup
+        WHERE food_id = #{id} AND lease_token = #{lease}
+        FOR UPDATE
+    </select>
+    <!-- 只补空值；人工已填写、食品已删除或改名后，迟到结果不能覆盖。 -->
+    <update id="fillGi">
+        UPDATE food_nutrition
+        SET gi_value = #{value}
+        WHERE id = #{item.foodId} AND food_name = #{item.foodName}
+          AND COALESCE(category_code, 0) = COALESCE(#{item.categoryCode}, 0)
+          AND gi_value IS NULL AND is_deleted = 0
+    </update>
+    <update id="complete">
+        UPDATE food_gi_lookup
+        SET status = #{result.status}, gi_value = #{result.value},
+            reference_food = #{result.referenceFood}, source_url = #{result.sourceUrl},
+            note = #{result.note}, checked_at = CURRENT_TIMESTAMP(3), lease_token = NULL,
+            next_attempt_at = TIMESTAMPADD(DAY,
+                CASE WHEN #{result.status} = 'RETRY' THEN 1 ELSE 7 END, CURRENT_TIMESTAMP(3))
+        WHERE food_id = #{item.foodId} AND lease_token = #{lease}
+    </update>
+</mapper>

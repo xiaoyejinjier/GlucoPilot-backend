@@ -1,0 +1,30 @@
+﻿食品ID,食品名称,GI参考值,匹配状态,参考试验食物,来源,适用说明
+1,米饭,83.2,REFERENCE,Cooked rice,https://pmc.ncbi.nlm.nih.gov/articles/PMC4087878/,普通熟米饭文献参考，不适用于炒饭、糯米或低GI米。
+2,燕麦,55.0,REFERENCE,Oatmeal (unpackaged),https://pmc.ncbi.nlm.nih.gov/articles/PMC4087878/,名称未指定形态，按普通非即食燕麦粥参考55；不是该食品实测，不能用于即食燕麦。
+3,面条,46.0,REFERENCE,Wheat Noodle (dried),https://pmc.ncbi.nlm.nih.gov/articles/PMC4087878/,名称未指定干鲜，按普通干小麦面条煮熟参考46；鲜面条、方便面不同。
+4,馒头,88.1,REFERENCE,Steamed bread (refined),https://pmc.ncbi.nlm.nih.gov/articles/PMC4087878/,精制小麦蒸馒头参考，不适用于全麦或加馅制品。
+5,鸡胸肉,,NOT_APPLICABLE,,https://glycemicindex.com/gi-search/,缺乏标准GI测试所需的可利用碳水，不设置GI；空值不等于0。
+6,鸡蛋,,NOT_APPLICABLE,,https://glycemicindex.com/gi-search/,缺乏标准GI测试所需的可利用碳水，不设置GI；空值不等于0。
+7,瘦猪肉,,NOT_APPLICABLE,,https://glycemicindex.com/gi-search/,缺乏标准GI测试所需的可利用碳水，不设置GI；空值不等于0。
+8,西兰花,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,低碳水蔬菜，未找到可可靠匹配的标准GI试验，不以15等经验数代替。
+9,黄瓜,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,低碳水蔬菜，未找到可可靠匹配的标准GI试验，不以15等经验数代替。
+10,西红柿,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,未找到当前食物形态的可靠标准GI，不使用番茄汁或酱的GI。
+11,苹果,36.0,REFERENCE,"Apple, raw",https://pmc.ncbi.nlm.nih.gov/articles/PMC2584181/,鲜苹果汇总参考，不适用于果汁或果干。
+12,香蕉,51.0,REFERENCE,"Banana, raw",https://pmc.ncbi.nlm.nih.gov/articles/PMC2584181/,鲜香蕉汇总参考，品种及成熟度会影响GI。
+13,牛奶,39.0,REFERENCE,"Milk, full fat",https://pmc.ncbi.nlm.nih.gov/articles/PMC2584181/,普通全脂牛奶汇总参考，不适用于调味奶。
+14,酸奶,41.0,REFERENCE,"Yogurt, fruit",https://pmc.ncbi.nlm.nih.gov/articles/PMC2584181/,名称未指定配方，使用水果酸奶汇总参考41；无糖原味及具体品牌需单独核对。
+15,豆腐,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,普通豆腐与豆腐甜品不同，未找到可精确匹配的标准GI。
+16,豆浆,34.0,REFERENCE,Soy milk,https://pmc.ncbi.nlm.nih.gov/articles/PMC2584181/,普通豆浆汇总参考34；含糖量、浓度及品牌不同，不能视为当前配方实测。
+17,杏仁,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,低可利用碳水坚果，无可靠匹配的标准GI，不将餐后混合餐试验当作杏仁GI。
+18,核桃,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,低可利用碳水坚果，未找到可可靠匹配的标准GI。
+19,矿泉水,,NOT_APPLICABLE,,https://glycemicindex.com/gi-search/,缺乏标准GI测试所需的可利用碳水，不设置GI；空值不等于0。
+20,无糖豆浆,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,无糖标签不能确定碳水浓度及工艺，不直接套用含糖或不同品牌豆饮料。
+21,苏打饼干,74.0,REFERENCE,Soda crackers,https://lpi.oregonstate.edu/mic/food-beverages/glycemic-index-glycemic-load,普通苏打饼干汇总参考74；具体品牌和配方可能不同。
+22,榴莲,49.0,REFERENCE,"Durian, fresh",https://apjcn.qdu.edu.cn/17_1_23.pdf,鲜榴莲小样本研究参考，不适用于甜品。
+23,葡萄,49.1,REFERENCE,"Grapes, fresh",https://pmc.ncbi.nlm.nih.gov/articles/PMC3208016/,鲜葡萄健康受试者研究参考，不适用于葡萄干或果汁。
+26,小笼包,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,皮馅比例及配方不明，不直接套用普通肉包或馒头GI。
+27,紫皮黄心红薯,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,品种与做法均影响GI，不能把普通煮红薯GI当作该品种实测。
+29,土豆块,66.4,REFERENCE,Potato (cooked),https://pmc.ncbi.nlm.nih.gov/articles/PMC4087878/,名称未指定烹调，按普通煮熟土豆参考66.4；蒸、炸、冷却或土豆泥不同。
+31,炒饭,80.0,REFERENCE,"Fried Rice in Yangzhou-style, instant",https://pmc.ncbi.nlm.nih.gov/articles/PMC2846258/,名称未指定配方，使用文献扬州炒饭参考80；当前炒饭并非原试验食品，需按配方核对。
+32,火腿肠,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,配方、淀粉含量及品牌不明，不能用纯肉类或其他加工肉GI代替。
+34,葱花,,NEEDS_DETAILS,,https://glycemicindex.com/gi-search/,调味用量及可利用碳水低，无可可靠匹配的标准GI。

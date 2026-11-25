@@ -1176,7 +1176,7 @@ if (updated == 0) { /* 指针已经前进了（别的实例先完成），丢弃
 | --- | --- | --- |
 | `ai:round:{assistantMsgId}` | 1 permit / 90s | 409 `40900`「这一条正在生成中，请 3 秒后再试」 |
 | `ai:round:cluster` | 64 permits / 90s | 503 `50300`「当前对话请求较多，请稍后再试」 |
-| `ai:stream:user:{userId}` | 2 permits / 90s | 429 `42901`「同时进行的对话过多（上限 2 条）」 |
+| `ai:stream:session:{sessionId}` | 1 permit / 90s | 429 `42901`「这个会话还有一条回复正在生成，请稍候再发」 |
 | `ai:rate:chat:{userId}` | 20 次 / 60s | 429 `42901`「发送太频繁（每分钟上限 20 次）」 |
 | `ai:quota:chat:{userId}:{yyyyMMdd}` | 200 轮 / 天（次日 0 点过期） | 429 `42901`「今日对话额度已用完」 |
 | `ai:speech:cluster` / `ai:speech:user:{userId}` | 8 / 1，lease 180s | 429 `42901` |

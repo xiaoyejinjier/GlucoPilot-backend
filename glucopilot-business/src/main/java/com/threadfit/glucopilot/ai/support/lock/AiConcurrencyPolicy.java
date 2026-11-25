@@ -81,19 +81,24 @@ public class AiConcurrencyPolicy {
         }
     }
 
-    /** 抢占一个「并发流」名额：每个人最多 {@code stream-permits-per-user} 条。 */
-    public String acquireStream(long userId) {
-        String token = leaseGuard.tryAcquire("ai:stream:user:" + userId,
-                properties.getStreamPermitsPerUser(), Duration.ofSeconds(properties.getStreamLeaseSeconds()));
+    /**
+     * 抢占一个「并发流」名额：**每个会话**最多 {@code stream-permits-per-session} 条。
+     * <p>
+     * 参数是会话而不是用户——同会话两条并发流会写坏消息顺序与分片账本（详见
+     * {@code AiConcurrencyProperties#streamPermitsPerSession} 的注释）；用户并行不同会话不受影响。
+     */
+    public String acquireStream(long sessionId) {
+        String token = leaseGuard.tryAcquire("ai:stream:session:" + sessionId,
+                properties.getStreamPermitsPerSession(), Duration.ofSeconds(properties.getStreamLeaseSeconds()));
         if (token == null) {
             throw new BizException(ErrorCode.TOO_MANY_REQUESTS,
-                    "同时进行的对话过多（上限 " + properties.getStreamPermitsPerUser() + " 条），请先等其中一条结束");
+                    "这个会话还有一条回复正在生成，请稍候再发");
         }
         return token;
     }
 
-    public void releaseStream(long userId, String token) {
-        leaseGuard.release("ai:stream:user:" + userId, token);
+    public void releaseStream(long sessionId, String token) {
+        leaseGuard.release("ai:stream:session:" + sessionId, token);
     }
 
     /** 每分钟请求数上限：令牌桶，超出直接 429。 */

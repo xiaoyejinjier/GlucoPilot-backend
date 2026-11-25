@@ -266,8 +266,9 @@ ai:
     # 单条助手消息的生成权租约：正常一轮 60 秒内结束，给 90 秒留余量；
     # 过期即视为持有者已死（进程被 kill 时靠它自愈）。
     round-lease-seconds: 90
-    # 每用户同时进行的流式对话上限：一个人开太多 SSE 会长期占用线程与连接。
-    stream-permits-per-user: 2
+    # 每个会话同时进行的流式对话上限：同会话两条流会交错写 chat_message 与 ChatMemory，
+    # 把 seq_no 与分片账本写乱；并行需求靠不同会话满足，所以按会话而不是按用户。
+    stream-permits-per-session: 1
     stream-lease-seconds: 90
     # 集群同时生成上限：单实例并发太高时一起打上游会触发限流，宁可排队失败也别整体超时。
     cluster-round-permits: 64

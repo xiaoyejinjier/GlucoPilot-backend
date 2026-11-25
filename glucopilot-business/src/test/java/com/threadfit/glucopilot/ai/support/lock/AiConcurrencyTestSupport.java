@@ -31,7 +31,7 @@ public final class AiConcurrencyTestSupport {
         AiConcurrencyProperties properties = new AiConcurrencyProperties();
         properties.setChatPerMinute(1_000_000);
         properties.setDailyChatTurns(1_000_000);
-        properties.setStreamPermitsPerUser(1_000);
+        properties.setStreamPermitsPerSession(1_000);
         properties.setClusterRoundPermits(1_000);
         return properties;
     }

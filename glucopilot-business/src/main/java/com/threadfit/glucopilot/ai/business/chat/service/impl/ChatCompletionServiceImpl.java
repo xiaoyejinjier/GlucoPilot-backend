@@ -202,7 +202,7 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
         // 位置很关键——必须在**调用模型之前**：助手消息的客户端幂等键要到 INSERT 时才暴露冲突，
         // 而 INSERT 在模型调用之后，那时钱已经花了（实测两个并发请求 prompt_tokens 5855 + 5940）。
         String roundToken = concurrency.acquireRound(target.getId());
-        String streamToken = concurrency.acquireStream(userId);
+        String streamToken = concurrency.acquireStream(sessionId);
         Flux<ServerSentEvent<byte[]>> stream;
         try {
             stream = startStream(userId, sessionId, target, roundToken);
@@ -210,14 +210,14 @@ public class ChatCompletionServiceImpl implements ChatCompletionService {
             // 同步阶段（图片轮次的视觉识别、请求组装）抛错时 Flux 还没返回，
             // doFinally 还没挂上——不在这里释放就会永久占位
             concurrency.releaseRound(target.getId(), roundToken);
-            concurrency.releaseStream(userId, streamToken);
+            concurrency.releaseStream(sessionId, streamToken);
             throw e;
         }
         // 兜底：客户端中途取消、上游报错等没走到 done 事件的情况靠这里释放
         // （按令牌释放，以免删掉下一轮刚拿到的锁）
         return stream.doFinally(signal -> {
             concurrency.releaseRound(target.getId(), roundToken);
-            concurrency.releaseStream(userId, streamToken);
+            concurrency.releaseStream(sessionId, streamToken);
         });
     }
 

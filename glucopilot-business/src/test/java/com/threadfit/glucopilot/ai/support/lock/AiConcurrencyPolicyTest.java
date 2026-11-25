@@ -26,7 +26,7 @@ class AiConcurrencyPolicyTest {
     private static AiConcurrencyProperties properties() {
         AiConcurrencyProperties properties = new AiConcurrencyProperties();
         properties.setClusterRoundPermits(2);
-        properties.setStreamPermitsPerUser(2);
+        properties.setStreamPermitsPerSession(1);
         properties.setChatPerMinute(3);
         properties.setDailyChatTurns(2);
         properties.setSpeechClusterPermits(1);
@@ -75,22 +75,28 @@ class AiConcurrencyPolicyTest {
     }
 
     @Test
-    void 超过每人并发流上限应抛429且不影响已持有的流() {
+    void 同一会话第二条流应抛429而不同会话互不影响() {
         InMemoryLeaseGuard guard = new InMemoryLeaseGuard();
         AiConcurrencyPolicy policy = policy(guard, properties());
 
         String first = policy.acquireStream(9L);
-        String second = policy.acquireStream(9L);
 
+        // 同会话第二条流：拒绝（否则两条流会交错写消息与记忆，把 seq_no 与分片账本写乱）
         assertThatThrownBy(() -> policy.acquireStream(9L))
                 .isInstanceOf(BizException.class)
                 .extracting(e -> ((BizException) e).getErrorCode())
                 .isEqualTo(ErrorCode.TOO_MANY_REQUESTS);
-        assertThat(guard.held("ai:stream:user:9")).isEqualTo(2);
+        assertThat(guard.held("ai:stream:session:9")).isEqualTo(1);
+
+        // 不同会话：不受影响——这是「每会话 1 路」而不是「每用户 1 路」的关键差别
+        String other = policy.acquireStream(10L);
+        assertThat(other).isNotNull();
+        assertThat(guard.held("ai:stream:session:10")).isEqualTo(1);
 
         policy.releaseStream(9L, first);
-        policy.releaseStream(9L, second);
-        assertThat(guard.held("ai:stream:user:9")).isZero();
+        policy.releaseStream(10L, other);
+        assertThat(guard.held("ai:stream:session:9")).isZero();
+        assertThat(guard.held("ai:stream:session:10")).isZero();
     }
 
     @Test

@@ -17,8 +17,9 @@ import org.springframework.stereotype.Component;
  *   <li><b>互斥</b>（{@code round-lease-seconds}）：同一轮只允许一个执行者。租约必须明显大于
  *       一轮业务时长（SSE 超时 60 秒），否则正常的长回答会被判成「持有者已死亡」被接管；
  *       但也不能太大，否则进程被 kill 后要等很久才能自愈。90 秒 = 60 秒业务 + 50% 余量。</li>
- *   <li><b>并发流</b>（{@code stream-permits-per-user}）：每用户在集群范围内同时能开几条
- *       SSE。SSE 是长连接 + 工具回环，一个人开一堆标签页就能把实例连接池占满。</li>
+ *   <li><b>并发流</b>（{@code stream-permits-per-session}）：每个会话在集群范围内同时能开几条
+ *       SSE。同会话两条流会交错写消息与记忆（顺序坏掉），所以按会话限 1；
+ *       「同时问两件事」靠不同会话并行满足。</li>
  *   <li><b>速率</b>（{@code chat-per-minute}）：令牌桶，按「每分钟多少次请求」算，
  *       拦的是"快速连点/脚本刷"，与并发流互补（并发流拦"同时"，速率拦"累计"）。</li>
  *   <li><b>配额</b>（{@code daily-chat-turns}）：每日轮数的成本闸。速率管不住"一天慢慢来 500 轮"，
@@ -45,8 +46,15 @@ public class AiConcurrencyProperties {
     /** 单轮执行权租约（秒）：60 秒业务上限 + 50% 余量。 */
     private int roundLeaseSeconds = 90;
 
-    /** 每用户同时可开的生成流数量。 */
-    private int streamPermitsPerUser = 2;
+    /**
+     * 每个会话同时可开的生成流数量，默认 1。
+     * <p>
+     * 为什么按会话而不是按用户：同一条会话的两条并发流会同时写 {@code chat_message} 与 ChatMemory，
+     * 交错出的 {@code seq_no} 会让下一轮装配出的历史顺序变错（助手A、助手B、用户C），
+     * 分片账本也会一轮写两份。而"用户同时问两件事"是真实需求，用**不同会话**并行即可满足，
+     * 所以是"每会话 1 路、每用户不限会话数"。
+     */
+    private int streamPermitsPerSession = 1;
 
     /** 每用户流租约（秒）：与单轮一致，客户端断连时靠 doFinally 释放，租约只是兜底。 */
     private int streamLeaseSeconds = 90;

@@ -136,6 +136,8 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
     /** 本实例正在跑的抽取任务数（用于 inFlight 断言）。 */
     private final java.util.concurrent.atomic.AtomicInteger running = new java.util.concurrent.atomic.AtomicInteger();
     private final Executor executor;
+    /** 任务队列的派发口；队列没开时它返回 false，这里退回本地线程池。 */
+    private final com.threadfit.glucopilot.ai.memory.mq.MemoryExtractJobs extractJobs;
 
     public UserChatMemoryServiceImpl(AiChatClientRegistry clients,
                                  ChatUserMemoryMapper memoryMapper,
@@ -146,7 +148,8 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
                                  AIProperties aiProperties,
                                  com.threadfit.glucopilot.common.util.JsonUtils jsonUtils,
                                  AiConcurrencyPolicy concurrency,
-                                 @Qualifier("chatSummaryExecutor") Executor executor) {
+                                 @Qualifier("chatSummaryExecutor") Executor executor,
+                                 com.threadfit.glucopilot.ai.memory.mq.MemoryExtractJobs extractJobs) {
         this.clients = clients;
         this.memoryMapper = memoryMapper;
         this.chatMessageMapper = chatMessageMapper;
@@ -159,6 +162,7 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
         // 两者都是"回复之后的后台增强"，没必要各起一个池；线程池饿了宁可丢记忆也不拖慢对话
         this.concurrency = concurrency;
         this.executor = executor;
+        this.extractJobs = extractJobs;
     }
 
     // ------------------------------------------------------------------ 读取（供上下文装配）
@@ -692,23 +696,39 @@ public class UserChatMemoryServiceImpl implements UserChatMemoryService {
             log.debug("关键词兜底未开启，跳过抽取 sessionId={}", sessionId);
             return;
         }
-        if (!concurrency.markExtractRunning(sessionId)) {
-            log.debug("该会话已有记忆抽取任务在跑，跳过 sessionId={}", sessionId);
+        if (extractJobs.publish(userId, sessionId, reason)) {
+            // 已交给任务队列：跨实例分发、进程被 kill 也不会丢（配补扫），不需要本地线程
             return;
         }
         try {
-            executor.execute(() -> {
-                running.incrementAndGet();
-                try {
-                    runExtract(userId, sessionId, reason);
-                } finally {
-                    running.decrementAndGet();
-                    concurrency.finishExtract(sessionId);
-                }
-            });
+            executor.execute(() -> extractNow(userId, sessionId, reason));
         } catch (RuntimeException e) {
-            concurrency.finishExtract(sessionId);
             log.warn("记忆抽取任务提交失败（忽略）sessionId={}", sessionId, e);
+        }
+    }
+
+    /**
+     * 同步执行一次抽取（任务队列的消费端用）。
+     *
+     * <p>单飞标记与异步路径共用同一个键：同一条消息被重复投递时，第二个消费者在这里直接返回 0，
+     * 不会第二次调用模型（每次调用都是真实计费）。标记的释放放在 {@code finally}——
+     * 抽取抛异常也必须让下一个任务能进来。
+     */
+    @Override
+    public int extractNow(Long userId, Long sessionId, String reason) {
+        if (!clients.utilityAvailable() || sessionId == null) {
+            return 0;
+        }
+        if (!concurrency.markExtractRunning(sessionId)) {
+            log.debug("该会话已有记忆抽取任务在跑，跳过 sessionId={}", sessionId);
+            return 0;
+        }
+        running.incrementAndGet();
+        try {
+            return runExtract(userId, sessionId, reason);
+        } finally {
+            running.decrementAndGet();
+            concurrency.finishExtract(sessionId);
         }
     }
 

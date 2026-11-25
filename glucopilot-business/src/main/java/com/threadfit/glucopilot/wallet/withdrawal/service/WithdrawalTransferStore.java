@@ -1,6 +1,7 @@
 package com.threadfit.glucopilot.wallet.withdrawal.service;
 
 import com.threadfit.glucopilot.common.api.ErrorCode;
+import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.payment.config.AlipaySandboxProperties;
 import com.threadfit.glucopilot.payment.service.SandboxTransferGateway.Proof;
@@ -42,6 +43,15 @@ public class WithdrawalTransferStore {
         var order = mapper.lock(no);
         if (order == null) throw new BizException(ErrorCode.NOT_FOUND);
         if (!"APPROVED".equals(order.getStatus())) return null;
+        // 出款前复查申请人账号状态：审批后、出款前可能已进入注销，禁止放款
+        if (allowSend) {
+            Integer applicantStatus = mapper.accountStatus(order.getUserId());
+            if (applicantStatus != null
+                    && (applicantStatus == AccountStatus.CANCELLING.getCode()
+                            || applicantStatus == AccountStatus.CANCELLED.getCode()
+                            || applicantStatus == AccountStatus.CANCELLED_RECOVERABLE.getCode()))
+                throw new BizException(ErrorCode.CONFLICT, "账号注销中或已注销，无法出款");
+        }
         if (!"ALIPAY_SANDBOX_TRANSFER".equals(order.getProvider())
                 || order.getPayeeUserId() == null)
             throw new BizException(ErrorCode.BAD_REQUEST, "请先由本人补充支付宝沙箱收款UID");

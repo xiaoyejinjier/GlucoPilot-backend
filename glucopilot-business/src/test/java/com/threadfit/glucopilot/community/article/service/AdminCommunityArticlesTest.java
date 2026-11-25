@@ -125,7 +125,8 @@ class AdminCommunityArticlesTest {
                         CommunityTestMappers.access(jdbc),
                         CommunityTestMappers.recommendation(jdbc),
                         CommunityTestMappers.reports(jdbc),
-                        CommunityTestMappers.adminComments(jdbc));
+                        CommunityTestMappers.adminComments(jdbc),
+                        CommunityTestMappers.moderationJobs());
     }
 
     // H2 rounds DATETIME to seconds; seed already-published fixtures before the current instant.
@@ -1700,7 +1701,8 @@ class AdminCommunityArticlesTest {
                         CommunityTestMappers.access(jdbc),
                         CommunityTestMappers.recommendation(jdbc),
                         CommunityTestMappers.reports(jdbc),
-                        CommunityTestMappers.adminComments(jdbc));
+                        CommunityTestMappers.adminComments(jdbc),
+                        CommunityTestMappers.moderationJobs());
         var request =
                 new Submit(
                         "新投稿分享",

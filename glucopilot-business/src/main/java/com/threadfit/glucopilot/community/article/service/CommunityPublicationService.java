@@ -41,6 +41,7 @@ public class CommunityPublicationService {
     private final CommunityService community;
     private final ArticleAccessService access;
     private final CommunityRecommendationService recommendation;
+    private final com.threadfit.glucopilot.community.moderation.mq.CommunityModerationJobs moderationJobs;
 
     public CommunityPublicationService(
             CommunityPublicationMapper mapper,
@@ -49,7 +50,8 @@ public class CommunityPublicationService {
             ArticleAccessService access,
             CommunityRecommendationService recommendation,
             com.threadfit.glucopilot.community.report.service.CommunityReportService reportService,
-            com.threadfit.glucopilot.community.comment.service.AdminCommunityCommentService commentAdmin) {
+            com.threadfit.glucopilot.community.comment.service.AdminCommunityCommentService commentAdmin,
+            com.threadfit.glucopilot.community.moderation.mq.CommunityModerationJobs moderationJobs) {
         this.commentAdmin = commentAdmin;
         this.reportService = reportService;
         this.mapper = mapper;
@@ -57,6 +59,7 @@ public class CommunityPublicationService {
         this.community = community;
         this.access = access;
         this.recommendation = recommendation;
+        this.moderationJobs = moderationJobs;
     }
 
     private static final Set<String> STATES = Set.of(
@@ -322,6 +325,8 @@ public class CommunityPublicationService {
         saveTags(row.getId(), codes);
         saveMedia(row.getId(), images, videos);
         log("ARTICLE", row.getId(), 1, "USER", author, "SUBMIT", "");
+        // 先审后发：文章此刻只对作者可见，派一条审核任务出去（事务提交后才真正投递；投递失败有补扫兜底）
+        moderationJobs.articleSubmitted(row.getId(), 1);
         return get(author, row.getId(), false);
     }
 
@@ -366,6 +371,8 @@ public class CommunityPublicationService {
         saveTags(id, codes);
         saveMedia(id, images, videos);
         log("ARTICLE", id, revision + 1, "USER", author, "RESUBMIT", "");
+        // 改稿重投：版本号 +1 后重新排队初审；旧版本号的消息若还在队列里，会因为版本对不上而被丢弃
+        moderationJobs.articleSubmitted(id, revision + 1);
         return get(author, id, false);
     }
 
@@ -717,6 +724,8 @@ public class CommunityPublicationService {
                 actor,
                 "RETRY_AI",
                 "");
+        // 人工点"重新初审"：立刻派任务，不然要等补扫的 5 分钟才知道有人点了按钮
+        moderationJobs.articleSubmitted(id, ((Number) row.get("revision")).intValue());
     }
 
     /** 兼容文章调用方；具体实现已归入report功能。 */

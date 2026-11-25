@@ -17,7 +17,8 @@ public interface UserAccountMapper extends BaseMapper<UserAccount> {
      * 反而无法证明"这个 ID 已被注销"。终态用 account_status 表达，PII 用置空表达。
      */
     @Update("UPDATE user_account SET openid = NULL, union_id = NULL, phone = NULL, email = NULL, "
-            + "last_login_ip = NULL, username = '已注销用户', account_status = 3, is_deleted = 0 "
+            + "last_login_ip = NULL, username = '已注销用户', account_status = 3, "
+            + "wallet_activated_at = NULL, is_deleted = 0 "
             + "WHERE id = #{userId}")
     int tombstoneById(@Param("userId") Long userId);
 

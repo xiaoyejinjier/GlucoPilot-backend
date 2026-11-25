@@ -10,6 +10,7 @@ import com.threadfit.glucopilot.device.cloud.DeviceCloudCredentialService;
 import com.threadfit.glucopilot.device.controller.UserDeviceController;
 import com.threadfit.glucopilot.device.dto.DeviceDtos;
 import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncSampleMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import org.mockito.Mockito;
 import org.apache.ibatis.mapping.Environment;
@@ -43,11 +44,16 @@ class UserDeviceServiceTest {
         config.setEnvironment(new Environment("test",new SpringManagedTransactionFactory(),ds));
         config.addMapper(UserDeviceMapper.class);
         config.addMapper(DeviceSyncLogMapper.class);
+        config.addMapper(DeviceSyncSampleMapper.class);
+        try(var statement=schemaConnection.createStatement()){
+            statement.execute("CREATE TABLE device_sync_log(id BIGINT PRIMARY KEY AUTO_INCREMENT,user_id BIGINT,device_id BIGINT,provider VARCHAR(32),sample_count INT,created_count INT,remark VARCHAR(255),created_by BIGINT,gmt_create TIMESTAMP(3),updated_by BIGINT,gmt_modified TIMESTAMP(3),deleted_by BIGINT,deleted_at TIMESTAMP(3),is_deleted INT DEFAULT 0)");
+            statement.execute("CREATE TABLE device_sync_sample(id BIGINT PRIMARY KEY AUTO_INCREMENT,sync_log_id BIGINT,user_id BIGINT,device_id BIGINT,recorded_at TIMESTAMP(3),node_code VARCHAR(32),glucose_value DECIMAL(4,1),created_by BIGINT,gmt_create TIMESTAMP(3),updated_by BIGINT,gmt_modified TIMESTAMP(3),deleted_by BIGINT,deleted_at TIMESTAMP(3),is_deleted INT DEFAULT 0)");
+        }
         var sqlSession=new SqlSessionTemplate(new MybatisSqlSessionFactoryBuilder().build(config));
         DeviceCloudCredentialService cloudCredentials=Mockito.mock(DeviceCloudCredentialService.class);
         Mockito.when(cloudCredentials.linkedDeviceIds(Mockito.anyLong(),Mockito.anyList())).thenReturn(Set.of());
         Mockito.when(cloudCredentials.findActiveByDevice(Mockito.anyLong(),Mockito.anyLong())).thenReturn(null);
-        service=new UserDeviceService(sqlSession.getMapper(UserDeviceMapper.class),sqlSession.getMapper(DeviceSyncLogMapper.class),cloudCredentials);
+        service=new UserDeviceService(sqlSession.getMapper(UserDeviceMapper.class),sqlSession.getMapper(DeviceSyncLogMapper.class),sqlSession.getMapper(DeviceSyncSampleMapper.class),cloudCredentials);
     }
     @AfterEach void cleanup() throws Exception {RequestContext.clear();try{jdbc.execute("DROP ALL OBJECTS");}finally{schemaConnection.close();}}
     DeviceDtos.BindRequest request(String sn){var r=new DeviceDtos.BindRequest();r.setDeviceSn(sn);r.setProvider("HUAWEI");r.setDeviceName("我的设备");return r;}
@@ -100,5 +106,26 @@ class UserDeviceServiceTest {
         var response=mvc.perform(post("/api/v1/devices/bind").contentType("application/json").content("{\"deviceSn\":\"HTTP-SN\",\"provider\":\"HUAWEI\"}")).andReturn().getResponse();
         assertEquals(200,response.getStatus());assertTrue(response.getContentAsString().contains("\"code\":0"));
         assertEquals(200,mvc.perform(get("/api/v1/devices")).andReturn().getResponse().getStatus());
+    }
+
+    @Test void listSyncSamplesReturnsOwnedSnapshotAndRejectsOthers() {
+        var item = tx.execute(s -> service.bind(2L, request("SN-SAMPLE")));
+        long deviceId = Long.parseLong(item.getId());
+        jdbc.update(
+                "INSERT INTO device_sync_log(id,user_id,device_id,provider,sample_count,created_count,remark,gmt_create,is_deleted) VALUES (11,2,?, 'MOCK',2,2,'demo','2026-11-24 10:00:00',0)",
+                deviceId);
+        jdbc.update(
+                "INSERT INTO device_sync_sample(sync_log_id,user_id,device_id,recorded_at,node_code,glucose_value,is_deleted) VALUES (11,2,?, '2026-11-24 08:00:00','before_breakfast',5.6,0)",
+                deviceId);
+        jdbc.update(
+                "INSERT INTO device_sync_sample(sync_log_id,user_id,device_id,recorded_at,node_code,glucose_value,is_deleted) VALUES (11,2,?, '2026-11-24 09:00:00','after_breakfast',7.2,0)",
+                deviceId);
+
+        DeviceDtos.SyncSamplesResponse mine = service.listSyncSamples(2L, deviceId, 11L);
+        assertEquals(2, mine.getSampleCount());
+        assertEquals(2, mine.getPoints().size());
+        assertEquals("5.6", mine.getPoints().getFirst().getGlucoseValue().toPlainString());
+        assertThrows(BizException.class, () -> service.listSyncSamples(3L, deviceId, 11L));
+        assertThrows(BizException.class, () -> service.listSyncSamples(2L, deviceId, 99L));
     }
 }

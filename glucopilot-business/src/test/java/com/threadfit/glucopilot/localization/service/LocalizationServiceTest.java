@@ -564,4 +564,61 @@ class LocalizationServiceTest {
         assertEquals(
                 "Recovered title", ready(2, "ARTICLE_PREVIEW", "10").translated().get("title"));
     }
+
+    @Test
+    void saturatedQueueDefersInsteadOfFailing() throws Exception {
+        service.close();
+        service =
+                new LocalizationService(
+                        MyBatisTestMappers.mapper(jdbc, LocalizationMapper.class),
+                        CommunityTestMappers.community(jdbc),
+                        consultations,
+                        translator((kind, source) -> Map.of("title", "T", "summary", "S")),
+                        new ObjectMapper());
+        // 把工作线程池关掉＝模拟「队列满」：execute 会抛 RejectedExecutionException。
+        var field = LocalizationService.class.getDeclaredField("workers");
+        field.setAccessible(true);
+        ((java.util.concurrent.ThreadPoolExecutor) field.get(service)).shutdown();
+
+        assertEquals("PENDING", get(2, "ARTICLE_PREVIEW", "10").status());
+
+        assertEquals("PENDING",
+                jdbc.queryForObject("SELECT status FROM content_localization", String.class));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM content_localization WHERE lease_token IS NOT NULL",
+                Integer.class), "改约要清掉 token，否则心跳还会去续一条已经没人跑的租约");
+        var until = jdbc.queryForObject("SELECT lease_until FROM content_localization",
+                java.time.LocalDateTime.class);
+        assertNotNull(until);
+        assertTrue(until.isAfter(java.time.LocalDateTime.now()),
+                "队列满应改约到几秒后，避免同一个请求循环反复认领、打空转");
+        assertEquals(0, calls.get(), "排不上队不代表可以翻译，模型不该被调用");
+    }
+
+    @Test
+    void leaseSweepClearsOnlyExpiredClaims() {
+        var expired = java.time.LocalDateTime.now().minusSeconds(30);
+        var fresh = java.time.LocalDateTime.now().plusSeconds(60);
+        jdbc.update(
+                "INSERT INTO content_localization(kind,resource_id,source_hash,locale,status,"
+                        + "prompt_ver,lease_token,lease_until)"
+                        + " VALUES('ARTICLE_PREVIEW','10','crashed','en','PENDING',"
+                        + "'translation@v1','lease-crashed',?)", expired);
+        jdbc.update(
+                "INSERT INTO content_localization(kind,resource_id,source_hash,locale,status,"
+                        + "prompt_ver,lease_token,lease_until)"
+                        + " VALUES('ARTICLE_PREVIEW','10','alive','en','PENDING',"
+                        + "'translation@v1','lease-alive',?)", fresh);
+
+        service.sweepExpiredLeases();
+
+        assertEquals("PENDING", jdbc.queryForObject(
+                "SELECT status FROM content_localization WHERE source_hash='crashed'", String.class));
+        assertNull(jdbc.queryForObject(
+                "SELECT lease_token FROM content_localization WHERE source_hash='crashed'",
+                String.class), "崩溃进程留下的 token 必须清掉，行才能被下一次请求接手");
+        assertEquals("lease-alive", jdbc.queryForObject(
+                "SELECT lease_token FROM content_localization WHERE source_hash='alive'",
+                String.class), "还在正常续租的行不能被误清");
+    }
 }

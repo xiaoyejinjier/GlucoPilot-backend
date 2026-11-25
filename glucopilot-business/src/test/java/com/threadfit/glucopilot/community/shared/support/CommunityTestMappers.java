@@ -131,7 +131,11 @@ public final class CommunityTestMappers {
                         mapper(fixture, CommunityReactionMapper.class), profiles, access);
         var comments =
                 new CommunityCommentService(
-                        mapper(fixture, CommunityCommentMapper.class), profiles, access, events);
+                        mapper(fixture, CommunityCommentMapper.class),
+                        profiles,
+                        access,
+                        events,
+                        moderationJobs());
         var messages =
                 new CommunityMessageService(
                         mapper(fixture, CommunityMessageMapper.class), profiles, publisher);
@@ -163,6 +167,13 @@ public final class CommunityTestMappers {
             new CommunityCommentController(service.commentService()),
             new CommunityMessageController(service.messageService())
         };
+    }
+
+    public static com.threadfit.glucopilot.community.moderation.mq.CommunityModerationJobs
+            moderationJobs() {
+        // 任务派发口在社区单测里只需要"不报错"：真正的投递语义由 common/mq/job 下的用例覆盖
+        return org.mockito.Mockito.mock(
+                com.threadfit.glucopilot.community.moderation.mq.CommunityModerationJobs.class);
     }
 
     public static com.threadfit.glucopilot.community.report.service.CommunityReportService reports(

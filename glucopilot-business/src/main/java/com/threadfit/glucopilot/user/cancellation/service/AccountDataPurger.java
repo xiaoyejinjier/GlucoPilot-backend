@@ -15,6 +15,7 @@ import com.threadfit.glucopilot.user.account.service.UserAccountService;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.feedback.service.FeedbackService;
 import com.threadfit.glucopilot.user.settings.service.UserSettingService;
+import com.threadfit.glucopilot.wallet.service.WalletOrderService;
 
 import lombok.RequiredArgsConstructor;
 
@@ -62,6 +63,7 @@ public class AccountDataPurger {
     private final FeedbackService feedbackService;
     private final DataExportService dataExportService;
     private final CommunityService communityService;
+    private final WalletOrderService walletOrderService;
 
     /**
      * 执行一次全量清理。幂等：重复调用只会让已经是 0 行的删除再返回 0。
@@ -87,6 +89,7 @@ public class AccountDataPurger {
         feedbackService.purgeAccountData(userId);
         dataExportService.purgeAccountData(userId);
         communityService.purgeAccountData(userId);
+        walletOrderService.purgeAccountData(userId);
 
         // 墓碑 + 资料脱敏：清理链路的最后一步，此后该用户不再具备任何可识别信息
         userAccountService.anonymizeAccount(userId);

@@ -66,6 +66,7 @@ public class UserCancelLogEntity {
     public static final String ACTION_USER_RECOVER = "USER_RECOVER";
     public static final String ACTION_ADMIN_RECOVER = "ADMIN_RECOVER";
     public static final String ACTION_SYSTEM_PURGE = "SYSTEM_PURGE";
+    public static final String ACTION_SYSTEM_ABORT = "SYSTEM_ABORT";
 
     public static final String OPERATOR_USER = "USER";
     public static final String OPERATOR_ADMIN = "ADMIN";

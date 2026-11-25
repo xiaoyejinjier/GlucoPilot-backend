@@ -8,7 +8,9 @@ import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 public final class AdminDeviceDtos {
 
@@ -44,6 +46,22 @@ public final class AdminDeviceDtos {
         private Integer createdCount;
         private String remark;
         private LocalDateTime syncedAt;
+    }
+
+    @Data
+    @Builder
+    public static class SyncSamplePoint {
+        private LocalDateTime recordedAt;
+        private String nodeCode;
+        private BigDecimal glucoseValue;
+    }
+
+    @Data
+    @Builder
+    public static class SyncSamplesResponse {
+        private LocalDateTime syncedAt;
+        private Integer sampleCount;
+        private List<SyncSamplePoint> points;
     }
 
     @Data

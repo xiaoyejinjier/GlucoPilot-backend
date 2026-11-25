@@ -12,6 +12,7 @@ import com.threadfit.glucopilot.community.comment.entity.CommunityComment;
 import com.threadfit.glucopilot.community.comment.mapper.CommunityCommentMapper;
 import com.threadfit.glucopilot.community.notification.service.CommunityEventService;
 import com.threadfit.glucopilot.community.profile.service.CommunityProfileService;
+import com.threadfit.glucopilot.community.moderation.mq.CommunityModerationJobs;
 
 import lombok.RequiredArgsConstructor;
 
@@ -28,6 +29,7 @@ public class CommunityCommentService {
     private final CommunityProfileService profiles;
     private final ArticleAccessService access;
     private final CommunityEventService events;
+    private final CommunityModerationJobs moderationJobs;
 
     public long commentCount(long newsId) {
         return mapper.countVisibleComments(newsId);
@@ -241,6 +243,8 @@ public class CommunityCommentService {
         if (author != null) recipients.add(author);
         if (target != null) recipients.addAll(mapper.selectCommentAuthors(target, news));
         long commentId = row.getId();
+        // 先发后审：评论此刻已经可见，派一条审核任务出去，让它在秒级被审（事务提交后才真正投递）
+        moderationJobs.commentCreated(commentId, viewer);
         for (long recipient : recipients)
             events.notifyEvent(recipient, viewer, "COMMENT", commentId, news, commentId);
         return saved.getFirst();

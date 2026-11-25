@@ -45,7 +45,13 @@ spring:
 
   datasource:
     # 开发、测试和生产均连接团队统一部署的 MySQL；禁止在代码中写入服务器地址或密码。
-    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:sugar_health}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=${DB_SSL_ENABLED:false}
+    #
+    # connectionTimeZone / forceConnectionTimeZoneToSession（2026-11-24 补）：
+    #   应用侧的 gmt_create/gmt_modified 由 AuditMetaObjectHandler 用 LocalDateTime.now()（JVM 时区 +08）写入，
+    #   而 SQL 里的 CURRENT_TIMESTAMP 取的是**会话时区**（服务器默认 UTC）。两者混用会让「创建时间和当前时间」
+    #   差 8 小时——补扫 SQL `gmt_create < dbNow - 1min` 永远不成立，任务卡在 PENDING 没人处理（OCR 真机踩过）。
+    #   serverTimezone 只告诉驱动怎么解释时间，不会改会话时区；要改会话时区必须用这两个参数。
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:sugar_health}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&connectionTimeZone=Asia/Shanghai&forceConnectionTimeZoneToSession=true&allowPublicKeyRetrieval=true&useSSL=${DB_SSL_ENABLED:false}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -487,7 +493,8 @@ glucopilot:
     from: ${MAIL_FROM:}
 
   # 消息队列的业务拓扑（与 spring.rabbitmq.* 的运维连接参数分开，理由见 MqProperties）。
-  # 当前只有一条通用队列 + 死信，任何新业务先用 routingKey = "core.xxx" 直接发。
+  # 通用事件队列（glucopilot.event）留给领域事件；AI 后台任务走下面 jobs 那套独立拓扑，
+  # 因为任务需要按域分桶的死信（一个域炸了不能影响别的域），而 event.dlx 的死信是 # 全收。
   mq:
     enabled: ${MQ_ENABLED:true}
     exchange: ${MQ_EXCHANGE:glucopilot.event}
@@ -496,6 +503,28 @@ glucopilot:
     queue-routing-key: ${MQ_QUEUE_ROUTING_KEY:core.#}
     dead-letter-queue: ${MQ_DLQ:glucopilot.event.core.dlq}
     dead-letter-routing-key: ${MQ_DLQ_ROUTING_KEY:#}
+
+    # AI 后台任务队列（审核 / 记忆抽取 / OCR）。两条铁律：DB 是状态真相、消息只放标识。
+    # 灰度开关：event-driven=false 时消息仍可观测，但业务回退到原有的轮询/线程池路径。
+    jobs:
+      enabled: ${MQ_JOBS_ENABLED:true}
+      event-driven: ${MQ_JOBS_EVENT_DRIVEN:true}
+      reconcile-enabled: ${MQ_JOBS_RECONCILE:true}
+      # 补扫 5 分钟一次：正常延迟由 MQ 保证，补扫只兜「消息真丢了」的四种窗口；
+      # 太密会把条件查询变成 DB 热点，太稀则丢消息后用户要等很久。
+      reconcile-interval-seconds: ${MQ_JOBS_RECONCILE_SECONDS:300}
+      reconcile-initial-delay-seconds: ${MQ_JOBS_RECONCILE_INITIAL_DELAY:60}
+      reconcile-batch-size: ${MQ_JOBS_RECONCILE_BATCH:200}
+      # 死信重投每 60 秒一轮，这个间隔同时就是重试间隔（不额外做延迟队列）。
+      replay-interval-ms: ${MQ_JOBS_REPLAY_MS:60000}
+      # 重投 3 次后丢弃死信（业务记录仍是失败态，人工按日志里的 jobId 处置）
+      max-attempts: ${MQ_JOBS_MAX_ATTEMPTS:3}
+      # 三个域的并发分开配：审核要快（4）、记忆抽取重（2）、OCR 受第三方配额限制（2）
+      moderation-concurrency: ${MQ_JOBS_MODERATION_CONCURRENCY:4}
+      memory-concurrency: ${MQ_JOBS_MEMORY_CONCURRENCY:2}
+      ocr-concurrency: ${MQ_JOBS_OCR_CONCURRENCY:2}
+      # 预取 2 而不是 10：任务耗时长，预取太多会让其它实例空等
+      prefetch: ${MQ_JOBS_PREFETCH:2}
 
 # 食品读缓存复用spring.data.redis；版本在MySQL事务中更新，Redis故障自动回源。
 food:

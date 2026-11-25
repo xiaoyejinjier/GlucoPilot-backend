@@ -12,6 +12,7 @@ import com.threadfit.glucopilot.localization.mapper.LocalizationMapper;
 
 import jakarta.annotation.PreDestroy;
 
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import tools.jackson.databind.ObjectMapper;
@@ -35,6 +36,12 @@ public class LocalizationService {
                     "CONSULTATION_PREVIEW", "CONSULTATION_DETAIL", "CONSULTATION_REPORT");
     private static final Set<String> LONG_KINDS =
             Set.of("ARTICLE_BODY", "CONSULTATION_DETAIL", "CONSULTATION_REPORT");
+    /**
+     * 队列满时「改约」的秒数：足够让 8 条一批的短文本跑完一轮，又不至于让用户等太久。
+     * 取 5 秒是折中——比 0 大（避免同一请求循环反复认领、「认领-拒绝」空转），
+     * 比 15 秒（原 FAILED 的 retry_after）小（排队和「真的翻不了」不是一回事）。
+     */
+    private static final long DEFER_SECONDS = 5;
     private final LocalizationMapper mapper;
     private final CommunityService community;
     private final ConsultationService consultations;
@@ -153,15 +160,54 @@ public class LocalizationService {
                     (LONG_KINDS.contains(kind) ? bodyWorkers : workers)
                             .execute(() -> translate(batch));
                 } catch (RejectedExecutionException ex) {
+                    // 2026-11-24：队列满时**不再直接判 FAILED**。
+                    // 原实现把「这一秒排不上队」当成「这段内容翻不了」，于是客户端看到 FAILED 就放弃，
+                    // 内容永远没有英文版；实际上只要等 5 秒、队列腾出位置就该重试。
+                    // defer = 保持 PENDING 但把 lease_until 推到 5 秒后，这样这 5 秒内不会被
+                    // 同一个请求循环反复认领（避免打空转），之后任何一次请求都能接手。
                     batch.forEach(
                             job -> {
                                 activeJobs.remove(job.lease());
-                                fail(job.item(), job.hash(), job.lease());
+                                defer(job.item(), job.hash(), job.lease());
                             });
+                    LOG.warn("英文翻译队列已满，{} 项改约 5 秒后重试 kind={}",
+                            batch.size(), kind);
                 }
             }
         }
         return result;
+    }
+
+    /** 队列满时的「改约」：保持 PENDING、清 token、把租约推到几秒后。 */
+    private void defer(Item item, String hash, String lease) {
+        try {
+            mapper.defer(item, hash, lease, LocalDateTime.now().plusSeconds(DEFER_SECONDS));
+        } catch (RuntimeException ignored) {
+            /* 下一次请求仍能从过期租约接手，这里失败不影响正确性。 */
+        }
+    }
+
+    /**
+     * 每分钟扫一次「租约过期但 token 还挂着」的缓存行。
+     *
+     * <p>为什么需要它：翻译是**请求驱动**的（没有客户端请求就没有 Job），进程在
+     * {@code claim} 之后崩溃会把这行留在 {@code PENDING + lease_token}。行本身是可被接手的
+     * （{@code claim} 的条件允许 {@code lease_until < now}），但没人知道它卡着——所以这里定期清 token
+     * 并打日志，让「积压」在日志里可见；真正重翻仍由下一次请求触发（服务端手上没有源文，
+     * 不做无授权的后台重读，见文档）。
+     */
+    @Scheduled(fixedDelay = 60_000, initialDelay = 30_000)
+    void sweepExpiredLeases() {
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            int cleared = mapper.clearExpiredLeases(now);
+            if (cleared > 0) {
+                LOG.info("英文翻译租约巡检：清理过期租约 {} 条（这些行仍为 PENDING，下一次请求会重新认领）",
+                        cleared);
+            }
+        } catch (RuntimeException ex) {
+            LOG.warn("英文翻译租约巡检失败（下次再试）{}", ex.getClass().getSimpleName());
+        }
     }
 
     private record Job(Item item, String hash, String lease, Map<String, String> source) {}

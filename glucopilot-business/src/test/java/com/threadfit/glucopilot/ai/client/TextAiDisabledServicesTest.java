@@ -49,6 +49,9 @@ class TextAiDisabledServicesTest {
             .withBean(JsonUtils.class, () -> mock(JsonUtils.class))
             .withBean(AiConcurrencyPolicy.class, () -> guard)
             .withBean("chatSummaryExecutor", Executor.class, () -> executor)
+            // 任务队列的派发口：默认 mock 返回 false ⇒ 退回本地线程池（本用例正是要断言这一点）
+            .withBean(com.threadfit.glucopilot.ai.memory.mq.MemoryExtractJobs.class,
+                    () -> mock(com.threadfit.glucopilot.ai.memory.mq.MemoryExtractJobs.class))
             .withUserConfiguration(AiChatClientConfig.class, ChatSummaryServiceImpl.class,
                     UserChatMemoryServiceImpl.class)
             .run(context -> {

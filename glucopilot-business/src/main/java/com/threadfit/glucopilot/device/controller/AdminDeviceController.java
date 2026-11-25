@@ -78,6 +78,13 @@ public class AdminDeviceController {
         return ApiResponse.ok(adminDeviceService.listSyncLogs(id, limit));
     }
 
+    @GetMapping("/{id:\\d+}/sync-logs/{logId:\\d+}/samples")
+    @PreAuthorize("@ss.hasPermi('" + PermCodes.DEVICE_MANAGE + "')")
+    public ApiResponse<AdminDeviceDtos.SyncSamplesResponse> syncSamples(
+            @PathVariable Long id, @PathVariable Long logId) {
+        return ApiResponse.ok(adminDeviceService.listSyncSamples(id, logId));
+    }
+
     @GetMapping("/{id:\\d+}/cloud-auth")
     @PreAuthorize("@ss.hasPermi('" + PermCodes.DEVICE_MANAGE + "')")
     public ApiResponse<AdminDeviceDtos.CloudAuthStatus> cloudAuth(@PathVariable Long id) {

@@ -18,6 +18,13 @@ public interface OcrTaskService {
     /** 2.21 创建识别任务（幂等键存在时复用既有结果）。 */
     OcrDtos.TaskView create(OcrDtos.CreateRequest request, Long userId);
 
+    /**
+     * 同步执行一次识别（任务队列与本地线程池共用）。
+     *
+     * <p>先用条件更新把任务从 {@code PENDING} 抢成 {@code RUNNING}：抢不到说明已经有人在跑
+     * （或已经出了结果），直接返回。这样重复投递的消息不会二次调用视觉模型。
+     */
+    void recognizeNow(Long taskId, Long userId);
     /** 2.22 查询任务详情（只能查自己的）。 */
     OcrDtos.TaskView detail(Long id, Long userId);
 

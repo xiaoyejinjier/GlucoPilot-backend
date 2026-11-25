@@ -213,3 +213,191 @@ $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::AS
 - 监控：没开 prometheus 插件、没配队列积压告警（`/api/queues/.../messages` 超过阈值应告警）；
 - 多租户/环境隔离：现在所有环境共用一个 vhost `glucopilot`，本地联调会与 p10 上其它服务
   抢同一条队列——正式接入业务前建议按环境拆 vhost 或拆路由键前缀。
+
+> 上面三条里，「事务性发件箱」「消费端骨架」「vhost 隔离」在**任务队列**（第 9 节）里已经各有对策：
+> 补扫替代 outbox、`JobDispatcher` + manual ack 的容器工厂替代手写消费端、本机联调改用 `glucopilot-dev`。
+> 通用事件队列（`glucopilot.event`）本身仍然保持这节描述的状态。
+
+---
+
+## 9. AI 后台任务队列（`glucopilot.job`）
+
+这一节是给「AI 后台任务」用的独立拓扑，与第 1 节的通用事件队列**互不影响**。
+设计动机：审核 / 记忆抽取 / OCR 这三件事的共同点是「DB 里有状态、MQ 只负责通知」，
+所以它们要的是**可靠派发 + 有限重试 + 按域分桶的死信**，而不是事件广播。
+
+### 9.1 拓扑
+
+| 名称 | 类型 | 绑定 | 说明 |
+| --- | --- | --- | --- |
+| `glucopilot.job` | topic exchange (durable) | — | 任务交换机 |
+| `glucopilot.job.dlx` | topic exchange (durable) | — | 任务死信交换机 |
+| `glucopilot.job.moderation` | queue (durable) | `job.moderation.#` | 文章/评论审核 |
+| `glucopilot.job.memory` | queue (durable) | `job.memory.#` | 会话结束后的长期记忆抽取 |
+| `glucopilot.job.ocr` | queue (durable) | `job.ocr.#` | 图片 OCR |
+| `glucopilot.job.<域>.dlq` | queue (durable) | `#`（在 dlx 上） | 各自失败消息，按域隔离 |
+
+三个业务队列都带 `x-dead-letter-exchange=glucopilot.job.dlx` 与自己的死信路由键，**不设 TTL 与长度上限**：
+任务积压时宁可堆积也不要静默丢（丢弃是显式的 `basicNack(requeue=false)` 决定的结果）。
+
+### 9.2 消息信封
+
+```json
+{
+  "jobId": "MODERATION_ARTICLE:123:r2",
+  "type": "MODERATION_ARTICLE",
+  "refId": 123,
+  "revision": 2,
+  "userId": 5,
+  "reason": "publish",
+  "attempt": 0,
+  "createdAt": "2026-11-24T10:00:00Z"
+}
+```
+
+- **只放标识，不放正文**：审核正文、会话、图片都在库里，消费时按 `refId` 取当前内容；
+  这样消息里不会出现用户内容（合规面小），也不会出现「改稿后审旧文本」。
+- `jobId` 同时写消息头 `messageId`：管理台「消息详情」与业务日志用同一个串对得上。
+- `revision` 只有审核带，用来做乐观并发（同一篇文章的第 2 次审核与第 1 次是两条任务）。
+- `attempt` 是**已经失败过的次数**（首次投递为 0），由重投器递增，用于判定上限。
+
+### 9.3 三态与 ack 策略
+
+| 结论 | 谁产生 | 动作 |
+| --- | --- | --- |
+| `SUCCESS` | 处理器返回 / 认领失败 | `basicAck` |
+| `RETRYABLE` | 处理器返回 / 未捕获异常 | `basicNack(requeue=false)` → DLX → 延迟重投 |
+| `PERMANENT` | 处理器返回 / 无处理器 / 类型未知 | `basicAck`（落终态，不再重投） |
+
+刻意不用 `requeue=true`：它把消息放回**队头**，一条坏消息能堵住整个队列。
+重试一律走「死信收集 → 60 秒后重新发」，等价于排到队尾。
+
+### 9.4 两套兜底
+
+- **补扫**（`JobReconciler`，默认 300 秒一次，单域上限 200 条）：把库里「还等着办」的任务再投一遍。
+  覆盖四种丢消息的窗口：afterCommit 发送失败、broker 丢消息、消费端 ack 前被杀、有人直接改库。
+  各域实现 `JobReconcileSource`，判据分别是：
+  - 审核：`ai_status='PENDING' AND ai_claimed_at IS NULL AND gmt_create < NOW(3) - 1 minute`
+  - 记忆：`session_status=ENDED AND (memory_extracted_upto_msg_id IS NULL OR < 最后一条消息 id)`
+  - OCR：`task_status=PENDING AND gmt_create < NOW(3) - 1 minute`
+- **死信重投**（`JobRetryReplayer`，默认 60 秒一轮）：从三个 `.dlq` 取消息，`attempt+1 <= max-attempts`（默认 3）
+  就重新发布；超限则打一条带完整信封的 WARN 后丢弃——任务真相在库里，人工处置看业务记录 + jobId。
+
+### 9.5 配置（`glucopilot.mq.jobs.*`）
+
+| 键 | 默认 | 作用 |
+| --- | --- | --- |
+| `enabled` | `true` | 任务队列总开关（false 时不注册拓扑/监听器/补扫/重投） |
+| `event-driven` | `true` | 消息是否为主通道；false 时业务回退到轮询/线程池（灰度回退开关） |
+| `reconcile-enabled` | `true` | 补扫开关 |
+| `reconcile-interval-seconds` | `300` | 补扫间隔 |
+| `reconcile-initial-delay-seconds` | `60` | 启动后第一次补扫的延迟（避免启动瞬间抢任务） |
+| `reconcile-batch-size` | `200` | 单域单轮上限 |
+| `replay-interval-ms` | `60000` | 死信重投间隔（同时是重试间隔） |
+| `max-attempts` | `3` | 最多重投次数（不含首次） |
+| `moderation-concurrency` / `memory-concurrency` / `ocr-concurrency` | `4` / `2` / `2` | 三个域的消费者并发 |
+| `prefetch` | `2` | 预取条数（任务耗时长，预取多会让别的实例空等） |
+
+### 9.6 当前进度
+
+- **批次 0（已完成）**：公共骨架 + 拓扑 + 配置 + 单测。
+  `JobEnvelope` / `JobTypes` / `JobOutcome` / `JobHandler` / `JobDispatcher` / `JobPublisher` /
+  `JobReconciler` / `JobRetryReplayer` / `JobMetrics` / `RabbitJobConfig`（manual ack 容器工厂）/
+  `JobEnvelopeCodec` / `JobListener`（公共消费端：解码 → 三态 → ack/nack）。
+- **批次 1（已完成）**：审核接入。
+  - 派发：`CommunityModerationJobs`（`articleSubmitted` / `commentCreated`，事务提交后再发；投递失败只 WARN，正确性靠补扫）；
+    调用点在 `CommunityPublicationService.submit/edit/retry` 与 `CommunityCommentService.addComment`。
+  - 消费：`@RabbitListener(queues = "...job.moderation", containerFactory = "jobContainerFactory", concurrency = 4)`
+    落在 `CommunityModerationListener`，实际处理在 `AbstractModerationJobHandler`（`claimById` → `load` → `judge` → `finish`）。
+  - 轮询降级为兜底：`glucopilot.mq.jobs.event-driven=true` 时 `CommunityModerationWorker` 只做僵尸回收（`reclaimStale`）。
+  - 验收实测：发一条「降糖贴三天见效，想买私信我」的评论 → **12 秒内**落 `ai_status=DONE`、
+    `ai_verdict=REJECT`、`ai_category=medical_claim`、`ai_severity=3`、`is_hidden=1`。
+- **批次 2（已完成）**：长期记忆抽取接入。
+  - 派发：`MemoryExtractJobs.publish(userId, sessionId, reason)`——**返回 boolean**，
+    队列关闭或这一刻发不出去时调用方退回本地线程池（记忆是增强项，宁可少一次异步也不能丢）。
+    调用点仍是 `UserChatMemoryService.extractAsync`（会话结束 / 惰性归档 / 关键词兜底三条路径共用）。
+  - 消费：`MemoryExtractListener`（`concurrency = 2`）→ `MemoryExtractJobHandler`：
+    认领时回库查 `countSessionNeedingMemory`（已结束 + 未删 + `memory_extracted_upto_msg_id`
+    落后于最后一条消息），重复投递在这一步就返回 false，不会再调模型；
+    执行走 `UserChatMemoryService.extractNow`（单飞标记 + 窗口抽取，与异步路径同一份实现）。
+  - 兜底：`MemoryExtractReconcileSource`（宽限 1 分钟、按数据库时钟）。
+  - 漏做的代价与审核不同：审核漏了只是晚几秒，**记忆漏了是永久丢失**（用户下次聊天那些忌口就不在），所以补扫在这里不是可选项。
+- **批次 3（已完成）**：血糖 OCR 接入，并补上原本缺失的「卡住任务回收」。
+  - 派发：`OcrTaskJobs.publish(userId, taskId)`——同样返回 boolean，队列关闭/发不出去时
+    调用方 `OcrTaskServiceImpl.create` 退回本地线程池（用户刚拍的照片不能因为 broker 抖动就没识别）。
+  - 消费：`OcrRecognizeListener`（`concurrency = 2`）→ `OcrRecognizeJobHandler`：
+    认领看 `countPendingTask`（还是 PENDING 才处理），执行走 `OcrTaskService.recognizeNow`。
+  - `recognizeNow` 的三件事：① `claimTask` 条件更新（`task_status=0 → 1`，0 行即放弃——RUNNING 不再
+    无条件覆盖，重复投递在这里挡掉）；② **用任务行上的 `user_id` 当 owner** 做媒体归属校验
+    （补扫信封里的 `userId` 可能是空，不能拿它当真相）；③ 识别结果/失败原因照旧落库。
+  - 回收：`OcrReconcileSource` 每轮先 `requeueStaleRunning`（RUNNING 超 5 分钟 → 打回 PENDING 并写
+    marker「上次识别中断，正在自动重试」），再 `failStaleRunning`（同一个 marker 又超时 → 判 FAILED，
+    原因「识别多次中断，请重新上传图片」），最后才列 `PENDING` 且创建超 1 分钟的任务补投。
+    `ocr_task` 没有 attempt 列，**marker 就写在 `error_msg` 里**：回收本身会刷新 `gmt_modified`，
+    不能靠它判断是第几次。
+  - 验收实测：上传一张写着「7.2 mmol/L」的血糖图 → `POST /api/v1/ocr-tasks` →
+    日志 `任务已投递 jobId=OCR_RECOGNIZE:1` → 消费者 `countPendingTask`/`claimTask` →
+    `OCR_GLUCOSE` 走 `qwen3-vl-plus`（`ai_call_log` 里 `prompt=575 completion=44`）→
+    `ocr_task.task_status=2`、`ocr_result_json.suggestedValue=7.2`；队列 consumers=2、messages 回 0。
+- 批次 4 是翻译的补丁（拒绝时回 PENDING + 扫过期租约），**不换 MQ**：翻译的「攒批」本身就是成本优化
+  （同类 8 条一起翻），逐条投递给消费者会把批打散、模型调用翻几倍。补丁详见
+  `docs/AI-模块实现说明.md` §13.4.1；这里只需记住它与本文件的队列无关。
+
+### 9.7 两个已踩过的运行期坑（务必先读）
+
+**① `__TypeId__` 与信任列表**
+
+Spring AMQP 的 JSON 转换器默认把发送端类名写进消息头 `__TypeId__`；而 spring-rabbit 4.1.1 的
+`MessagingMessageListenerAdapter.onMessage` 会**无条件**先把 AMQP 消息转成 Spring Messaging 消息
+（字节码里 `toMessagingMessage` 就在方法入口），所以只要这个头在、类又不在信任列表里，监听器会在
+**进入我们的代码之前**就抛 `IllegalArgumentException: The class '...JobEnvelope' is not in the trusted packages`。
+
+两处一起处理：
+
+- 发送端删头：`RabbitTemplate.setBeforePublishPostProcessors(... .remove("__TypeId__"))`（新消息不带）；
+- 消费端只信任自己的信封包：`DefaultJacksonJavaTypeMapper.setTrustedPackages("com.threadfit.glucopilot.common.mq", "com.threadfit.glucopilot.common.mq.job")`
+  —— 这样**历史消息/外来消息**也能被消费；仍然不放 `*`（那才是任意类加载）。
+
+**② 数据库时钟与进程时钟不是一回事**
+
+任务状态里的时间戳（`ai_claimed_at`、`created_at`、`updated_at`）由数据库的 `CURRENT_TIMESTAMP` 写入，
+而「多久算僵尸」「宽限一分钟」如果用 `LocalDateTime.now()` 计算，在容器里经常差 8 小时（DB 会话 UTC、
+JVM 为 +08）。表现极具迷惑性：**审核跑完了、模型也扣了费，但结论永远写不进去**——因为刚 `claim` 的行
+几秒内就被 `expireCommentClaims` 判成超时并改回 `PENDING`，随后 `finish` 的
+`WHERE ai_status='REVIEWING'` 命中 0 行。
+
+规矩：
+
+- 一切「与库里时间戳比较」的阈值都必须从 `selectDbNow()`（`SELECT CURRENT_TIMESTAMP`）取；
+- 回收僵尸时必须把 `ai_claimed_at` 一并置 `NULL`（补扫条件是 `ai_claimed_at IS NULL`，否则永久卡在待审）；
+- 单测用 H2 时两个时钟恰好一致，所以**这类 bug 只有真机才暴露**，联调时务必先造一条任务看落库。
+
+**②的续集：`gmt_create` 是应用时钟写的，`CURRENT_TIMESTAMP` 是会话时钟**
+
+2026-11-24 接 OCR 时又撞到同一族问题的另一半：`gmt_create`/`gmt_modified` 由
+`AuditMetaObjectHandler` 用 `LocalDateTime.now()`（JVM +08）填，而 `CURRENT_TIMESTAMP` 取的是
+**MySQL 会话时区**（服务器默认 UTC）。于是 OCR 补扫的 `gmt_create < dbNow - 1min`
+两侧差 8 小时、永远不成立：任务明明 PENDING、回收也把它打回了 PENDING，却一轮轮扫不到。
+
+根治办法是让两者同源——把会话时区掰到应用时区（`application.yaml` 的数据源 URL）：
+
+```text
+...&serverTimezone=Asia/Shanghai&connectionTimeZone=Asia/Shanghai&forceConnectionTimeZoneToSession=true
+```
+
+`serverTimezone` 只影响驱动怎么解释时间，**改不了会话时区**；必须加
+`forceConnectionTimeZoneToSession=true`，`SELECT CURRENT_TIMESTAMP` 才会跟 JVM 一起走 +08。
+注意这会让「历史上由数据库写入的 UTC 时间戳」与新写入的 +08 混在一张表里，
+升级时需要评估是否回填（本项目的处理：只影响僵尸判定与展示，未回填）。
+
+### 9.8 自检
+
+```powershell
+# 交换机 / 队列 / 绑定（本地 vhost = glucopilot-dev）
+$auth = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("p10_admin:<密码>"))
+Invoke-RestMethod "http://192.168.100.3:1187/api/exchanges/glucopilot-dev" -Headers @{Authorization=$auth} |
+  Where-Object { $_.name -like "glucopilot.job*" }
+Invoke-RestMethod "http://192.168.100.3:1187/api/queues/glucopilot-dev" -Headers @{Authorization=$auth} |
+  Select-Object name, messages, consumers
+```
+

@@ -94,6 +94,30 @@ public interface LocalizationMapper {
     int release(@Param("item") Item item, @Param("hash") String hash, @Param("lease") String lease);
 
     @Update(
+            "UPDATE content_localization SET lease_token=NULL,lease_until=#{until} WHERE "
+                    + LEASE_IDENTITY)
+    int defer(
+            @Param("item") Item item,
+            @Param("hash") String hash,
+            @Param("lease") String lease,
+            @Param("until") LocalDateTime until);
+
+    /**
+     * 清掉「租约已过期、但 token 还挂着」的行（定时巡检用）。
+     *
+     * <p>清理本身不改变可认领性（{@code claim} 的条件已经允许 {@code lease_until < now} 的行被接手），
+     * 它的价值是：① 让运维能从 {@code lease_token} 是否为空看出「这张表有没有堆积」；
+     * ② 进程崩溃后残留的 token 不会再被 {@code renew} 心跳续上。
+     *
+     * @return 被清理的行数
+     */
+    @Update(
+            "UPDATE content_localization SET lease_token=NULL,lease_until=NULL"
+                    + " WHERE status='PENDING' AND lease_token IS NOT NULL"
+                    + " AND (lease_until IS NULL OR lease_until<#{now})")
+    int clearExpiredLeases(@Param("now") LocalDateTime now);
+
+    @Update(
             "UPDATE content_localization SET status='READY',translated_json=#{translatedJson},"
                     + "lease_token=NULL,lease_until=NULL,retry_after=NULL,updated_at=#{now} WHERE "
                     + LEASE_IDENTITY)

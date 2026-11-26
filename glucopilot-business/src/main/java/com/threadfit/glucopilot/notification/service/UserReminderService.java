@@ -109,6 +109,9 @@ public class UserReminderService {
                 mapper.readConsultations(
                         userId, cursors.subList(offset, Math.min(offset + 200, cursors.size())));
             }
+        } else if ("DOCTOR_REVIEW".equals(kind)) {
+            Long version = mapper.doctorReviewVersion(userId);
+            if (version != null) mapper.readDoctorReviewVersion(userId, version);
         } else if (SOCIAL.contains(kind)) {
             Long through = mapper.noticeCursor(userId, kind);
             if (through != null) mapper.readNotices(userId, kind, through);
@@ -161,7 +164,7 @@ public class UserReminderService {
         }
         for (String kind :
                 new String[] {
-                    "MESSAGE", "LIKE", "COLLECT", "COMMENT", "FOLLOW", "REPORT", "CONSULTATION"
+                    "MESSAGE", "LIKE", "COLLECT", "COMMENT", "FOLLOW", "REPORT", "CONSULTATION", "DOCTOR_REVIEW"
                 }) {
             readInformation(userId, kind);
         }

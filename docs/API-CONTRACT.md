@@ -1,9 +1,18 @@
 ﻿# API 契约
 
+## 2026-11-26 医生认证结果全局提醒
+
+- GET `/api/v1/community/information/summary`追加`doctorReviews`（0或1）和可空`doctorReview {version:string,status,reviewedAt}`，并计入total。仅本人当前有效审核结果APPROVED/REJECTED/DISABLED且有reviewedAt、当前版本未读时返回；不含资质、执业证、审核员及审核备注。PENDING无提醒。
+- 新增鉴权PUT `/api/v1/consultation-doctors/me/review/read`，请求`{version}`。只按登录用户读取并锁定医生记录，校验展示版本与当前审核版本一致后保存已读；新版本409且不误清提醒，重复已读幂等。不能传用户ID代他人标记。
+- 用户提醒类别已读增加DOCTOR_REVIEW，顶部全部已读覆盖认证结果；批量已读先取版本再按该版本条件插入，晚到的新审核不被旧操作清除。
+- 小程序纳入全局未读、问诊Tab角标、顶部认证结果提醒与记录页“提醒与回复”，点击直达医生工作台；只有审核结果渲染完成后才标该版本已读，也可手动标记。采用现有5秒汇总轮询，同一结果不反复弹窗；换账号清空状态并丢弃旧请求。
+- `R__doctor_review_notification_reads.sql`建立独立按用户/审核版本的已读表，不改审核和钱包数据；既有已审核记录首次视为未读，查看后消除。
+
 ## 2026-11-26 求助广场组合筛选
 
 - GET `/api/v1/consultations`增加可选`status`，空值表示全部；仅接受`WAITING`、`IN_PROGRESS`、`REPORT_READY`、`CLOSED`，非法值400。普通已登录用户也可按公开问诊状态筛选；等待医生要求WAITING且doctor_user_id为空，不扩大正文或问诊单访问权限。
 - 发布人使用原参数：全部为mine=false/hideMine=false，本人为mine=true，其他人为hideMine=true。可与status、topic组合；本人身份只取登录上下文，不接受查询参数指定用户。状态、归属、分类在SQL分页前过滤，列表和总数复用同一条件。
+- 已审核通过医生的筛选面板追加“我的接诊”，使用原`assigned=true`且mine/hideMine=false，可叠加status和topic；仅返回doctor_user_id为当前登录用户的问诊。后端沿用已认证医生校验，不由前端传医生ID。面板分组统一称“求助范围”；普通、待审、未通过和停用医生不显示此选项。每次重置加载及返回页面复核医生身份，身份失效后清除我的接诊筛选；换账号立即隐藏，迟到身份响应不得恢复。
 - 兼容既有mine/assigned和医生专用unclaimedOnly；unclaimedOnly原权限与范围校验保留，与非WAITING状态同时指定时400。既有客户端不传status时行为不变。
 - 小程序将“隐藏我的求助”替换为右侧“筛选”按钮，弹出发布人和状态两组单选；提供重置/确定。仅确定后请求，切换条件重置分页，翻页/下拉/详情返回保留条件，换账号清空；迟到响应不能覆盖新条件。取消面板不改变已应用筛选。原医生“全部求助/未接诊”独立行合并入面板。
 

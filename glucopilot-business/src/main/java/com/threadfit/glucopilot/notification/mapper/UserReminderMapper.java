@@ -10,6 +10,9 @@ import java.util.List;
 
 @Mapper
 public interface UserReminderMapper {
+    Long doctorReviewVersion(@Param("userId") long userId);
+
+    int readDoctorReviewVersion(@Param("userId") long userId, @Param("version") long version);
     List<com.threadfit.glucopilot.consultation.entity.ConsultationReadCursor> consultationCursors(
             @Param("user") long user);
 

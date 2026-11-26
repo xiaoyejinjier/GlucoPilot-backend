@@ -7,6 +7,7 @@ import java.util.List;
 
 /** 问诊契约：医生审核、接诊、出单和沙箱钱包支付，不接受客户端决定收款方或金额。 */
 public final class ConsultationDtos {
+    public record ReadDoctorReview(@NotNull @PositiveOrZero Long version) {}
     private ConsultationDtos() {}
 
     public record Capabilities(

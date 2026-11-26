@@ -41,6 +41,19 @@ public class ConsultationService {
         return mapper.doctor(user);
     }
 
+    /** 阅读与审核共享医生行锁，旧页面不能把之后的新审核结果标为已读。 */
+    @Transactional
+    public void readDoctorReview(long user, ReadDoctorReview request) {
+        requireActiveUser(user);
+        var current = mapper.lockDoctor(user);
+        if (current == null || current.getReviewedAt() == null
+                || !Set.of("APPROVED", "REJECTED", "DISABLED").contains(current.getStatus()))
+            throw new BizException(ErrorCode.NOT_FOUND, "审核结果不存在或已更新");
+        if (request == null || request.version() == null || request.version() != current.getVersion())
+            throw new BizException(ErrorCode.CONFLICT, "审核结果已更新，请刷新后查看");
+        mapper.readDoctorReview(user, current.getVersion());
+    }
+
     @Transactional
     public DoctorProfile apply(long user, DoctorApplication request) {
         requireActiveUser(user);

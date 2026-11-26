@@ -11,6 +11,8 @@ import java.util.Map;
 /** Community persistence. All values are bound parameters; row locks share Spring transactions. */
 @Mapper
 public interface CommunityNotificationMapper extends BaseMapper<CommunityNotification> {
+    com.threadfit.glucopilot.consultation.entity.DoctorReviewNotice selectDoctorReviewNotice(
+            @Param("user") long user);
     Map<String, Object> selectConsultationCounts(@Param("user") long user);
 
     List<com.threadfit.glucopilot.consultation.entity.ConsultationUnreadNotice>

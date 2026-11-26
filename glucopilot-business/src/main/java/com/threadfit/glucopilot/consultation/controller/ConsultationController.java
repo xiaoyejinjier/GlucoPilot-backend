@@ -83,6 +83,13 @@ public class ConsultationController {
         return ok(service.apply(RequestContext.requireUserId(), request));
     }
 
+    @PutMapping("/consultation-doctors/me/review/read")
+    public ResponseEntity<ApiResponse<Void>> readDoctorReview(
+            @Valid @RequestBody ReadDoctorReview request) {
+        service.readDoctorReview(RequestContext.requireUserId(), request);
+        return ok(null);
+    }
+
     @PostMapping("/consultations/{id}/claim")
     public ResponseEntity<ApiResponse<CaseView>> claim(@PathVariable @Positive long id) {
         return ok(service.claim(RequestContext.requireUserId(), id));

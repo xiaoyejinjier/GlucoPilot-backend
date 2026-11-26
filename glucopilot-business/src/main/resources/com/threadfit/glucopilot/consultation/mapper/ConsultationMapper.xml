@@ -43,6 +43,12 @@
     <select id="lockDoctor" resultType="com.threadfit.glucopilot.consultation.entity.DoctorProfile" useCache="false" flushCache="true">
         SELECT * FROM consultation_doctor WHERE user_id=#{user} FOR UPDATE
     </select>
+    <insert id="readDoctorReview">
+        INSERT INTO consultation_doctor_review_read(user_id,review_version)
+        VALUES(#{user},#{version})
+        ON DUPLICATE KEY UPDATE
+            review_version=GREATEST(review_version,VALUES(review_version)),read_at=CURRENT_TIMESTAMP(3)
+    </insert>
     <insert id="insertDoctor">
         INSERT INTO consultation_doctor(user_id,real_name,hospital,specialty,license_number,qualification_note)
         VALUES(#{user},#{form.realName},#{form.hospital},#{form.specialty},#{form.licenseNumber},#{form.qualificationNote})

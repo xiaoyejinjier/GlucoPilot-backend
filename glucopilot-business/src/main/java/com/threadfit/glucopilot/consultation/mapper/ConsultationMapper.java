@@ -43,6 +43,8 @@ public interface ConsultationMapper {
 
     DoctorProfile lockDoctor(@Param("user") long user);
 
+    int readDoctorReview(@Param("user") long user, @Param("version") long version);
+
     int insertDoctor(@Param("user") long user, @Param("form") DoctorApplication form);
 
     int updateDoctor(@Param("user") long user, @Param("form") DoctorApplication form);

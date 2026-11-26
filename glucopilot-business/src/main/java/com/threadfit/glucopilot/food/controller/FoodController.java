@@ -5,6 +5,7 @@ import com.threadfit.glucopilot.common.api.PageQuery;
 import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.food.dto.FoodDtos;
 import com.threadfit.glucopilot.food.service.FoodService;
+import com.threadfit.glucopilot.food.service.FoodGiDemoService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,6 +32,7 @@ public class FoodController {
 
     /** 用户端食品查询业务服务。 */
     private final FoodService foodService;
+    private final FoodGiDemoService giDemo;
 
     /**
      * 查询全部已启用的食品分类。
@@ -58,7 +60,9 @@ public class FoodController {
             @RequestParam(required = false) String keyword,
             @Valid PageQuery query) {
         // @Valid 会先校验分页参数；校验通过后再进入 Service 组合查询条件。
-        return ApiResponse.ok(foodService.pageFoods(categoryId, categoryCode, keyword, query));
+        var page = foodService.pageFoods(categoryId, categoryCode, keyword, query);
+        giDemo.publicItems(page.getRecords());
+        return ApiResponse.ok(page);
     }
 
     /**
@@ -68,6 +72,8 @@ public class FoodController {
     @GetMapping("/foods/{id:\\d+}")
     public ApiResponse<FoodDtos.FoodItem> foodDetail(@PathVariable("id") Long id) {
         // 食品不存在或已下架时，由 Service 抛出统一业务异常。
-        return ApiResponse.ok(foodService.getFoodDetail(id));
+        var item = foodService.getFoodDetail(id);
+        giDemo.publicItems(List.of(item));
+        return ApiResponse.ok(item);
     }
 }

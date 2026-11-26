@@ -115,7 +115,7 @@ class AdminFoodPendingReviewSqlTest {
                 var response =
                         org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
                                         new com.threadfit.glucopilot.food.controller
-                                                .AdminFoodController(service))
+                                                .AdminFoodController(service, org.mockito.Mockito.mock(FoodGiDemoService.class)))
                                 .build()
                                 .perform(
                                         org.springframework.test.web.servlet.request

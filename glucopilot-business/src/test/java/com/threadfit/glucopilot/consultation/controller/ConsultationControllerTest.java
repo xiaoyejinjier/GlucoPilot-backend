@@ -135,11 +135,11 @@ class ConsultationControllerTest {
                         .andReturn()
                         .getResponse()
                         .getStatus());
-        verify(service).list(eq(1L), eq(false), eq(false), eq(true), eq(false), isNull(), any());
+        verify(service).list(eq(1L), eq(false), eq(false), eq(true), eq(false), isNull(), isNull(), any());
         assertEquals(
                 200,
                 web.perform(get("/api/v1/consultations")).andReturn().getResponse().getStatus());
-        verify(service).list(eq(1L), eq(false), eq(false), eq(false), eq(false), isNull(), any());
+        verify(service).list(eq(1L), eq(false), eq(false), eq(false), eq(false), isNull(), isNull(), any());
     }
 
     @Test
@@ -156,6 +156,19 @@ class ConsultationControllerTest {
                         .andReturn()
                         .getResponse()
                         .getStatus());
-        verify(service).list(eq(2L), eq(false), eq(false), eq(true), eq(true), eq("DIET"), any());
+        verify(service).list(eq(2L), eq(false), eq(false), eq(true), eq(true), isNull(), eq("DIET"), any());
+    }
+
+    @Test
+    void statusAndMineFiltersUseCurrentAccountAndNoStore() throws Exception {
+        RequestContext.setUserId(1L);
+        var response = web.perform(get("/api/v1/consultations")
+                .param("mine", "true").param("status", "REPORT_READY")
+                .param("topic", "DIET").param("viewer", "999"))
+                .andReturn().getResponse();
+        assertEquals(200, response.getStatus());
+        assertEquals("no-store", response.getHeader("Cache-Control"));
+        verify(service).list(eq(1L), eq(true), eq(false), eq(false), eq(false),
+                eq("REPORT_READY"), eq("DIET"), any());
     }
 }

@@ -28,6 +28,14 @@ public interface FoodGiMapper {
         }
     }
 
+    @Data
+    class Demo {
+        private Long foodId;
+        private BigDecimal giDemoValue;
+    }
+
+    List<Demo> demoValues(@Param("ids") List<Long> ids);
+
     int enqueueMissing();
     List<Candidate> pending();
     Reference reference(@Param("name") String name, @Param("category") Integer category);

@@ -1,5 +1,12 @@
 ﻿# API 契约
 
+## 2026-11-26 求助广场组合筛选
+
+- GET `/api/v1/consultations`增加可选`status`，空值表示全部；仅接受`WAITING`、`IN_PROGRESS`、`REPORT_READY`、`CLOSED`，非法值400。普通已登录用户也可按公开问诊状态筛选；等待医生要求WAITING且doctor_user_id为空，不扩大正文或问诊单访问权限。
+- 发布人使用原参数：全部为mine=false/hideMine=false，本人为mine=true，其他人为hideMine=true。可与status、topic组合；本人身份只取登录上下文，不接受查询参数指定用户。状态、归属、分类在SQL分页前过滤，列表和总数复用同一条件。
+- 兼容既有mine/assigned和医生专用unclaimedOnly；unclaimedOnly原权限与范围校验保留，与非WAITING状态同时指定时400。既有客户端不传status时行为不变。
+- 小程序将“隐藏我的求助”替换为右侧“筛选”按钮，弹出发布人和状态两组单选；提供重置/确定。仅确定后请求，切换条件重置分页，翻页/下拉/详情返回保留条件，换账号清空；迟到响应不能覆盖新条件。取消面板不改变已应用筛选。原医生“全部求助/未接诊”独立行合并入面板。
+
 ## 2026-11-24 求助广场健康标签选择
 
 - 新增鉴权 GET `/api/v1/consultations/topics`，返回启用分类数组 `{code,name,groupName,sortNo}`，按 sortNo、code 排序；沿用 ApiResponse 和 no-store。
@@ -750,6 +757,8 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 接口只读，不提供后台修改或删除用户健康记录的能力。响应继续使用统一 `ApiResponse { code, message, data, requestId }`，成功码为 `0`。
 
 ## 管理端业务列表分页
+
+模拟GI展示（2026-11-25）：用户要求的粗略数字仅供演示，单独保存在`food_gi_demo_estimate`。食品列表和详情新增可空字段`giDemoValue`，仅在真实`giValue`/`gi`为空时返回；两端必须标注“模拟GI，仅演示”，不能用其回填真实GI字段、食品编辑表单、饮食选择器或升糖负荷计算。已有GI、自动文献检索、历史记录及导出中的真实GI口径不变。
 
 食品GI补全（2026-11-25）：既有食品接口字段不变，`giValue`/`gi`继续来自同一`food_nutrition.gi_value`。新增食品（含识别待审草稿）默认每分钟进入GI查找，每批最多3条；先按名称和分类查询`food_gi_reference`，未命中再检索悉尼大学公开数据库。模型仅用于名称翻译，不生成GI数值。无可靠匹配、同名试验冲突或无适用GI时保持NULL，不写0。当前常见做法的参考值在`food_gi_lookup`保留试验食物、来源、适用说明和状态，不表示当前食品实测；管理员可用已核对数值替换。联网不在食品保存事务内，失败次日重试，未知结果每7天复查。写入仅补空值且校验食品名称、分类和未删除状态，人工维护不会被迟到任务覆盖；GI、来源登记与食品缓存版本同事务提交，历史餐食快照不回填。
 

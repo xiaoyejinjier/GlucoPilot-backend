@@ -62,6 +62,9 @@ public final class FoodDtos {
         /** 食品 GI 值；数据库允许为空。 */
         private BigDecimal giValue;
 
+        /** 仅用于带“模拟”标记的页面展示，不是GI实测或文献值，不参与健康计算。 */
+        private BigDecimal giDemoValue;
+
         /** 优先管理员已登记配图；否则审核上架的食品返回食品级实拍地址。 */
         private String imageUrl;
     }

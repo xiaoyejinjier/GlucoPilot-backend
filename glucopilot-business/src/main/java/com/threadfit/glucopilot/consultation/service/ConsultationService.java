@@ -100,8 +100,21 @@ public class ConsultationService {
             boolean unclaimedOnly,
             String topic,
             PageQuery page) {
+        return list(viewer, mine, assigned, hideMine, unclaimedOnly, null, topic, page);
+    }
+
+    public PageResult<CaseView> list(
+            long viewer,
+            boolean mine,
+            boolean assigned,
+            boolean hideMine,
+            boolean unclaimedOnly,
+            String status,
+            String topic,
+            PageQuery page) {
         checkPage(page);
         String filter = topicFilter(topic);
+        String state = filter(status, Set.of("WAITING", "IN_PROGRESS", "REPORT_READY", "CLOSED"));
         var doctor = mapper.doctor(viewer);
         if (assigned && !approved(doctor))
             throw new BizException(ErrorCode.FORBIDDEN, "请先完成医生身份审核");
@@ -109,6 +122,8 @@ public class ConsultationService {
             throw new BizException(ErrorCode.FORBIDDEN, "请先完成医生身份审核");
         if (unclaimedOnly && (mine || assigned))
             throw new BizException(ErrorCode.BAD_REQUEST, "未接诊筛选仅用于求助广场");
+        if (unclaimedOnly && state != null && !"WAITING".equals(state))
+            throw new BizException(ErrorCode.BAD_REQUEST, "未接诊筛选不能与其他状态同时使用");
         boolean excludeSelf = hideMine && !mine && !assigned;
         var rows =
                 mapper.list(
@@ -117,6 +132,7 @@ public class ConsultationService {
                         assigned,
                         excludeSelf,
                         unclaimedOnly,
+                        state,
                         filter,
                         page.getPageSize(),
                         page.offset());
@@ -124,7 +140,7 @@ public class ConsultationService {
         return PageResult.of(
                 page.getPageNum(),
                 page.getPageSize(),
-                mapper.count(viewer, mine, assigned, excludeSelf, unclaimedOnly, filter),
+                mapper.count(viewer, mine, assigned, excludeSelf, unclaimedOnly, state, filter),
                 items);
     }
 

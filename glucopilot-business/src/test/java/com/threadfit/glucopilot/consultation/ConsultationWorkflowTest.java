@@ -1063,6 +1063,59 @@ class ConsultationWorkflowTest {
     }
 
     @Test
+    void squareStatusFiltersCombineOwnershipAndTopicBeforePagination() {
+        String[] statuses = {"WAITING", "IN_PROGRESS", "REPORT_READY", "CLOSED"};
+        for (String status : statuses) {
+            for (long patient : new long[] {1, 3, 4}) {
+                var item = service.publish(patient, new PublishRequest(
+                        "广场状态筛选测试", "GLUCOSE", "用于验证状态归属和分页条件组合后的查询结果。", "", "",
+                        false, "square_status_" + status + "_" + patient));
+                jdbc.update("UPDATE consultation_request SET status=?,doctor_user_id=? WHERE id=?",
+                        status, "WAITING".equals(status) ? null : 2L, item.id());
+            }
+        }
+        var inconsistent = service.publish(4, new PublishRequest(
+                "状态不一致测试求助", "GLUCOSE", "已绑定医生的记录不应显示为等待医生。", "", "",
+                false, "square_inconsistent_001"));
+        jdbc.update("UPDATE consultation_request SET doctor_user_id=2 WHERE id=?", inconsistent.id());
+        var otherTopic = service.publish(3, new PublishRequest(
+                "饮食分类测试求助", "DIET", "用于验证状态筛选还会同时限制分类。", "", "", false,
+                "square_status_diet_001"));
+        jdbc.update("UPDATE consultation_request SET status='REPORT_READY',doctor_user_id=2 WHERE id=?", otherTopic.id());
+        for (String status : statuses) {
+            var mine = service.list(1, true, false, false, false, status, "GLUCOSE", new PageQuery());
+            assertEquals(1, mine.getTotal());
+            assertTrue(mine.getRecords().getFirst().mine());
+            var others = service.list(1, false, false, true, false, status, "GLUCOSE", new PageQuery());
+            assertEquals(2, others.getTotal());
+            assertTrue(others.getRecords().stream().allMatch(row -> status.equals(row.status()) && !row.mine()));
+            assertTrue(others.getRecords().stream().noneMatch(row -> row.detailsVisible()));
+        }
+        var page = new PageQuery(); page.setPageSize(1);
+        var first = service.list(1, false, false, true, false, "REPORT_READY", "GLUCOSE", page);
+        assertEquals(2, first.getTotal()); assertEquals(1, first.getRecords().size());
+        page.setPageNum(2);
+        var second = service.list(1, false, false, true, false, "REPORT_READY", "GLUCOSE", page);
+        assertEquals(2, second.getTotal());
+        assertNotEquals(first.getRecords().getFirst().id(), second.getRecords().getFirst().id());
+        assertEquals(1, service.list(1, false, false, true, false, "REPORT_READY", "DIET", new PageQuery()).getTotal());
+    }
+
+    @Test
+    void squareStatusRejectsInvalidStatesAndConflictingLegacyFilters() {
+        for (String state : new String[] {"report_ready", "UNKNOWN", "WAITING' OR 1=1"}) {
+            var error = assertThrows(BizException.class,
+                    () -> service.list(1, false, false, false, false, state, null, new PageQuery()));
+            assertEquals(com.threadfit.glucopilot.common.api.ErrorCode.BAD_REQUEST, error.getErrorCode());
+        }
+        approve(2);
+        var error = assertThrows(BizException.class,
+                () -> service.list(2, false, false, false, true, "REPORT_READY", null, new PageQuery()));
+        assertEquals(com.threadfit.glucopilot.common.api.ErrorCode.BAD_REQUEST, error.getErrorCode());
+        assertDoesNotThrow(() -> service.list(1, false, false, false, false, "WAITING", null, new PageQuery()));
+    }
+
+    @Test
     void insufficientFundsAndInactiveWalletNeverUnlockOrCredit() {
         long report = readyReport();
         String no = order(report);

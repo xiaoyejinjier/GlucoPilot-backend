@@ -76,6 +76,9 @@
         <if test="assigned">AND c.doctor_user_id=#{viewer}</if>
         <if test="hideMine">AND c.patient_id&lt;&gt;#{viewer}</if>
         <if test="unclaimedOnly">AND c.status='WAITING' AND c.doctor_user_id IS NULL</if>
+        <!-- 列表与总数共用；状态在LIMIT前筛选，避免分页后由前端过滤遗漏。 -->
+        <if test="status != null">AND c.status=#{status}</if>
+        <if test="status == 'WAITING'">AND c.doctor_user_id IS NULL</if>
         <if test="topic != null">AND c.topic=#{topic}</if>
     </sql>
     <select id="count" resultType="long">SELECT COUNT(*) <include refid="caseScope"/></select>

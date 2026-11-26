@@ -46,6 +46,7 @@ public class ConsultationController {
             @RequestParam(defaultValue = "false") boolean assigned,
             @RequestParam(defaultValue = "false") boolean hideMine,
             @RequestParam(defaultValue = "false") boolean unclaimedOnly,
+            @RequestParam(required = false) String status,
             @RequestParam(required = false) String topic,
             @Valid PageQuery page) {
         return ok(
@@ -55,6 +56,7 @@ public class ConsultationController {
                         assigned,
                         hideMine,
                         unclaimedOnly,
+                        status,
                         topic,
                         page));
     }

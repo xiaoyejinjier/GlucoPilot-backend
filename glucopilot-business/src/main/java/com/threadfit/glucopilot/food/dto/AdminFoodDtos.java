@@ -80,6 +80,9 @@ public final class AdminFoodDtos {
         /** GI 值。 */
         private BigDecimal gi;
 
+        /** 独立模拟展示字段，禁止回写到真实GI输入框或导出GI列。 */
+        private BigDecimal giDemoValue;
+
         /** 食品图片 URL。 */
         private String image;
 

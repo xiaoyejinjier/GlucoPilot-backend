@@ -804,6 +804,23 @@ class MealRecordServiceImplTest {
         });
     }
 
+    @Test
+    void persistsDishGroupingFieldsFromNormalizedItems() {
+        stubCreate();
+        ItemInput resolved = input("青椒");
+        resolved.setDishName("青椒炒肉");
+        resolved.setRole("SEASONING");
+        resolved.setCookMethod("炒");
+        when(nutritionResolver.resolve(any(), eq(false))).thenReturn(List.of(resolved));
+
+        service.save(USER_ID, saveRequest("breakfast", null, null, List.of(clientItem("青椒"))));
+
+        MealFoodItem saved = captureSingleItem();
+        // 三样只用于展示，但必须落库：详情接口与前端分组都靠它，丢了就只能平铺食材名
+        assertEquals("青椒炒肉", saved.getDishName());
+        assertEquals("SEASONING", saved.getItemRole());
+        assertEquals("炒", saved.getCookMethod());
+    }
     private MealFoodItem captureSingleItem() {
         ArgumentCaptor<MealFoodItem> captor = ArgumentCaptor.forClass(MealFoodItem.class);
         verify(mealFoodItemMapper).insert(captor.capture());

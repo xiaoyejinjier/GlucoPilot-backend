@@ -197,6 +197,33 @@ class MealFoodCatalogServiceTest {
         verify(foods, times(1)).insertRecognitionDraft(any());
     }
 
+    @Test void dishGroupingFieldsAreNormalizedButNeverWrittenToLibrary() {
+        when(foods.selectList(any())).thenReturn(List.of(row(1L, "青椒", 3, "MANUAL")));
+        var food = input("青椒", "6", "27", "80", 95);
+        food.setDishName("  青椒   炒肉  ");
+        food.setRole(" seasoning ");
+        food.setCookMethod("红烧");
+        var result = service.resolve(food, "qwen3-vl-plus");
+        // 菜品名做空白折叠；角色大小写/空白容忍；不在白名单的做法落 null（不猜成"其他"）
+        assertEquals("青椒 炒肉", result.item().getDishName());
+        assertEquals("SEASONING", result.item().getRole());
+        assertNull(result.item().getCookMethod());
+        // 三样都是"这一餐怎么吃的"，不能污染营养库
+        verify(foods, never()).insertRecognitionDraft(any());
+        verify(foods, never()).updateById(any(FoodNutrition.class));
+    }
+
+    @Test void cookMethodWhitelistAndDishNameTruncation() {
+        assertEquals("炒", MealFoodCatalogService.normalizeCookMethod(" 炒 "));
+        assertNull(MealFoodCatalogService.normalizeCookMethod("红烧"));
+        assertNull(MealFoodCatalogService.normalizeCookMethod(null));
+        assertEquals(MealFoodCatalogService.ROLE_MAIN, MealFoodCatalogService.normalizeRole(null));
+        assertEquals(MealFoodCatalogService.ROLE_MAIN, MealFoodCatalogService.normalizeRole("side"));
+        assertNull(MealFoodCatalogService.normalizeDishName("   "));
+        String longName = "菜".repeat(80);
+        assertEquals(MealFoodCatalogService.DISH_NAME_MAX_CHARS,
+                MealFoodCatalogService.normalizeDishName(longName).length());
+    }
     private static FoodNutrition row(long id, String name, int shelf, String source) {
         FoodNutrition food = new FoodNutrition();
         food.setId(id); food.setFoodName(name); food.setCategoryCode(1); food.setShelfStatus(shelf);

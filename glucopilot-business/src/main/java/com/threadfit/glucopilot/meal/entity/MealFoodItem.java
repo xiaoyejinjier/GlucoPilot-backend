@@ -21,6 +21,12 @@ public class MealFoodItem extends BaseEntity {
     private Long foodId;
     /** 食物名称快照（必填） */
     private String foodName;
+    /** 所属菜品名（食材级拆分后的分组名），可空；NULL=无分组信息（V99 之前的历史行） */
+    private String dishName;
+    /** 主料 / 配料：MAIN|SEASONING，可空（V99） */
+    private String itemRole;
+    /** 烹饪方式：炒/炸/煎/烤/蒸/煮/炖/凉拌/生食/其他，可空（V99） */
+    private String cookMethod;
     /** 克重快照 */
     private BigDecimal weightG;
     /** 碳水克数快照 */

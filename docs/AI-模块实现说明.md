@@ -1247,6 +1247,33 @@ public String analyze(MediaFile media, SceneCode scene, String instruction) {
 
 `MealAnalysisServiceImpl` 的 `MealFoodCatalogService.resolve` 返回 `record Resolution(MealAnalysisDtos.Item item, boolean added)`——`added=true` 表示这条食物是**新入库**的（模型认得、库里没有），便于后续人工校对。
 
+### 11.x 餐食识别：从「整盘菜一个食品」到「食材级拆分」（V99/V100）
+
+识别粒度改过一次，理解现在的字段必须先知道这条分界。
+
+**v1 提示词**（`prompts/meal-analysis/system.md`，519 字）明确要求「一个菜品作为一个食品，不重复拆分计算」：一份「青椒炒肉」只产出一行，150 克、每 100 克碳水 8 克。后果有两个：用户看到的是一盘菜的合计值，改不动其中任何一样（「肉多放了点」无从表达）；营养统计也只能按菜归类，做不了「今天到底吃了多少蔬菜」。
+
+**v2 提示词**（914 字，`V100__meal_analysis_prompt_v2.sql` 播种为 `MEAL_ANALYSIS` 的 `version_no=2` 并停用 v1）改了三处：
+
+| 变化 | 为什么 |
+| --- | --- |
+| 按食材拆，葱姜蒜等配料也拆，同一食材只出现一次 | 一条明细代表「一种食材在这一餐里的量」，用户才能逐样纠正 |
+| 油、糖、淀粉与酱油/料酒/醋等调味液体不输出 | 照片估不出放了多少油，硬算会把整餐碳水凭空抬高；服务端也不计这部分 |
+| 每项新增 `dishName` / `role` / `cookMethod` | 拆开之后需要重新分组：`dishName` 说「这几样属于同一道菜」，`role` 区分主料与配料，`cookMethod` 让用户按「炒/炸/蒸」纠正 |
+
+配套的模型输出字段（`MealAnalysisDtos.ModelFood`）：`name`、`dishName`、`role`、`cookMethod`、`categoryCode`、`weightG`、`carbsPer100g`、`caloriesPer100g`、`confidence`；`parse()` 的上限相应从 12 项提到 **24 项**（食材级拆分后一餐十几样很常见）。
+
+三个字段的归一化放在 `MealFoodCatalogService` 的静态方法里，识别与保存共用同一套规则：
+
+- `normalizeDishName`：NFKC + 空白折叠 + 截断 64 字，空串归 null；
+- `normalizeRole`：只认 `MAIN` / `SEASONING`（大小写与空白容忍），其余按主料；
+- `normalizeCookMethod`：白名单（炒/炸/煎/烤/蒸/煮/炖/凉拌/生食/其他），**不在白名单内落 null 而不是「其他」**——做法会直接展示给用户当纠正入口，把模型瞎写的「红烧」静默改成「其他」比留空更误导。
+
+落库在 `meal_food_item`（`V99__meal_food_item_dish_role_cook.sql` 加 `dish_name` / `item_role` / `cook_method` 三列，全部可空）。三列都**不参与升糖负担判定**：判定仍只看 `per100gGL` 与份量修正（`SuitabilityRuleEngine` 一行未改）。保存链路里它们必须穿过 `MealRecordServiceImpl.toInputs → ItemInput → MealNutritionResolver.copyOf → replaceItems` 四道手——`copyOf` 是**重建**新对象，漏一行就会静默丢字段，这是这次改造最容易翻车的地方。
+
+老数据不迁移：V99 之前的历史明细是菜品级，`dish_name` 恒 NULL，读侧把 NULL 当「没有分组信息」。老客户端保存时不带这三个字段，`MealSnapshotMatcher` 会从识别快照里回填（用户改过的值优先），这样升级前后同一顿饭的明细排版不会突然散开。
+
+
 ---
 
 ## 12. 语音：`SpeechTranscriptionService`（不走 ChatClient）

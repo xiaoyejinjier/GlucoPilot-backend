@@ -86,6 +86,12 @@ public final class MealVos {
         /** 营养库待审行 ID，字符串化；无则 null */
         private String libraryFoodId;
         private String foodName;
+        /** 所属菜品名（食材级拆分后的分组名），可空 */
+        private String dishName;
+        /** MAIN|SEASONING，可空 */
+        private String role;
+        /** 烹饪方式，可空 */
+        private String cookMethod;
         private BigDecimal weightG;
         private BigDecimal carbsG;
         private BigDecimal caloriesKcal;

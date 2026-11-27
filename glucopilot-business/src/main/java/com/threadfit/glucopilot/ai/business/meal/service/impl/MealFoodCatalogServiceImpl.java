@@ -110,6 +110,11 @@ public class MealFoodCatalogServiceImpl implements MealFoodCatalogService {
         boolean needsConfirmation = MealFoodCatalogService.needsConfirmation(confidence, libraryStatus, lowConfidenceThreshold);
         MealAnalysisDtos.Item item = MealAnalysisDtos.Item.builder()
                 .foodName(row == null ? name : row.getFoodName())
+                // 三样展示字段只读模型输出、不进库：菜名/角色/做法描述的是"这一餐怎么吃的"，
+                // 不是食物本身的属性，落到 food_nutrition 会污染营养库的语义。
+                .dishName(MealFoodCatalogService.normalizeDishName(input.getDishName()))
+                .role(MealFoodCatalogService.normalizeRole(input.getRole()))
+                .cookMethod(MealFoodCatalogService.normalizeCookMethod(input.getCookMethod()))
                 .foodId(available ? String.valueOf(row.getId()) : null)
                 .libraryFoodId(row == null ? null : String.valueOf(row.getId()))
                 .categoryCode(row == null ? category : row.getCategoryCode())

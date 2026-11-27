@@ -526,6 +526,10 @@ public class MealRecordServiceImpl implements MealRecordService {
             row.setFoodId(item.getFoodId());
             row.setLibraryFoodId(item.getLibraryFoodId());
             row.setFoodName(item.getFoodName());
+            // 三样纯展示字段：不参与营养计算与判定，只让前端能按菜品分组、按主辅料分层次
+            row.setDishName(item.getDishName());
+            row.setItemRole(item.getRole());
+            row.setCookMethod(item.getCookMethod());
             // 克重 / 碳水 / 热量沿用客户端快照（resolver 不改这三项，也不按 per-100g 重算）
             row.setWeightG(item.getWeightG());
             row.setCarbsG(item.getCarbsG());
@@ -556,6 +560,9 @@ public class MealRecordServiceImpl implements MealRecordService {
             target.setFoodId(source.getFoodId());
             target.setLibraryFoodId(source.getLibraryFoodId());
             target.setFoodName(source.getFoodName());
+            target.setDishName(source.getDishName());
+            target.setRole(source.getRole());
+            target.setCookMethod(source.getCookMethod());
             target.setCategoryCode(source.getCategoryCode());
             target.setWeightG(source.getWeightG());
             target.setCarbsG(source.getCarbsG());
@@ -768,6 +775,9 @@ public class MealRecordServiceImpl implements MealRecordService {
                 .foodId(i.getFoodId() == null ? null : String.valueOf(i.getFoodId()))
                 .libraryFoodId(i.getLibraryFoodId() == null ? null : String.valueOf(i.getLibraryFoodId()))
                 .foodName(i.getFoodName())
+                .dishName(i.getDishName())
+                .role(i.getItemRole())
+                .cookMethod(i.getCookMethod())
                 .weightG(i.getWeightG())
                 .carbsG(i.getCarbsG())
                 .caloriesKcal(i.getCaloriesKcal())

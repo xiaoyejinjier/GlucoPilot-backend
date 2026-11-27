@@ -1198,3 +1198,12 @@ community 按 `controller / dto / entity / mapper / service / support` 分类；
 - GET /api/v1/consultations增加可选布尔unclaimedOnly，默认false，兼容旧客户端。仅审核通过的医生可使用true；其他身份返回403。未接诊筛选仅用于求助广场，不与mine/assigned组合。
 - true同时限制status=WAITING与doctor_user_id IS NULL，与topic及hideMine叠加；列表及总数复用MyBatis XML条件，在分页之前过滤。已接诊/已出单/已关闭及异常已绑定医生记录不进入未接诊列表。
 - 小程序求助广场仅为已认证医生显示“全部求助/未接诊”筛选，切换重置分页，加载更多保留条件。返回认证页或详情后重新核对医生身份；换账号或认证失效后清除该筛选，迟到请求不得覆盖新条件。
+
+## 2026-11-27 餐食识别改为食材级拆分（V99 / V100）
+
+- 提示词 v2（`V100__meal_analysis_prompt_v2.sql`，`MEAL_ANALYSIS` 版本号 2，v1 停用）：由「一个菜品作为一个食品」改为**按食材拆分**，葱姜蒜等配料也拆、同一食材只出现一次；油/糖/淀粉与酱油/料酒/醋等调味液体不输出（服务端不计这部分）。
+- 识别响应 `items[]`、保存请求 `items[]`、按日查询的明细三处**同时新增**可选字段：`dishName`（所属菜品名，≤64 字，null=无分组信息）、`role`（`MAIN`|`SEASONING`）、`cookMethod`（`炒|炸|煎|烤|蒸|煮|炖|凉拌|生食|其他`，不在白名单内为 null）。三字段只用于展示与用户纠正，**不参与升糖负担判定**（判定仍只看 per100gGL 与份量修正，规则引擎未改）。
+- 明细条数上限由 12 提到 **24**（食材级拆分后一餐十几样常见）；超过 24 条仍按「识别结果格式不正确」拒绝。
+- 服务端归一化：`dishName` 走 NFKC + 空白折叠 + 截断 64 字，空串归 null；`role` 只认 `MAIN`/`SEASONING`（大小写与空白容忍），其余按主料；`cookMethod` 不在白名单内落 null（不猜成「其他」）。
+- 保存链路落库到 `meal_food_item.dish_name` / `item_role` / `cook_method`（`V99__meal_food_item_dish_role_cook.sql`，三列均可空）。**老数据不迁移**：V99 之前的历史明细是菜品级，三列为 NULL，读侧把 NULL 当「没有分组信息」。
+- 老客户端（不带三字段）保存时由识别快照回填（`MealSnapshotMatcher`），用户改过的值优先——升级前后同一顿饭的明细排版不会突然散开；不带 `analysisToken` 时三字段保持为空，不影响保存。

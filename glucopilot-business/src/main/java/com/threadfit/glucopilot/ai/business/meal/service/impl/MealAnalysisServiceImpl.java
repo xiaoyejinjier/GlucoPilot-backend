@@ -142,7 +142,8 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
         List<MealAnalysisSnapshotStore.SnapshotItem> list = new ArrayList<>(items.size());
         for (MealAnalysisDtos.Item item : items) {
             list.add(new MealAnalysisSnapshotStore.SnapshotItem(
-                    item.getFoodName(), item.getFoodId(), item.getLibraryFoodId(), item.getCategoryCode(),
+                    item.getFoodName(), item.getDishName(), item.getRole(), item.getCookMethod(),
+                    item.getFoodId(), item.getLibraryFoodId(), item.getCategoryCode(),
                     item.getGiValue(), item.getNutritionSource(), item.getLibraryStatus(), item.getConfidence()));
         }
         return list;
@@ -165,7 +166,7 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
             throw new BizException(ErrorCode.BIZ_REJECTED, "模型没有返回有效的食物列表，请重试");
         }
         if (result == null || !Integer.valueOf(1).equals(result.getSchemaVersion())
-                || result.getFoods() == null || result.getFoods().size() > 12) {
+                || result.getFoods() == null || result.getFoods().size() > 24) {
             throw new BizException(ErrorCode.BIZ_REJECTED, "餐食识别结果格式不正确，请重试");
         }
         return result;

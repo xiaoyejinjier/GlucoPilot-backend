@@ -153,6 +153,37 @@ class MealSnapshotMatcherTest {
         assertEquals(List.of("#2 米饭", "#3 牛奶"), labels);
     }
 
+    @Test
+    void backfillsDishGroupingFromSnapshotWhenRequestOmitsIt() {
+        // 老客户端不带 dishName/role/cookMethod：快照里有，就应该补上，
+        // 否则升级前后同一顿饭的明细排版会突然变成一堆散装食材名
+        ItemInput item = item("青椒", null, 500L);
+        Snapshot snapshot = snapshot(new SnapshotItem("青椒", "青椒炒肉", "SEASONING", "炒",
+                null, "500", null, null, null, "AVAILABLE", 95));
+
+        MealSnapshotMatcher.alignAndEvaluate(List.of(item), snapshot, THRESHOLD);
+
+        assertEquals("青椒炒肉", item.getDishName());
+        assertEquals("SEASONING", item.getRole());
+        assertEquals("炒", item.getCookMethod());
+    }
+
+    @Test
+    void keepsUserProvidedDishGroupingOverSnapshot() {
+        // 用户改过的值优先：请求里给了菜名与做法，就不该被快照覆盖回去
+        ItemInput item = item("青椒", null, 500L);
+        item.setDishName("我自己起的名字");
+        item.setCookMethod("蒸");
+        Snapshot snapshot = snapshot(new SnapshotItem("青椒", "青椒炒肉", "SEASONING", "炒",
+                null, "500", null, null, null, "AVAILABLE", 95));
+
+        MealSnapshotMatcher.alignAndEvaluate(List.of(item), snapshot, THRESHOLD);
+
+        assertEquals("我自己起的名字", item.getDishName());
+        assertEquals("蒸", item.getCookMethod());
+        // 角色没给过，仍从快照补
+        assertEquals("SEASONING", item.getRole());
+    }
     private static ItemInput item(String foodName, Long foodId, Long libraryFoodId) {
         ItemInput input = new ItemInput();
         input.setFoodName(foodName);

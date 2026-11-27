@@ -99,6 +99,15 @@ public final class MealDtos {
         @NotBlank
         @Size(max = 64)
         private String foodName;
+        /** 所属菜品名（食材级拆分后的分组名）；可空 = 无分组信息，服务端原样落库用于展示 */
+        @Size(max = 64)
+        private String dishName;
+        /** 主料 / 配料：MAIN|SEASONING；可空，服务端归一化后落库，不参与升糖判定 */
+        @Size(max = 16)
+        private String role;
+        /** 烹饪方式：炒/炸/煎/烤/蒸/煮/炖/凉拌/生食/其他；可空，服务端按白名单归一化后落库 */
+        @Size(max = 16)
+        private String cookMethod;
         /** 克重；可空 */
         @DecimalMin(value = "0")
         private BigDecimal weightG;

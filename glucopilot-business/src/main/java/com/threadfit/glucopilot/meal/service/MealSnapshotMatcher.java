@@ -75,6 +75,18 @@ public final class MealSnapshotMatcher {
             }
             if (snap != null) {
                 item.setLibraryStatus(snap.getLibraryStatus());
+                // 回填分组信息：老客户端（或用户手工重排过的请求）不带 dishName/role/cookMethod，
+                // 而识别快照里有——不回填就等于让用户升级前后看到的明细排版不一样。
+                // 只在请求没给值时才补，用户改过的值优先。
+                if (trimOrNull(item.getDishName()) == null) {
+                    item.setDishName(snap.getDishName());
+                }
+                if (trimOrNull(item.getRole()) == null) {
+                    item.setRole(snap.getRole());
+                }
+                if (trimOrNull(item.getCookMethod()) == null) {
+                    item.setCookMethod(snap.getCookMethod());
+                }
             }
             if (isLowConfidence(item, snap, threshold)) {
                 labels.add("#" + (i + 1) + " " + item.getFoodName());

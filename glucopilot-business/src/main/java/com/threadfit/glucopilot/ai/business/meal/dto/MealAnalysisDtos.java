@@ -30,7 +30,14 @@ public final class MealAnalysisDtos {
     }
     @Data
     public static class ModelFood {
+        /** 单一食材名（「青椒」，不是「青椒炒肉」）。 */
         private String name;
+        /** 所属菜品名，用于把同一道菜的几样食材分组；单独一种食物可为 null。 */
+        private String dishName;
+        /** MAIN / SEASONING（主料 / 葱姜蒜等配料）；服务端归一化，非法值按 MAIN。 */
+        private String role;
+        /** 烹饪方式；服务端白名单归一化，不在白名单内的落 null。 */
+        private String cookMethod;
         private Integer categoryCode;
         private BigDecimal weightG;
         private BigDecimal carbsPer100g;
@@ -64,6 +71,27 @@ public final class MealAnalysisDtos {
     @AllArgsConstructor(onConstructor_ = @JsonCreator(mode = JsonCreator.Mode.DISABLED))
     public static class Item {
         private String foodName;
+        /**
+         * 所属菜品名（食材级拆分后的分组名）。
+         *
+         * <p>为什么要有它：一条餐食拆成食材后有十几行，前端若只按行平铺，用户看不出「青椒、猪里脊」
+         * 属于同一道菜，也就无从按菜纠正。null 表示无分组信息（单独一种食物，或 V99 之前的历史明细）。</p>
+         */
+        private String dishName;
+        /**
+         * 主料 / 配料：{@code MAIN} 或 {@code SEASONING}。
+         *
+         * <p>葱姜蒜这类配料同样计入营养（用户确实吃进去了），只是不该在主料旁边一样显眼；
+         * 它只影响展示与纠正粒度，不参与升糖负担判定。</p>
+         */
+        private String role;
+        /**
+         * 烹饪方式：炒 / 炸 / 煎 / 烤 / 蒸 / 煮 / 炖 / 凉拌 / 生食 / 其他。
+         *
+         * <p>不参与判定（判定只看 per100gGL 与份量），但用户会按它纠正模型：
+         * 「蒸的」和「炸的」是同一份食材完全不同的两顿饭。</p>
+         */
+        private String cookMethod;
         private String foodId;
         private String libraryFoodId;
         private Integer categoryCode;

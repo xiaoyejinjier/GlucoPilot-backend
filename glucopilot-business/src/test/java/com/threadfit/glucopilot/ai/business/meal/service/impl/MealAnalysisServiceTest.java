@@ -76,6 +76,22 @@ class MealAnalysisServiceTest {
         assertThrows(BizException.class, () -> service.analyze(1L, request()));
         verifyNoInteractions(catalog);
     }
+    @Test void parseAcceptsIngredientLevelFoodList() {
+        // 食材级拆分后一餐十几样很常见，上限从 12 提到 24；23 样必须通过
+        String foods = java.util.stream.IntStream.rangeClosed(1, 23)
+                .mapToObj(i -> "{\"name\":\"食材" + i + "\",\"categoryCode\":3,\"confidence\":90}")
+                .collect(java.util.stream.Collectors.joining(","));
+        var result = service.parse("{\"schemaVersion\":1,\"foods\":[" + foods + "]}");
+        assertEquals(23, result.getFoods().size());
+    }
+
+    @Test void parseRejectsMoreThanTwentyFourFoods() {
+        String foods = java.util.stream.IntStream.rangeClosed(1, 25)
+                .mapToObj(i -> "{\"name\":\"食材" + i + "\",\"categoryCode\":3,\"confidence\":90}")
+                .collect(java.util.stream.Collectors.joining(","));
+        String raw = "{\"schemaVersion\":1,\"foods\":[" + foods + "]}";
+        assertThrows(BizException.class, () -> service.parse(raw));
+    }
     @Test void cachedRetryStillRequiresPhotoOwnershipAndAvoidsModelCharge() {
         when(media.findOwnedMedia(8L, 1L, MediaBizType.MEAL)).thenReturn(new MediaFile());
         RequestContext.setIdempotencyKey("request-key");

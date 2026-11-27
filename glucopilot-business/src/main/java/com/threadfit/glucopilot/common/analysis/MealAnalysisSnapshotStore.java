@@ -108,6 +108,12 @@ public class MealAnalysisSnapshotStore {
     @AllArgsConstructor
     public static class SnapshotItem {
         private String foodName;
+        /** 所属菜品名（食材级拆分后的分组名）；历史快照没有这个字段，读出来是 null。 */
+        private String dishName;
+        /** MAIN / SEASONING；历史快照为 null。 */
+        private String role;
+        /** 烹饪方式；历史快照为 null。 */
+        private String cookMethod;
         private String foodId;
         private String libraryFoodId;
         private Integer categoryCode;
@@ -116,5 +122,17 @@ public class MealAnalysisSnapshotStore {
         /** AVAILABLE|PENDING_REVIEW|UNRESOLVED —— 3b2 低置信判定的权威来源。 */
         private String libraryStatus;
         private Integer confidence;
+
+        /**
+         * 兼容构造器：不带三样展示字段（等价于把它们置 null）。
+         *
+         * <p>为什么保留：V99 之前写下的快照与既有单测都只有营养相关字段。新代码请用全参构造器——
+         * 少了这三样，前端就只能平铺一堆食材名，分不出哪几样属于同一道菜。</p>
+         */
+        public SnapshotItem(String foodName, String foodId, String libraryFoodId, Integer categoryCode,
+                            BigDecimal giValue, String nutritionSource, String libraryStatus, Integer confidence) {
+            this(foodName, null, null, null, foodId, libraryFoodId, categoryCode, giValue,
+                    nutritionSource, libraryStatus, confidence);
+        }
     }
 }

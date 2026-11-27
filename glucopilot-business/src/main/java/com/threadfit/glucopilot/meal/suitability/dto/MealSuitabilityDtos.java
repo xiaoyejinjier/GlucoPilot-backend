@@ -66,6 +66,18 @@ public final class MealSuitabilityDtos {
         private Boolean userCorrected;
         /** 营养库匹配状态：AVAILABLE|PENDING_REVIEW|UNRESOLVED，可空 */
         private String libraryStatus;
+        /**
+         * 所属菜品名，仅用于分组展示与落库，不参与判定。
+         *
+         * <p>为什么放在 ItemInput 而不是只在请求 DTO 上：保存链路是
+         * 「请求 → ItemInput → MealNutritionResolver 归一化 → meal_food_item」，
+         * 中途会被 resolver 重建成新的 ItemInput，字段不在这里就会被静默丢掉。</p>
+         */
+        private String dishName;
+        /** MAIN|SEASONING，仅展示用，不参与判定。 */
+        private String role;
+        /** 烹饪方式，仅展示用，不参与判定。 */
+        private String cookMethod;
     }
 
     /** 引擎输出：单个食物项的判定结果。 */

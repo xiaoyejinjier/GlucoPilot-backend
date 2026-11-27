@@ -243,6 +243,11 @@ public class MealNutritionResolver {
         target.setConfidence(source.getConfidence());
         target.setUserCorrected(source.getUserCorrected());
         target.setLibraryStatus(source.getLibraryStatus());
+        // 三样展示字段与营养无关，resolver 不改它们，但必须原样带过去：
+        // 保存链路把 copyOf 的结果直接写给 meal_food_item，漏一行就等于用户看到的菜品名/角色/做法全丢。
+        target.setDishName(source.getDishName());
+        target.setRole(source.getRole());
+        target.setCookMethod(source.getCookMethod());
         return target;
     }
 }

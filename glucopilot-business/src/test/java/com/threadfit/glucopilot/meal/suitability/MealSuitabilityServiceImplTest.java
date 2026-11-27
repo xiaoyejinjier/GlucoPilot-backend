@@ -50,8 +50,6 @@ class MealSuitabilityServiceImplTest {
         when(nutritionResolver.resolve(anyList(), eq(true))).thenReturn(List.of(
                 resolvedItem("米饭", "21.55", "45", new BigDecimal("83.2"))));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenReturn(SuitabilityRuleEngine.AggregationParams.defaults());
 
         MealSuitabilityDtos.PreviewResponse response = service.preview(1L, request(null));
 
@@ -79,8 +77,6 @@ class MealSuitabilityServiceImplTest {
         when(nutritionResolver.resolve(anyList(), eq(true))).thenReturn(List.of(
                 resolvedItem("米饭", "21.55", "45", new BigDecimal("83.2"))));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenReturn(SuitabilityRuleEngine.AggregationParams.defaults());
 
         service.preview(1L, request);
 
@@ -106,8 +102,6 @@ class MealSuitabilityServiceImplTest {
         when(nutritionResolver.resolve(anyList(), eq(true))).thenReturn(List.of(
                 resolvedItem("米饭", "21.55", "45", new BigDecimal("83.2"))));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenReturn(SuitabilityRuleEngine.AggregationParams.defaults());
 
         MealSuitabilityDtos.PreviewResponse response = service.preview(1L, request(null));
 
@@ -122,8 +116,6 @@ class MealSuitabilityServiceImplTest {
         when(nutritionResolver.resolve(anyList(), eq(true))).thenReturn(List.of(
                 resolvedItem("米饭", "21.55", "45", new BigDecimal("83.2"))));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenReturn(SuitabilityRuleEngine.AggregationParams.defaults());
 
         MealSuitabilityDtos.PreviewResponse response = service.preview(1L, request(null));
 
@@ -140,8 +132,6 @@ class MealSuitabilityServiceImplTest {
         unresolved.setMissingFields(List.of("食品库未匹配", "GI", "每100g碳水"));
         when(nutritionResolver.resolve(anyList(), eq(true))).thenReturn(List.of(unresolved));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenReturn(SuitabilityRuleEngine.AggregationParams.defaults());
 
         MealSuitabilityDtos.PreviewResponse response = service.preview(1L, request(null));
 
@@ -157,23 +147,22 @@ class MealSuitabilityServiceImplTest {
     }
 
     @Test
-    void portionDrivenHighItemIsFlaggedWithFocusText() {
-        // MODERATE + 碳水 ≥60g 修正为 HIGH → 重点关注原因为「份量偏大」，文案取配置
-        when(ruleMapper.selectList(any())).thenReturn(List.of(glModerateRule()));
+    void bigPortionNoLongerRaisesTierAndFocusTextIsIntrinsicOnly() {
+        // 2026-11-27 去份量：碳水 65g 不再把 MODERATE 顶成 HIGH，baseTier 恒等于 tier，
+        // 重点关注只剩 INTRINSIC 一种原因；文案由配置提供（不再有「份量」表述）
+        when(ruleMapper.selectList(any())).thenReturn(List.of(glModerateRule(), glHighRule(null)));
         when(nutritionResolver.resolve(anyList(), eq(true))).thenReturn(List.of(
-                resolvedItem("杂粮饭大份", "12.0", "65", new BigDecimal("55"))));
+                resolvedItem("薯条", "22.5", "65", new BigDecimal("55"))));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of(portionRule("MODERATE", "60", null, "HIGH")));
-        when(configService.aggregationParams(any())).thenReturn(SuitabilityRuleEngine.AggregationParams.defaults());
-        when(configService.focusText(eq(CONFIG), eq("PORTION"), eq("杂粮饭大份")))
-                .thenReturn("重点关注：杂粮饭大份 份量偏大，升糖负担高");
+        when(configService.focusText(eq(CONFIG), eq("薯条")))
+                .thenReturn("重点关注：薯条 升糖负担高，建议换用升糖负担更低的食物");
 
         MealSuitabilityDtos.PreviewResponse response = service.preview(1L, request(null));
 
         assertEquals("HIGH", response.getItems().get(0).getTier());
-        assertEquals("MODERATE", response.getItems().get(0).getBaseTier());
-        assertEquals("PORTION", response.getItems().get(0).getFocusReason());
-        assertEquals("重点关注：杂粮饭大份 份量偏大，升糖负担高",
+        assertEquals("HIGH", response.getItems().get(0).getBaseTier());
+        assertEquals("INTRINSIC", response.getItems().get(0).getFocusReason());
+        assertEquals("重点关注：薯条 升糖负担高，建议换用升糖负担更低的食物",
                 response.getFocusItems().get(0).getText());
     }
 

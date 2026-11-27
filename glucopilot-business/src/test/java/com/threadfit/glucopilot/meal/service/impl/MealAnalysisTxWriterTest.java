@@ -90,18 +90,14 @@ class MealAnalysisTxWriterTest {
         when(nutritionResolver.resolve(any(), eq(false)))
                 .thenReturn(List.of(resolved("米饭", "21.6", "45"), resolved("青菜", "3.0", "5")));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenAnswer(
-                invocation -> new com.threadfit.glucopilot.meal.suitability.engine.SuitabilityRuleEngine
-                        .AggregationParams(BigDecimal.ZERO, true));
-        when(configService.focusText(eq(CONFIG), eq("INTRINSIC"), eq("米饭")))
+        when(configService.focusText(eq(CONFIG), eq("米饭")))
                 .thenReturn("重点关注：米饭 升糖负担高，建议少量或替换");
 
         MealVos.Analysis analysis = writer.write(1L, 2L);
 
         // 整餐：碳水占比最大项（米饭 45/50）定档 HIGH；米饭为重点关注（本身偏高）
         assertEquals("HIGH", analysis.getTier());
-        assertEquals("升糖负担较高", analysis.getTierLabel());
+        assertEquals("不建议食用", analysis.getTierLabel());
         assertEquals("2026.11.1", analysis.getRuleVersion());
         assertEquals(2, analysis.getItems().size());
         assertEquals("GL_ITEM_HIGH", analysis.getItems().get(0).getRuleCode());
@@ -137,10 +133,6 @@ class MealAnalysisTxWriterTest {
         when(nutritionResolver.resolve(any(), eq(false)))
                 .thenReturn(List.of(resolved("青菜", "3.0", "5")));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenAnswer(
-                invocation -> new com.threadfit.glucopilot.meal.suitability.engine.SuitabilityRuleEngine
-                        .AggregationParams(BigDecimal.ZERO, true));
 
         MealVos.Analysis analysis = writer.write(1L, 2L);
 
@@ -162,10 +154,6 @@ class MealAnalysisTxWriterTest {
         when(nutritionResolver.resolve(any(), eq(false)))
                 .thenReturn(List.of(resolved("米饭", "21.6", "45")));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenAnswer(
-                invocation -> new com.threadfit.glucopilot.meal.suitability.engine.SuitabilityRuleEngine
-                        .AggregationParams(BigDecimal.ZERO, true));
 
         MealVos.Analysis analysis = writer.write(1L, 2L);
 
@@ -185,10 +173,6 @@ class MealAnalysisTxWriterTest {
         when(nutritionResolver.resolve(any(), eq(false)))
                 .thenReturn(List.of(resolved("米饭", "21.6", "45")));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenAnswer(
-                invocation -> new com.threadfit.glucopilot.meal.suitability.engine.SuitabilityRuleEngine
-                        .AggregationParams(BigDecimal.ZERO, true));
 
         MealVos.Analysis analysis = writer.write(1L, 2L);
 
@@ -206,10 +190,6 @@ class MealAnalysisTxWriterTest {
         MealSuitabilityDtos.ItemInput unresolved = resolved("未知食物", null, "50");
         when(nutritionResolver.resolve(any(), eq(false))).thenReturn(List.of(unresolved));
         when(configService.configMap()).thenReturn(CONFIG);
-        when(configService.adjustRules()).thenReturn(List.of());
-        when(configService.aggregationParams(any())).thenAnswer(
-                invocation -> new com.threadfit.glucopilot.meal.suitability.engine.SuitabilityRuleEngine
-                        .AggregationParams(BigDecimal.ZERO, true));
 
         MealVos.Analysis analysis = writer.write(1L, 2L);
 

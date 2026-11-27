@@ -680,7 +680,7 @@ class MealRecordServiceImplTest {
 
         assertEquals("READY", meal.getAnalysisStatus());
         assertEquals("HIGH", meal.getAnalysis().getTier());
-        assertEquals("升糖负担较高", meal.getAnalysis().getTierLabel());
+        assertEquals("不建议食用", meal.getAnalysis().getTierLabel());
         assertEquals("v2", meal.getAnalysis().getRuleVersion());
         assertEquals(1, meal.getAnalysis().getItems().size());
         MealVos.AnalysisItem advice = meal.getAnalysis().getItems().getFirst();
@@ -750,7 +750,7 @@ class MealRecordServiceImplTest {
     private static MealVos.Analysis analysis(String tier, String ruleVersion) {
         return MealVos.Analysis.builder()
                 .tier(tier)
-                .tierLabel("升糖负担较高")
+                .tierLabel("不建议食用")
                 .summary("摘要")
                 .ruleVersion(ruleVersion)
                 .items(List.of(MealVos.AnalysisItem.builder()

@@ -13,7 +13,6 @@ import com.threadfit.glucopilot.meal.suitability.dto.MealSuitabilityDtos.ItemInp
 import com.threadfit.glucopilot.meal.suitability.engine.AdviceResolver;
 import com.threadfit.glucopilot.meal.suitability.engine.SuitabilityRuleEngine;
 import com.threadfit.glucopilot.meal.suitability.entity.FoodSuitabilityRule;
-import com.threadfit.glucopilot.meal.suitability.entity.MealPortionAdjustRule;
 import com.threadfit.glucopilot.meal.suitability.mapper.FoodSuitabilityRuleMapper;
 import com.threadfit.glucopilot.meal.suitability.service.SuitabilityConfigService;
 import com.threadfit.glucopilot.meal.support.MealAnalysisTexts;
@@ -49,7 +48,7 @@ import java.util.stream.Collectors;
  *   <li>单项建议走 {@link AdviceResolver}（规则 advice_text 优先，档位候选池兜底），
  *       {@code MealAnalysisTexts} 只保留标签/摘要。</li>
  *   <li>单项 HIGH 落「重点关注」：meal_record.analysis_focus 存 JSON 快照
- *       （foodName/reason/text），reason 区分 INTRINSIC（本身偏高）/ PORTION（份量偏大）。</li>
+ *       （foodName/reason/text），reason 目前只有 INTRINSIC（本身负担高）。</li>
  * </ul>
  */
 @Slf4j
@@ -100,9 +99,7 @@ public class MealAnalysisTxWriter {
         List<ItemInput> resolved = nutritionResolver.resolve(inputs, false);
 
         Map<String, String> config = configService.configMap();
-        List<MealPortionAdjustRule> adjustRules = configService.adjustRules();
-        MealSuitabilityDtos.Evaluation evaluation = engine.evaluate(
-                rules, resolved, adjustRules, configService.aggregationParams(config));
+        MealSuitabilityDtos.Evaluation evaluation = engine.evaluate(rules, resolved);
 
         Map<String, FoodSuitabilityRule> ruleByCode = rules.stream()
                 .filter(rule -> rule.getRuleCode() != null)
@@ -159,7 +156,7 @@ public class MealAnalysisTxWriter {
             focusItems.add(MealVos.AnalysisFocusItem.builder()
                     .foodName(focus.getFoodName())
                     .reason(focus.getReason())
-                    .text(configService.focusText(config, focus.getReason(), focus.getFoodName()))
+                    .text(configService.focusText(config, focus.getFoodName()))
                     .build());
         }
         return focusItems;

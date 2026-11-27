@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * 适食分析 DTO。
  * <p>判定主指标为 per100gGL（每 100g 升糖负荷 = GI × 每100g碳水 / 100，食物固有属性）；
- * 份量只做离散量级修正，整餐按碳水占比最大项定档，不再 worst-of。
+ * 2026-11-27 起份量彻底退出判定：单项只看「该不该吃」，整餐取最差一档（worst-of）。
  */
 public final class MealSuitabilityDtos {
 
@@ -21,10 +21,8 @@ public final class MealSuitabilityDtos {
     /** GI 可信度：客户端值与库值差异过大时置 LOW，提示“结果仅供参考” */
     public static final String GI_RELIABILITY_LOW = "LOW";
 
-    /** 重点关注原因：单项本身 per100gGL 偏高 */
+    /** 重点关注原因：单项本身 per100gGL 偏高（份量口径已下线，只剩这一种原因） */
     public static final String FOCUS_INTRINSIC = "INTRINSIC";
-    /** 重点关注原因：单项因份量修正升为 HIGH */
-    public static final String FOCUS_PORTION = "PORTION";
 
     private MealSuitabilityDtos() {
     }
@@ -42,7 +40,7 @@ public final class MealSuitabilityDtos {
         private Integer categoryCode;
         /** 份量克数 g，可空 */
         private BigDecimal weightG;
-        /** 该份量下的碳水 g，可空；份量量级修正与整餐占比聚合使用 */
+        /** 该份量下的碳水 g，可空；只用于营养展示与整餐合计，不参与判定 */
         private BigDecimal carbsG;
         /** 该份量下的热量 kcal，可空 */
         private BigDecimal caloriesKcal;
@@ -85,9 +83,9 @@ public final class MealSuitabilityDtos {
     public static class ItemResult {
         private Long foodId;
         private String foodName;
-        /** 最终档位（含份量修正）：LOW|MODERATE|HIGH|UNKNOWN */
+        /** 最终档位（只看食物本身）：LOW|MODERATE|HIGH|UNKNOWN */
         private String tier;
-        /** 份量修正前档位（per100gGL 档位） */
+        /** 历史字段：份量修正已下线，恒等于 tier（保留以免改前端契约） */
         private String baseTier;
         /** 命中规则编码；UNKNOWN 时为 null */
         private String ruleCode;
@@ -101,7 +99,7 @@ public final class MealSuitabilityDtos {
         private List<String> missingFields;
         /** 是否“重点关注”项（最终档位 HIGH） */
         private Boolean focused;
-        /** 重点关注原因：INTRINSIC=本身偏高|PORTION=份量偏大 */
+        /** 重点关注原因：INTRINSIC=本身负担高 */
         private String focusReason;
         /** 归一化后的食物大类（可能由库补全），由响应组装层回填，引擎不消费 */
         private Integer categoryCode;
@@ -119,7 +117,7 @@ public final class MealSuitabilityDtos {
     @Data
     public static class FocusItem {
         private String foodName;
-        /** INTRINSIC=本身偏高|PORTION=份量偏大 */
+        /** INTRINSIC=本身负担高 */
         private String reason;
         /** 展示文案（{foodName} 已替换） */
         private String text;
@@ -154,11 +152,11 @@ public final class MealSuitabilityDtos {
     public static class PreviewItem {
         private Long foodId;
         private String foodName;
-        /** 最终档位（含份量修正）：LOW|MODERATE|HIGH|UNKNOWN */
+        /** 最终档位（只看食物本身）：LOW|MODERATE|HIGH|UNKNOWN */
         private String tier;
         /** 升糖负担较低/中等/较高/信息不足 */
         private String tierLabel;
-        /** 份量修正前档位（per100gGL 档位） */
+        /** 历史字段：份量修正已下线，恒等于 tier（保留以免改前端契约） */
         private String baseTier;
         /** 规则级单项建议（占位符已替换，可空）；为空时前端按档位兜底 */
         private String adviceText;
@@ -174,7 +172,7 @@ public final class MealSuitabilityDtos {
         private List<String> missingFields;
         /** 是否“重点关注”项 */
         private Boolean focused;
-        /** 重点关注原因：INTRINSIC|PORTION */
+        /** 重点关注原因：INTRINSIC=本身负担高 */
         private String focusReason;
         /** 归一化后的食物大类（展示值与判定依据保持一致） */
         private Integer categoryCode;

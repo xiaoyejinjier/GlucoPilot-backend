@@ -8,7 +8,6 @@ import com.threadfit.glucopilot.meal.suitability.dto.MealSuitabilityDtos;
 import com.threadfit.glucopilot.meal.suitability.engine.AdviceResolver;
 import com.threadfit.glucopilot.meal.suitability.engine.SuitabilityRuleEngine;
 import com.threadfit.glucopilot.meal.suitability.entity.FoodSuitabilityRule;
-import com.threadfit.glucopilot.meal.suitability.entity.MealPortionAdjustRule;
 import com.threadfit.glucopilot.meal.suitability.mapper.FoodSuitabilityRuleMapper;
 import com.threadfit.glucopilot.meal.suitability.service.MealSuitabilityService;
 import com.threadfit.glucopilot.meal.suitability.service.SuitabilityConfigService;
@@ -67,9 +66,7 @@ public class MealSuitabilityServiceImpl implements MealSuitabilityService {
         List<MealSuitabilityDtos.ItemInput> items = nutritionResolver.resolve(request.getItems(), true);
 
         Map<String, String> config = configService.configMap();
-        List<MealPortionAdjustRule> adjustRules = configService.adjustRules();
-        MealSuitabilityDtos.Evaluation evaluation = engine.evaluate(
-                rules, items, adjustRules, configService.aggregationParams(config));
+        MealSuitabilityDtos.Evaluation evaluation = engine.evaluate(rules, items);
         return toResponse(evaluation, items, ruleVersion, rules, config);
     }
 
@@ -152,7 +149,7 @@ public class MealSuitabilityServiceImpl implements MealSuitabilityService {
                                                              Map<String, String> config) {
         List<MealSuitabilityDtos.FocusItem> focusItems = new ArrayList<>();
         for (MealSuitabilityDtos.FocusItem focus : evaluation.getFocusItems()) {
-            focus.setText(configService.focusText(config, focus.getReason(), focus.getFoodName()));
+            focus.setText(configService.focusText(config, focus.getFoodName()));
             focusItems.add(focus);
         }
         return focusItems;

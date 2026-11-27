@@ -1269,9 +1269,30 @@ public String analyze(MediaFile media, SceneCode scene, String instruction) {
 - `normalizeRole`：只认 `MAIN` / `SEASONING`（大小写与空白容忍），其余按主料；
 - `normalizeCookMethod`：白名单（炒/炸/煎/烤/蒸/煮/炖/凉拌/生食/其他），**不在白名单内落 null 而不是「其他」**——做法会直接展示给用户当纠正入口，把模型瞎写的「红烧」静默改成「其他」比留空更误导。
 
-落库在 `meal_food_item`（`V99__meal_food_item_dish_role_cook.sql` 加 `dish_name` / `item_role` / `cook_method` 三列，全部可空）。三列都**不参与升糖负担判定**：判定仍只看 `per100gGL` 与份量修正（`SuitabilityRuleEngine` 一行未改）。保存链路里它们必须穿过 `MealRecordServiceImpl.toInputs → ItemInput → MealNutritionResolver.copyOf → replaceItems` 四道手——`copyOf` 是**重建**新对象，漏一行就会静默丢字段，这是这次改造最容易翻车的地方。
+落库在 `meal_food_item`（`V99__meal_food_item_dish_role_cook.sql` 加 `dish_name` / `item_role` / `cook_method` 三列，全部可空）。三列都**不参与升糖负担判定**（判定只看 `per100gGL`，见 §11.y——V101 之后连份量修正也下线了）。保存链路里它们必须穿过 `MealRecordServiceImpl.toInputs → ItemInput → MealNutritionResolver.copyOf → replaceItems` 四道手——`copyOf` 是**重建**新对象，漏一行就会静默丢字段，这是这次改造最容易翻车的地方。
 
 老数据不迁移：V99 之前的历史明细是菜品级，`dish_name` 恒 NULL，读侧把 NULL 当「没有分组信息」。老客户端保存时不带这三个字段，`MealSnapshotMatcher` 会从识别快照里回填（用户改过的值优先），这样升级前后同一顿饭的明细排版不会突然散开。
+
+### 11.y 适食判定：从「按份量挪档」到「只回答是否建议食用」（V101）
+
+**2026-11-27 的产品决策**：饮食分析不再对量做判断。原因不是技术上做不到，而是**量在照片里估不准**：同一盘饭，识别给的 150 克可能是 220 克，把「克重误差」换算成「这顿少吃半碗」的建议，等于把识别噪声包装成饮食指导。改完之后系统只回答两件事——**这餐建议不建议吃（三档）**，以及**每样食物的营养事实（每 100 克碳水/热量/GL）**。
+
+判定链路的三处改动：
+
+| 位置 | 原来 | 现在 |
+| --- | --- | --- |
+| `SuitabilityRuleEngine.evaluate` | `evaluate(rules, items, adjustRules, AggregationParams)`：先按 `per100gGL` 命中规则，再用 `meal_portion_adjust_rule` 按份量桶上下挪一档 | `evaluate(rules, items)`：档位**只由 per100gGL 决定**，`baseTier` 恒等于 `tier`（字段保留，避免改前端契约） |
+| 整餐结论 | 取碳水占比最大的那一项（并跳过 UNKNOWN） | **取最差一档**（`worstTierOf`：LOW < MODERATE < HIGH，UNKNOWN 不参与，全 UNKNOWN 才 UNKNOWN）——一餐里有一样不推荐，整餐就该提示，而不是被米饭的碳水占比稀释 |
+| 重点关注 | `INTRINSIC` 与 `PORTION` 两种来源 | 只剩 `INTRINSIC`（食物固有属性），`MealSuitabilityDtos.FOCUS_PORTION` 已删 |
+
+`SuitabilityConfigService` 同步删掉 `adjustRules()`、`aggregationParams()`、`focus_text_portion` 与两个 share/unknown 开关；`focusText(config, foodName)` 只剩两个参数。**表与配置行都没有删**（`meal_portion_adjust_rule`、`meal_carb_share_threshold`、`meal_unknown_skip_enabled` 仍在库里，V101 只把 remark 标成「已失效」）：删表是不可逆的，而留下它们只需要在 javadoc 里写清「代码不再读」——避免下一个人改表却不生效的错觉。
+
+文案换了一批（`V101__meal_suitability_texts_without_portion.sql`）：11 条 `food_suitability_rule.advice_text` 与 `meal_suitability_config` 的 `advice_low/moderate/high/unknown`、`focus_text_intrinsic` 全部重写，去掉「半碗」「减少份量」「注意份量」。三档标签从「升糖负担较低/中等/较高」改成直白的 **建议食用 / 适量食用 / 不建议食用 / 信息不足**。
+
+这推翻了一条旧约束：`MealAnalysisTexts` 原来明令禁止「适合/不适合/不建议食用」这类绝对表述（合规考虑）。现在按产品决策改成允许——**但免责声明必须保留**（「结果仅供参考，不构成医疗建议」），并且「不宜食用」「放心吃」「会导致血糖」这类断言仍然禁止。测试侧同步换靶子：`meal-copy-compliance.test.cjs` 的黑名单从「绝对结论词」改成「份量判定词」，`SuitabilityRuleEngineTest` 新增 `carbsNoLongerDecideTheMeal`（碳水 8 克的薯条也能把整餐拉到 HIGH）与 `mealTierTakesTheWorstItem`。
+
+前端把营养信息搬到识别结果最上方（`nutrition-card`：整餐碳水/热量 + 每样每 100 克的碳水/热量/GL），删掉「份量」编辑与「（随份量变化）」；克重仍可录入，但只用于营养合计。整餐合计跳过缺营养数据的条目，并在 `warnings` 里点名（见 §11.x 之前的 `missingNutritionWarning`）。
+
 
 
 ---

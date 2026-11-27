@@ -1,4 +1,4 @@
-﻿# API 契约
+# API 契约
 
 ## 2026-11-26 医生认证结果全局提醒
 
@@ -1207,3 +1207,15 @@ community 按 `controller / dto / entity / mapper / service / support` 分类；
 - 服务端归一化：`dishName` 走 NFKC + 空白折叠 + 截断 64 字，空串归 null；`role` 只认 `MAIN`/`SEASONING`（大小写与空白容忍），其余按主料；`cookMethod` 不在白名单内落 null（不猜成「其他」）。
 - 保存链路落库到 `meal_food_item.dish_name` / `item_role` / `cook_method`（`V99__meal_food_item_dish_role_cook.sql`，三列均可空）。**老数据不迁移**：V99 之前的历史明细是菜品级，三列为 NULL，读侧把 NULL 当「没有分组信息」。
 - 老客户端（不带三字段）保存时由识别快照回填（`MealSnapshotMatcher`），用户改过的值优先——升级前后同一顿饭的明细排版不会突然散开；不带 `analysisToken` 时三字段保持为空，不影响保存。
+
+## 2026-11-27 饮食分析不再对量做判断（V101）
+
+产品决策：照片估不准克重，把误差换算成「少吃半碗」等于把识别噪声当饮食指导。接口语义收敛为两件事——是否建议食用（三档）+ 食物营养事实。
+
+- `tier` 取值不变（LOW / MODERATE / HIGH / UNKNOWN），但**档位只由每 100 克 GL 决定**：服务端不再按份量挪档，`baseTier` 恒等于 `tier`（字段保留以兼容老前端，可忽略）。
+- 整餐结论改为**取最差一档**：`worstTierOf(items)`，UNKNOWN 不参与；全为 UNKNOWN 时整餐才是 UNKNOWN。`worstRuleCode` 指向第一个达到最差档位的条目。
+- `focusReason` 只剩 `INTRINSIC`；`PORTION` 已从常量与响应中移除（`focus` 仍可能为空）。
+- 标签文案改为「建议食用 / 适量食用 / 不建议食用 / 信息不足」；`advice_low/moderate/high/unknown` 与 11 条规则文案重写（`V101__meal_suitability_texts_without_portion.sql`），不再出现「半碗 / 减少份量 / 注意份量」。
+- `carbsG` 只用于营养展示与整餐合计，不参与判定。克重（`weightG`）仍可录入，仅用于把每 100 克营养折算成这一餐的实际摄入。
+- 配置键 `focus_text_portion` 已删除；`meal_portion_adjust_rule`、`meal_carb_share_threshold`、`meal_unknown_skip_enabled` 保留在库、代码不再读取（remark 标「已失效」）。
+- 前端：识别结果页最上方新增营养卡（整餐碳水/热量 + 每样每 100 克的碳水/热量/GL），移除「份量」编辑与「（随份量变化）」提示。

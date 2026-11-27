@@ -207,6 +207,43 @@ class MealAnalysisServiceTest {
         verifyNoInteractions(snapshots, vision, catalog);
     }
 
+    @Test void mealTotalSkipsItemsWithoutNutritionButNamesThemInWarnings() {
+        MediaFile photo = new MediaFile(); photo.setId(8L);
+        when(media.findOwnedMedia(8L, 1L, MediaBizType.MEAL)).thenReturn(photo);
+        when(vision.analyze(any(), eq(SceneCode.MEAL_ANALYSIS), anyString())).thenReturn(
+                "{\"schemaVersion\":1,\"foods\":[{\"name\":\"米饭\",\"categoryCode\":1,\"weightG\":150,\"confidence\":95},"
+                        + "{\"name\":\"青豆\",\"categoryCode\":3,\"weightG\":20,\"confidence\":90}]}");
+        when(catalog.resolve(any(), anyString(), eq(8L)))
+                .thenReturn(new MealFoodCatalogService.Resolution(MealAnalysisDtos.Item.builder()
+                        .foodName("米饭").confidence(95).libraryStatus("AVAILABLE").weightG(new BigDecimal("150"))
+                        .carbsG(new BigDecimal("38.85")).caloriesKcal(new BigDecimal("174.0")).build(), false))
+                .thenReturn(new MealFoodCatalogService.Resolution(MealAnalysisDtos.Item.builder()
+                        .foodName("青豆").confidence(90).libraryStatus("UNRESOLVED").weightG(new BigDecimal("20")).build(), false));
+
+        var result = service.analyze(1L, request());
+
+        // 有值的项照常累加，缺值项跳过，而不是把整餐算成 null
+        assertEquals(0, new BigDecimal("38.85").compareTo(result.getCarbsG()));
+        assertEquals(0, new BigDecimal("174.0").compareTo(result.getCaloriesKcal()));
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("青豆") && w.contains("整餐合计未计入")),
+                "缺营养的食材必须在 warnings 里点名：" + result.getWarnings());
+    }
+
+    @Test void mealTotalIsNullOnlyWhenNoItemHasNutrition() {
+        var missing = MealAnalysisDtos.Item.builder().foodName("青豆").build();
+        var present = MealAnalysisDtos.Item.builder().foodName("米饭").carbsG(new BigDecimal("10")).build();
+
+        assertEquals(0, new BigDecimal("10").compareTo(service.total(List.of(missing, present), false)));
+        assertNull(service.total(List.of(missing), false));
+    }
+
+    @Test void missingNutritionWarningListsAtMostThreeNamesButKeepsTheCount() {
+        assertEquals("青豆 缺少营养数据，整餐合计未计入（可补充后重新识别）",
+                MealAnalysisServiceImpl.missingNutritionWarning(List.of("青豆")));
+        assertEquals("米饭、青豆、猪肉等 5 种食材 缺少营养数据，整餐合计未计入（可补充后重新识别）",
+                MealAnalysisServiceImpl.missingNutritionWarning(List.of("米饭", "青豆", "猪肉", "胡萝卜", "海带")));
+    }
+
     private static MealAnalysisDtos.Request request() {
         var request = new MealAnalysisDtos.Request(); request.setMediaId(8L); request.setNodeCode("breakfast"); return request;
     }

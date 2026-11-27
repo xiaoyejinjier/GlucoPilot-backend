@@ -95,6 +95,7 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
                 warnings.add(recognized.getWarning().substring(0, Math.min(200, recognized.getWarning().length())));
             }
             int newCount = 0;
+            List<String> missingNutrition = new ArrayList<>();
             for (MealAnalysisDtos.ModelFood food : recognized.getFoods()) {
                 if (food == null) continue;
                 String name = MealFoodCatalogService.normalizeName(food.getName());
@@ -103,10 +104,11 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
                 items.add(resolution.item());
                 if (resolution.added()) newCount++;
                 if (resolution.item().getWeightG() == null) warnings.add("请确认食物重量后保存");
-                if (resolution.item().getCarbsG() == null) warnings.add("部分食物或营养不确定，请补充说明后重新识别");
+                if (resolution.item().getCarbsG() == null) missingNutrition.add(resolution.item().getFoodName());
                 if ("AI_ESTIMATE".equals(resolution.item().getNutritionSource())) warnings.add("新食品营养为模型估算，已加入食品库待运营核对");
             }
             if (items.isEmpty()) throw new BizException(ErrorCode.BIZ_REJECTED, "未识别出餐食，请重新拍摄清晰照片");
+            if (!missingNutrition.isEmpty()) warnings.add(missingNutritionWarning(missingNutrition));
             var result = MealAnalysisDtos.Result.builder().model(model).items(items)
                     .carbsG(total(items, false)).caloriesKcal(total(items, true))
                     .matchedCount((int) items.stream().filter(item -> "LIBRARY".equals(item.getNutritionSource())).count())
@@ -193,14 +195,34 @@ public class MealAnalysisServiceImpl implements MealAnalysisService {
         return any;
     }
 
-    private BigDecimal total(List<MealAnalysisDtos.Item> items, boolean calories) {
-        BigDecimal total = BigDecimal.ZERO;
+    /**
+     * 整餐合计：<b>只累加有值的明细</b>，缺营养的项跳过（食材级拆分后一餐十几样，
+     * 只要有一项查不到营养就整餐为 null，用户看到的是「这顿饭算不出来」）。
+     * <p>
+     * 跳过不等于假装没吃：缺了哪几样由 {@link #missingNutritionWarning(List)} 写进 warnings，
+     * 提示里点名，用户既知道合计偏小、也知道该补哪一项。
+     */
+    BigDecimal total(List<MealAnalysisDtos.Item> items, boolean calories) {
+        BigDecimal total = null;
         for (var item : items) {
             BigDecimal value = calories ? item.getCaloriesKcal() : item.getCarbsG();
-            if (value == null) return null;
-            total = total.add(value);
+            if (value == null) continue;
+            total = total == null ? value : total.add(value);
         }
         return total;
+    }
+
+    /**
+     * 缺营养明细的提示文案：最多点名 3 样，其余折成「等 N 种食材」，并说明合计口径。
+     * <p>
+     * 限 3 是为了一行读完（前端 warnings 单行展示），而「共 N 种」保留完整信息，
+     * 避免用户以为只漏了一样。
+     */
+    static String missingNutritionWarning(List<String> names) {
+        int shown = Math.min(3, names.size());
+        String listed = String.join("、", names.subList(0, shown));
+        String rest = names.size() > shown ? "等 " + names.size() + " 种食材" : "";
+        return listed + rest + " 缺少营养数据，整餐合计未计入（可补充后重新识别）";
     }
 
     private String hash(String text) {

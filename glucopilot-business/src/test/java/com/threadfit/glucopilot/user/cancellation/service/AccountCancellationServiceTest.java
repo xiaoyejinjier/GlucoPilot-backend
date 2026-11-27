@@ -20,6 +20,7 @@ import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationMode;
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationStatus;
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationVerifyChannel;
 import com.threadfit.glucopilot.common.exception.BizException;
+import com.threadfit.glucopilot.consultation.mapper.ConsultationMapper;
 import com.threadfit.glucopilot.user.cancellation.service.impl.AccountCancellationServiceImpl;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeRequest;
 import com.threadfit.glucopilot.user.dto.CancellationDtos.SendCodeView;
@@ -51,6 +52,7 @@ class AccountCancellationServiceTest {
     @Mock private AuthService authService;
     @Mock private CaptchaService captchaService;
     @Mock private WalletCheckService walletCheckService;
+    @Mock private ConsultationMapper consultationMapper;
 
     @InjectMocks private AccountCancellationServiceImpl service;
 
@@ -305,8 +307,11 @@ class AccountCancellationServiceTest {
 
         assertTrue(view.getCanCancel());
         assertEquals(null, view.getBlockCode());
-        assertEquals(4, view.getChecks().size());
+        assertEquals(5, view.getChecks().size());
         assertTrue(view.getChecks().stream().allMatch(check -> Boolean.TRUE.equals(check.getPassed())));
+        assertTrue(
+                view.getChecks().stream()
+                        .anyMatch(check -> "CONSULTATION_IN_FLIGHT".equals(check.getCode())));
     }
 
     @Test
@@ -389,6 +394,20 @@ class AccountCancellationServiceTest {
                         .findFirst()
                         .orElseThrow()
                         .getPassed());
+    }
+
+    @Test
+    void precheckBlocksWhenConsultationInFlight() {
+        when(userAccountMapper.selectById(1L))
+                .thenReturn(account(1L, AccountStatus.NORMAL.getCode()));
+        when(cancellationMapper.selectList(any())).thenReturn(List.of());
+        when(consultationMapper.countInFlight(1L)).thenReturn(1L);
+
+        var view = service.precheck(1L);
+
+        assertFalse(view.getCanCancel());
+        assertEquals("ASSET_PENDING", view.getBlockCode());
+        assertEquals("CONSULTATION_IN_FLIGHT", view.getBlockReasonCode());
     }
 
     @Test

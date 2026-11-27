@@ -36,6 +36,21 @@ public class UserReminderServiceTest {
         return text == null ? null : UserReminderService.hash(text);
     }
 
+    @Test
+    void doctorReviewAllReadUsesSnapshotAndDoesNotHideLaterReview() {
+        jdbc.update("INSERT INTO consultation_doctor(user_id,status,version,reviewed_at) VALUES(1,'APPROVED',7,CURRENT_TIMESTAMP)");
+        Long snapshot = mapper.doctorReviewVersion(1);
+        jdbc.update("UPDATE consultation_doctor SET version=8 WHERE user_id=1");
+        assertEquals(0, mapper.readDoctorReviewVersion(1, snapshot));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM consultation_doctor_review_read", Integer.class));
+        service.readInformation(1, "DOCTOR_REVIEW");
+        assertEquals(8L, jdbc.queryForObject("SELECT review_version FROM consultation_doctor_review_read WHERE user_id=1", Long.class));
+        jdbc.update("UPDATE consultation_doctor SET version=9 WHERE user_id=1");
+        tx.executeWithoutResult(status -> service.readAll(1, DAY));
+        assertEquals(9L, jdbc.queryForObject("SELECT review_version FROM consultation_doctor_review_read WHERE user_id=1", Long.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM consultation_doctor_review_read WHERE user_id=2", Integer.class));
+    }
+
     @BeforeEach
     void setup() throws Exception {
         var ds =

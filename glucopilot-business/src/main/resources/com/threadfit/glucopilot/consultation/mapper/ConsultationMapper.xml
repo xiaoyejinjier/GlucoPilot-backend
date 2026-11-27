@@ -43,6 +43,12 @@
     <select id="lockDoctor" resultType="com.threadfit.glucopilot.consultation.entity.DoctorProfile" useCache="false" flushCache="true">
         SELECT * FROM consultation_doctor WHERE user_id=#{user} FOR UPDATE
     </select>
+    <insert id="readDoctorReview">
+        INSERT INTO consultation_doctor_review_read(user_id,review_version)
+        VALUES(#{user},#{version})
+        ON DUPLICATE KEY UPDATE
+            review_version=GREATEST(review_version,VALUES(review_version)),read_at=CURRENT_TIMESTAMP(3)
+    </insert>
     <insert id="insertDoctor">
         INSERT INTO consultation_doctor(user_id,real_name,hospital,specialty,license_number,qualification_note)
         VALUES(#{user},#{form.realName},#{form.hospital},#{form.specialty},#{form.licenseNumber},#{form.qualificationNote})
@@ -76,6 +82,9 @@
         <if test="assigned">AND c.doctor_user_id=#{viewer}</if>
         <if test="hideMine">AND c.patient_id&lt;&gt;#{viewer}</if>
         <if test="unclaimedOnly">AND c.status='WAITING' AND c.doctor_user_id IS NULL</if>
+        <!-- 列表与总数共用；状态在LIMIT前筛选，避免分页后由前端过滤遗漏。 -->
+        <if test="status != null">AND c.status=#{status}</if>
+        <if test="status == 'WAITING'">AND c.doctor_user_id IS NULL</if>
         <if test="topic != null">AND c.topic=#{topic}</if>
     </sql>
     <select id="count" resultType="long">SELECT COUNT(*) <include refid="caseScope"/></select>
@@ -161,4 +170,14 @@
         INSERT INTO consultation_wallet_entry(order_no,user_id,amount_cents,balance_after_cents)
         VALUES(#{no},#{user},#{amount},#{balance})
     </insert>
+    <!-- 医生注销预检：作为医生仍进行中（IN_PROGRESS/REPORT_READY）且未支付的问诊单数量。
+         REPORT_READY 需有报告，再判断该报告是否已有 PAID 订单；IN_PROGRESS 尚无报告，必然未支付。 -->
+    <select id="countInFlight" resultType="long">
+        SELECT COUNT(*) FROM consultation_request c
+        WHERE c.doctor_user_id=#{doctor} AND c.status IN ('IN_PROGRESS','REPORT_READY')
+          AND NOT EXISTS (
+            SELECT 1 FROM consultation_report r
+            JOIN consultation_order o ON o.report_id=r.id
+            WHERE r.consultation_id=c.id AND o.status='PAID')
+    </select>
 </mapper>

@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -127,5 +128,23 @@ public final class DeviceDtos {
         private String remark;
         /** 同步时间，对应 gmt_create */
         private LocalDateTime syncedAt;
+    }
+
+    /** 某次同步的血糖样本点（device_sync_sample）。 */
+    @Data
+    @Builder
+    public static class SyncSamplePoint {
+        private LocalDateTime recordedAt;
+        private String nodeCode;
+        private BigDecimal glucoseValue;
+    }
+
+    /** 某次同步样本快照（只读曲线）。 */
+    @Data
+    @Builder
+    public static class SyncSamplesResponse {
+        private LocalDateTime syncedAt;
+        private Integer sampleCount;
+        private List<SyncSamplePoint> points;
     }
 }

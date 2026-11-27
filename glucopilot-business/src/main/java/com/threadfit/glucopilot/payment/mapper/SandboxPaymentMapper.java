@@ -17,6 +17,17 @@ public interface SandboxPaymentMapper {
 
     SandboxRecharge lockOrder(@Param("orderNo") String orderNo);
 
+    /** 沙箱余额行不存在时返回 null（注销资产校验按 0 处理）。 */
+    Long balanceCents(@Param("userId") long userId);
+
+    Long incomeAvailableCents(@Param("userId") long userId);
+
+    /** 未过期（expires_at > NOW）的 PENDING 充值单数量。 */
+    long countInFlightRecharges(@Param("userId") long userId);
+
+    /** 账号状态，用户不存在或逻辑删除返回 null。 */
+    Integer accountStatus(@Param("userId") long userId);
+
     int insert(@Param("order") SandboxRecharge order);
 
     int saveQr(@Param("orderNo") String orderNo, @Param("qr") String qr);

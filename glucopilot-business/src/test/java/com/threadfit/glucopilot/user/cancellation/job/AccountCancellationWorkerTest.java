@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -14,6 +15,7 @@ import static org.mockito.Mockito.when;
 import com.threadfit.glucopilot.common.enums.CodeEnum.AccountStatus;
 import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationStatus;
 import com.threadfit.glucopilot.user.cancellation.service.AccountDataPurger;
+import com.threadfit.glucopilot.user.cancellation.service.WalletCheckService;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserAccountCancellation;
 import com.threadfit.glucopilot.user.mapper.UserAccountCancellationMapper;
@@ -43,6 +45,7 @@ class AccountCancellationWorkerTest {
     @Mock private UserAccountMapper userAccountMapper;
     @Mock private UserCancelLogMapper userCancelLogMapper;
     @Mock private AccountDataPurger purger;
+    @Mock private WalletCheckService walletCheckService;
 
     @InjectMocks private AccountCancellationWorker worker;
 
@@ -59,6 +62,10 @@ class AccountCancellationWorkerTest {
     void injectSafetyMargin() {
         // @Value 注入在纯 Mockito 下不生效，显式预置默认值
         ReflectionTestUtils.setField(worker, "safetyMargin", Duration.ofMinutes(5));
+        // 默认资产已结清；个别用例再覆盖为未结清以验证安全中止
+        lenient()
+                .when(walletCheckService.check(anyLong()))
+                .thenReturn(WalletCheckService.WalletCheckResult.ok());
     }
 
     @Test
@@ -160,6 +167,40 @@ class AccountCancellationWorkerTest {
 
         worker.poll();
 
+        verifyNoInteractions(purger);
+    }
+
+    @Test
+    void abortsAndRestoresAccountWhenAssetsStillPending() {
+        UserAccountCancellation record = record(1L, 9L, 0);
+        when(userAccountMapper.selectById(9L)).thenReturn(account(9L, AccountStatus.CANCELLED_RECOVERABLE));
+        when(walletCheckService.check(9L))
+                .thenReturn(new WalletCheckService.WalletCheckResult(false, WalletCheckService.BALANCE));
+        when(userAccountMapper.casRecoverFromCancellation(9L, AccountStatus.NORMAL.getCode())).thenReturn(1);
+
+        worker.process(record);
+
+        // 先回滚账号、再置 FAILED、最后审计；purge 未执行
+        verify(userAccountMapper).casRecoverFromCancellation(9L, AccountStatus.NORMAL.getCode());
+        verify(cancellationMapper)
+                .markFailed(eq(1L), eq(CancellationStatus.FAILED.getCode()), eq("ASSET_PENDING:BALANCE"));
+        verify(userCancelLogMapper).insertIgnore(any());
+        verifyNoInteractions(purger);
+    }
+
+    @Test
+    void skipsAbortWhenAccountConcurrentlyChanged() {
+        UserAccountCancellation record = record(1L, 9L, 0);
+        when(userAccountMapper.selectById(9L)).thenReturn(account(9L, AccountStatus.CANCELLED_RECOVERABLE));
+        when(walletCheckService.check(9L))
+                .thenReturn(new WalletCheckService.WalletCheckResult(false, WalletCheckService.BALANCE));
+        // 管理端并发恢复：CAS 落空，凭据已被移出 PENDING
+        when(userAccountMapper.casRecoverFromCancellation(9L, AccountStatus.NORMAL.getCode())).thenReturn(0);
+
+        worker.process(record);
+
+        verify(userAccountMapper).casRecoverFromCancellation(9L, AccountStatus.NORMAL.getCode());
+        verify(cancellationMapper, never()).markFailed(anyLong(), anyInt(), anyString());
         verifyNoInteractions(purger);
     }
 

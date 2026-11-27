@@ -1,5 +1,21 @@
 ﻿# API 契约
 
+## 2026-11-26 医生认证结果全局提醒
+
+- GET `/api/v1/community/information/summary`追加`doctorReviews`（0或1）和可空`doctorReview {version:string,status,reviewedAt}`，并计入total。仅本人当前有效审核结果APPROVED/REJECTED/DISABLED且有reviewedAt、当前版本未读时返回；不含资质、执业证、审核员及审核备注。PENDING无提醒。
+- 新增鉴权PUT `/api/v1/consultation-doctors/me/review/read`，请求`{version}`。只按登录用户读取并锁定医生记录，校验展示版本与当前审核版本一致后保存已读；新版本409且不误清提醒，重复已读幂等。不能传用户ID代他人标记。
+- 用户提醒类别已读增加DOCTOR_REVIEW，顶部全部已读覆盖认证结果；批量已读先取版本再按该版本条件插入，晚到的新审核不被旧操作清除。
+- 小程序纳入全局未读、问诊Tab角标、顶部认证结果提醒与记录页“提醒与回复”，点击直达医生工作台；只有审核结果渲染完成后才标该版本已读，也可手动标记。采用现有5秒汇总轮询，同一结果不反复弹窗；换账号清空状态并丢弃旧请求。
+- `R__doctor_review_notification_reads.sql`建立独立按用户/审核版本的已读表，不改审核和钱包数据；既有已审核记录首次视为未读，查看后消除。
+
+## 2026-11-26 求助广场组合筛选
+
+- GET `/api/v1/consultations`增加可选`status`，空值表示全部；仅接受`WAITING`、`IN_PROGRESS`、`REPORT_READY`、`CLOSED`，非法值400。普通已登录用户也可按公开问诊状态筛选；等待医生要求WAITING且doctor_user_id为空，不扩大正文或问诊单访问权限。
+- 发布人使用原参数：全部为mine=false/hideMine=false，本人为mine=true，其他人为hideMine=true。可与status、topic组合；本人身份只取登录上下文，不接受查询参数指定用户。状态、归属、分类在SQL分页前过滤，列表和总数复用同一条件。
+- 已审核通过医生的筛选面板追加“我的接诊”，使用原`assigned=true`且mine/hideMine=false，可叠加status和topic；仅返回doctor_user_id为当前登录用户的问诊。后端沿用已认证医生校验，不由前端传医生ID。面板分组统一称“求助范围”；普通、待审、未通过和停用医生不显示此选项。每次重置加载及返回页面复核医生身份，身份失效后清除我的接诊筛选；换账号立即隐藏，迟到身份响应不得恢复。
+- 兼容既有mine/assigned和医生专用unclaimedOnly；unclaimedOnly原权限与范围校验保留，与非WAITING状态同时指定时400。既有客户端不传status时行为不变。
+- 小程序将“隐藏我的求助”替换为右侧“筛选”按钮，弹出发布人和状态两组单选；提供重置/确定。仅确定后请求，切换条件重置分页，翻页/下拉/详情返回保留条件，换账号清空；迟到响应不能覆盖新条件。取消面板不改变已应用筛选。原医生“全部求助/未接诊”独立行合并入面板。
+
 ## 2026-11-24 求助广场健康标签选择
 
 - 新增鉴权 GET `/api/v1/consultations/topics`，返回启用分类数组 `{code,name,groupName,sortNo}`，按 sortNo、code 排序；沿用 ApiResponse 和 no-store。
@@ -217,7 +233,7 @@ UPDATE feedback_type SET enabled = 0 WHERE id = 6;
 - GET/POST /consultations/{id}/messages提供问诊内独立交流，发送content/clientRequestId，按发送者和请求编号幂等，最多2000字；只允许本人患者和接诊且资质有效的医生，WAITING不开放交流，CLOSED不能发送。支持afterId增量和beforeId历史翻页（每次最多50条），不因发送交流消息出具或解锁付费问诊单。后台医生有相同路径，受doctor:consultation:manage控制。
 - 继续沿用充值订单→支付宝沙箱支付→验签通知/主动查单→钱包余额→100分问诊订单。金额、收款医生和成功状态均由服务端确定。回调POST /api/v1/payments/alipay/sandbox/notify校验签名、AppID、商家、订单、金额、交易号和交易状态，订单/余额/唯一流水同事务落库，重复回调只确认原结果。真实公网回调地址须由部署环境ALIPAY_SANDBOX_NOTIFY_URL配置，未配置时使用主动查单，不宣称公网已联通。
 - 医生沙箱提现：GET /wallet/withdrawals/summary、GET/POST /wallet/withdrawals；提交amountCents/clientRequestId，金额以分保存，先建提现订单并冻结可提现问诊收入。余额中的income_available_cents独立跟踪问诊收入：问诊入账增加、消费按剩余余额收缩、冻结减少、拒绝恢复；充值不增加该额度。历史额度按现有问诊收支净额保守回填，避免消费完收入后重新充值套出提现额度。
-- 管理员在/admin/v1/doctor-withdrawals查询并审批（version+审核意见，独立doctor:withdrawal:manage权限）；拒绝解冻，通过后计算第5个工作日的预计发放日期，定时任务到期模拟发放并记录唯一流水。状态PENDING/APPROVED/REJECTED/COMPLETED，所有页面明确仅沙箱模拟，不向支付宝真实转账。
+- 管理员在/admin/v1/doctor-withdrawals查询并审批（version+审核意见，独立doctor:withdrawal:manage权限）；拒绝解冻，通过后计算第5个工作日的预计发放日期，定时任务到期模拟发放并记录唯一流水。状态PENDING/APPROVED/REJECTED/COMPLETED，所有页面明确仅沙箱模拟，不向支付宝真实转账。申请人处于注销中/已注销（accountStatus=3/4）时，PENDING 单仅可 REJECTED（解冻退款），APPROVED 返回 409「用户注销中，仅可驳回」；列表响应新增申请人 `accountStatus` 供管理端标识。
 - 工作日以已配置wallet_work_calendar例外日期为准，未配置按周一至周五；管理员可在提现管理配置节假日及调休，已批准订单的预计日期保留快照。V70新增问诊配图、交流、提现订单、提现流水及工作日历，沙箱余额增加冻结金额。
 
 ## 2026-11-16 当天标签兴趣与推荐换批
@@ -413,9 +429,9 @@ C端微信、手机号和邮箱登录统一采用后登录替换旧会话：同�
 **接口**（前缀 /api/v1/users/me）
 - GET /cancellation：无申请时 cancellation=null，否则含 status、mode、reasonCode、verifyChannel、requestedAt、isolateUntil、executedAt、recoveredAt；另返回 hasPhone/hasEmail/hasWechat 与 phoneMasked/emailMasked，前端据此决定展示哪些验证方式与“验证码将发送至 …”提示。
 - GET /cancellation/captcha：无请求体，返回 {ticket,expiresIn=180}；票据一次性、绑定 userId，取票频控用户 20 次/小时、IP 60 次/小时（超出 429）。
-- GET /cancellation/precheck：无请求体，只读无副作用，HTTP 恒 200。返回 {canCancel,blockCode,blockMessage,isolateUntil,checks[]}；`blockCode` 按顺序判定 CANCELLING(2)→ACCOUNT_CANCELLED(3)→ALREADY_APPLIED(存在 PENDING/RUNNING 凭据或 status=4 兜底)→ACCOUNT_DISABLED(0)→RECENTLY_RECOVERED(最近 recovered_at 在 24h 内)→ASSET_PENDING(钱包/资产校验未通过)→ACCOUNT_UNUSABLE(其余兜底)，全部通过时 canCancel=true、blockCode=null。`isolateUntil` 仅在 ALREADY_APPLIED/CANCELLING 且有凭据时返回（epoch 毫秒字符串）。已有进行中申请时**幂等优先于封禁**，即使账号已被禁用也返回 ALREADY_APPLIED。`checks` 固定 4 项：ACCOUNT_SAFE、ASSET_CLEARED、NO_ACTIVE_APPLICATION、RECENTLY_RECOVERED，供日志与后续 UI 使用，当前前端不展示。
+- GET /cancellation/precheck：无请求体，只读无副作用，HTTP 恒 200。返回 {canCancel,blockCode,blockMessage,blockReasonCode,isolateUntil,checks[]}；`blockCode` 按顺序判定 CANCELLING(2)→ACCOUNT_CANCELLED(3)→ALREADY_APPLIED(存在 PENDING/RUNNING 凭据或 status=4 兜底)→ACCOUNT_DISABLED(0)→RECENTLY_RECOVERED(最近 recovered_at 在 24h 内)→ASSET_PENDING(钱包/资产/问诊未结清)→ACCOUNT_UNUSABLE(其余兜底)，全部通过时 canCancel=true、blockCode=null。`blockReasonCode` 在 ASSET_PENDING 时非空，取值 BALANCE/INCOME_PENDING/WITHDRAWAL_IN_FLIGHT/RECHARGE_IN_FLIGHT/CONSULTATION_IN_FLIGHT，供前端按原因弹窗与跳转；`isolateUntil` 仅在 ALREADY_APPLIED/CANCELLING 且有凭据时返回（epoch 毫秒字符串）。已有进行中申请时**幂等优先于封禁**，即使账号已被禁用也返回 ALREADY_APPLIED。`checks` 固定 5 项：ACCOUNT_SAFE、ASSET_CLEARED（含可选 reasonCode，阻断时非空）、NO_ACTIVE_APPLICATION、RECENTLY_RECOVERED、CONSULTATION_IN_FLIGHT，前端在说明页条件列表展示未通过项。
 - POST /cancellation/code：{channel:1|2,captchaTicket}（均必填，不做旧客户端兼容），服务端先校验通道已绑定、再消费票据、再按用户/IP 日限额发码，返回 {channel,maskedTarget,expiresIn,cooldownSeconds}；手机/邮箱均未绑定返回 400，纯微信账号不应调用（前端不展示手机/邮箱验证）。
-- POST /cancellation：{mode:2,reasonCode?,verifyType:1|2|3,verifyCode?,wechatCode?}，提交仅接受 mode=2（mode=1 返回 400「仅支持七天可恢复注销」）；verifyType 必填且必须与实际绑定一致；1/2 走 verifyCode、3 走 wechatCode（code 一次性、换取即消费防重放）；仅 NORMAL 可提交，DISABLED 返回 403「账号已被封禁，请联系客服申请解冻后再注销」；已有 PENDING 幂等返回现状（封禁账号同样幂等返回，不报 403）；成功后立即失效全部 user_session，accountStatus 置 4，返回 isolateUntil=申请时间+7 天。
+- POST /cancellation：{mode:2,reasonCode?,verifyType:1|2|3,verifyCode?,wechatCode?}，提交仅接受 mode=2（mode=1 返回 400「仅支持七天可恢复注销」）；verifyType 必填且必须与实际绑定一致；1/2 走 verifyCode、3 走 wechatCode（code 一次性、换取即消费防重放）；仅 NORMAL 可提交，DISABLED 返回 403「账号已被封禁，请联系客服申请解冻后再注销」；已有 PENDING 幂等返回现状（封禁账号同样幂等返回，不报 403）；钱包/资产校验在消费验证码之前执行，未结清返回 409（message 含具体资产类型，不消耗一次性验证码）；成功后立即失效全部 user_session，accountStatus 置 4，返回 isolateUntil=申请时间+7 天。
 - **恢复（独立接口）**：冷静期内登录校验通过后**不建会话、不发 Token、不改状态**，返回 HTTP 409 + `code=40901 NEED_RECOVER_CONFIRM`，`data` 为 `{recoverRequired:true,recoverTicket,ticketExpireIn:300,remainingDays,cancelDeadlineAt,usernameMasked,phoneMasked,recoverToStatus,willStayDisabled}`；`recoverToStatus` 取凭据 `pre_status`（0 或 1），为 0 时 `willStayDisabled=true`。票据存 Redis，5 分钟有效，`GETDEL` 原子一次性消费。
 - POST /api/v1/auth/cancel-recovery/sessions：`{ticket}`（必填）。票据即幂等凭据，无需 `X-Idempotency-Key`、无需 `Authorization`。服务端依次执行：消费票据 → 账号行锁 → 账号 CAS（`WHERE account_status=4`，还原 `pre_status`）→ 凭据 CAS（`PENDING→RECOVERED`）→ 同事务写 `USER_RECOVER` 审计 → 撤销旧会话并建新会话。成功返回与登录相同的 `SessionResponse`（含正式 `accessToken`），`recoveredFromCancellation` 恒为 false。票据过期/已用返回 40001「恢复确认已失效，请重新登录」；窗口已过返回 403「注销申请已过反悔期，账号正在清理中」；账号状态已被并发改变且非 0/1 返回 40900。
 - `now >= isolateUntil` 时登录同样直接拒绝（403「注销申请已过反悔期，账号正在清理中」），不签发票据、不建会话。
@@ -751,6 +767,10 @@ GET /api/v1/news/{id}/comments继续按pageNum/pageSize查询顶级评论，tota
 
 ## 管理端业务列表分页
 
+模拟GI展示（2026-11-25）：用户要求的粗略数字仅供演示，单独保存在`food_gi_demo_estimate`。食品列表和详情新增可空字段`giDemoValue`，仅在真实`giValue`/`gi`为空时返回；两端必须标注“模拟GI，仅演示”，不能用其回填真实GI字段、食品编辑表单、饮食选择器或升糖负荷计算。已有GI、自动文献检索、历史记录及导出中的真实GI口径不变。
+
+食品GI补全（2026-11-25）：既有食品接口字段不变，`giValue`/`gi`继续来自同一`food_nutrition.gi_value`。新增食品（含识别待审草稿）默认每分钟进入GI查找，每批最多3条；先按名称和分类查询`food_gi_reference`，未命中再检索悉尼大学公开数据库。模型仅用于名称翻译，不生成GI数值。无可靠匹配、同名试验冲突或无适用GI时保持NULL，不写0。当前常见做法的参考值在`food_gi_lookup`保留试验食物、来源、适用说明和状态，不表示当前食品实测；管理员可用已核对数值替换。联网不在食品保存事务内，失败次日重试，未知结果每7天复查。写入仅补空值且校验食品名称、分类和未删除状态，人工维护不会被迟到任务覆盖；GI、来源登记与食品缓存版本同事务提交，历史餐食快照不回填。
+
 用户、食品和反馈三个管理列表统一使用服务端分页，响应 `data` 均为 `PageResult { pageNum, pageSize, total, pages, records }`。`pageNum` 从 1 开始，`pageSize` 范围为 1～100；筛选条件由服务端执行，管理端不得先拉取固定数量的数据再进行本地分页。
 
 | 方法与路径 | 可选筛选参数 | 权限 | 说明 |
@@ -1078,6 +1098,7 @@ AI 识别食品优先使用用户上传的餐食实拍图作为管理端预览�
 | POST /api/v1/devices/bind | C 端登录 | 自助绑定：SN 空闲则新建并归属当前用户；已有空闲档案可认领；已被他人占用则冲突。建议写操作带 X-Idempotency-Key |
 | POST /api/v1/devices/{id}/unbind | C 端登录 | 解绑：清空 user_id，保留档案；仅本人可操作 |
 | GET /api/v1/devices/{id}/sync-logs?limit=10 | C 端登录 | 本人设备近 N 次同步流水（默认 10，最大 50）；按时间倒序；他人设备 id 业务拒绝 |
+| GET /api/v1/devices/{id}/sync-logs/{logId}/samples | C 端登录 | 本人某次同步的血糖样本快照（只读）；校验设备与流水归属本人；返回 { syncedAt, sampleCount, points:[{ recordedAt, nodeCode, glucoseValue }] } 按 recordedAt 升序；旧流水无快照时 points 为空数组 |
 
 绑定请求体：`{ deviceSn, provider, deviceName?, deviceCategory?, deviceModel? }`。列表项：`{ id, deviceSn, deviceName, provider, deviceCategory?, deviceModel?, deviceStatus, lastSyncAt, bound, cloudLinked }`（bound 恒为 true；deviceCategory 闭集 CGM/BGM/PUMP/PEN/BAND/WATCH/RING/HUB/SCALE/BP/OXIMETER/OTHER 可空；deviceModel 可空；cloudLinked 表示已关联有效厂商云授权，首期仅 HUAWEI；响应不含 token）。同步流水项：`{ id, provider, sampleCount, createdCount, remark, syncedAt }`。
 
@@ -1100,13 +1121,16 @@ cloud-pull 成功：{ provider, items, devices? }（items 同 SyncResponse；dev
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
 | GET /admin/v1/devices | device:manage | 分页；可选 keyword、deviceStatus、provider、deviceCategory、bound、cloudLinked；列表项含 deviceCategory、deviceModel、cloudLinked、syncHealth（OK/NEVER/STALE，48h）、createdAt |
-| POST /admin/v1/devices | device:manage | 创建；可选 deviceCategory、deviceModel |
-| PUT /admin/v1/devices/{id} | device:manage | 更新名称/厂商/类型/型号/绑定用户 |
+| POST /admin/v1/devices | device:manage | 创建；可选 deviceCategory、deviceModel；未传类型时可按 SN/名称启发式回填 |
+| PUT /admin/v1/devices/{id} | device:manage | 更新名称/厂商/类型/型号/绑定用户；类型为空时可启发式回填 |
 | PUT /admin/v1/devices/{id}/status | device:manage | 启用/禁用 |
 | DELETE /admin/v1/devices/{id} | device:manage | 逻辑删除 |
 | GET /admin/v1/devices/{id}/sync-logs?limit=20 | device:manage | 近 N 次同步流水（默认 20，最大 50） |
+| GET /admin/v1/devices/{id}/sync-logs/{logId}/samples | device:manage | 某次同步的血糖样本快照（只读）；校验 log 属于该设备；返回 { syncedAt, sampleCount, points:[{ recordedAt, nodeCode, glucoseValue }] } 按 recordedAt 升序；旧流水无快照时 points 为空数组 |
 | GET /admin/v1/devices/{id}/cloud-auth | device:manage | { linked, expiresAt, scopes?, vendorSubjectMasked? }；无 token |
 | DELETE /admin/v1/devices/{id}/cloud-auth | device:manage | 撤销云授权 |
+
+设备成功同步且绑定了档案时，除写入 device_sync_log 外，还将本次统一血糖样本快照到 device_sync_sample（与流水同事务），供管理端与小程序只读曲线；历史流水不回填。
 
 ## 服务器资源监控（2026-10-22）
 

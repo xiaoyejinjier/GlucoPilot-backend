@@ -81,6 +81,12 @@ public interface WithdrawalMapper {
 
     long count(@Param("user") Long user, @Param("status") String status);
 
+    /** 在途提现单数量（PENDING/APPROVED），注销资产校验用。 */
+    long countInFlightWithdrawals(@Param("user") long user);
+
+    /** 申请人账号状态，用户不存在或逻辑删除返回 null。 */
+    Integer accountStatus(@Param("user") long user);
+
     List<String> due(@Param("today") LocalDate today);
 
     Integer workingDay(@Param("date") LocalDate date);

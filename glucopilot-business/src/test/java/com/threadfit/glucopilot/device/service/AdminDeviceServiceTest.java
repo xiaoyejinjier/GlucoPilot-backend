@@ -11,6 +11,7 @@ import com.threadfit.glucopilot.device.entity.DeviceCloudCredential;
 import com.threadfit.glucopilot.device.entity.DeviceSyncLog;
 import com.threadfit.glucopilot.device.entity.UserDevice;
 import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncSampleMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import com.threadfit.glucopilot.user.mapper.UserAccountMapper;
 import com.threadfit.glucopilot.user.mapper.UserProfileMapper;
@@ -46,6 +47,8 @@ class AdminDeviceServiceTest {
     private UserProfileMapper userProfileMapper;
     @Mock
     private DeviceSyncLogMapper deviceSyncLogMapper;
+    @Mock
+    private DeviceSyncSampleMapper deviceSyncSampleMapper;
     @Mock
     private DeviceCloudCredentialService deviceCloudCredentialService;
 

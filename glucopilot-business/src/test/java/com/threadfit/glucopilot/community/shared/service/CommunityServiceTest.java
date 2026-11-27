@@ -36,6 +36,28 @@ class CommunityServiceTest {
     private TransactionTemplate tx;
     private java.sql.Connection migrationConnection;
 
+    @Test
+    void doctorReviewAppearsOnlyForOwnerAndReappearsForNewResultVersion() {
+        var notices = new CommunityNotificationService(
+                CommunityTestMappers.mapper(jdbc, CommunityNotificationMapper.class), service);
+        jdbc.update("INSERT INTO consultation_doctor(user_id,status,version) VALUES(1,'PENDING',12)");
+        long previous = notices.summary(1).total();
+        assertEquals(0, notices.summary(1).doctorReviews());
+        jdbc.update("UPDATE consultation_doctor SET status='APPROVED',version=13,reviewed_at=CURRENT_TIMESTAMP WHERE user_id=1");
+        var summary = notices.summary(1);
+        assertEquals(1, summary.doctorReviews());
+        assertEquals(previous + 1, summary.total());
+        assertEquals("13", summary.doctorReview().getVersion());
+        assertEquals("APPROVED", summary.doctorReview().getStatus());
+        assertNull(notices.summary(2).doctorReview());
+        jdbc.update("INSERT INTO consultation_doctor_review_read(user_id,review_version) VALUES(1,13)");
+        assertEquals(0, notices.summary(1).doctorReviews());
+        jdbc.update("UPDATE consultation_doctor SET status='REJECTED',version=14 WHERE user_id=1");
+        assertEquals(1, notices.summary(1).doctorReviews());
+        jdbc.update("UPDATE consultation_doctor SET status='PENDING',version=15 WHERE user_id=1");
+        assertEquals(0, notices.summary(1).doctorReviews());
+    }
+
     @BeforeEach
     void setup() throws Exception {
         var ds =

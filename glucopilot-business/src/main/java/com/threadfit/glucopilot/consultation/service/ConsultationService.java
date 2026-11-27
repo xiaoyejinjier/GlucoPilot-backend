@@ -41,6 +41,19 @@ public class ConsultationService {
         return mapper.doctor(user);
     }
 
+    /** 阅读与审核共享医生行锁，旧页面不能把之后的新审核结果标为已读。 */
+    @Transactional
+    public void readDoctorReview(long user, ReadDoctorReview request) {
+        requireActiveUser(user);
+        var current = mapper.lockDoctor(user);
+        if (current == null || current.getReviewedAt() == null
+                || !Set.of("APPROVED", "REJECTED", "DISABLED").contains(current.getStatus()))
+            throw new BizException(ErrorCode.NOT_FOUND, "审核结果不存在或已更新");
+        if (request == null || request.version() == null || request.version() != current.getVersion())
+            throw new BizException(ErrorCode.CONFLICT, "审核结果已更新，请刷新后查看");
+        mapper.readDoctorReview(user, current.getVersion());
+    }
+
     @Transactional
     public DoctorProfile apply(long user, DoctorApplication request) {
         requireActiveUser(user);
@@ -100,8 +113,21 @@ public class ConsultationService {
             boolean unclaimedOnly,
             String topic,
             PageQuery page) {
+        return list(viewer, mine, assigned, hideMine, unclaimedOnly, null, topic, page);
+    }
+
+    public PageResult<CaseView> list(
+            long viewer,
+            boolean mine,
+            boolean assigned,
+            boolean hideMine,
+            boolean unclaimedOnly,
+            String status,
+            String topic,
+            PageQuery page) {
         checkPage(page);
         String filter = topicFilter(topic);
+        String state = filter(status, Set.of("WAITING", "IN_PROGRESS", "REPORT_READY", "CLOSED"));
         var doctor = mapper.doctor(viewer);
         if (assigned && !approved(doctor))
             throw new BizException(ErrorCode.FORBIDDEN, "请先完成医生身份审核");
@@ -109,6 +135,8 @@ public class ConsultationService {
             throw new BizException(ErrorCode.FORBIDDEN, "请先完成医生身份审核");
         if (unclaimedOnly && (mine || assigned))
             throw new BizException(ErrorCode.BAD_REQUEST, "未接诊筛选仅用于求助广场");
+        if (unclaimedOnly && state != null && !"WAITING".equals(state))
+            throw new BizException(ErrorCode.BAD_REQUEST, "未接诊筛选不能与其他状态同时使用");
         boolean excludeSelf = hideMine && !mine && !assigned;
         var rows =
                 mapper.list(
@@ -117,6 +145,7 @@ public class ConsultationService {
                         assigned,
                         excludeSelf,
                         unclaimedOnly,
+                        state,
                         filter,
                         page.getPageSize(),
                         page.offset());
@@ -124,7 +153,7 @@ public class ConsultationService {
         return PageResult.of(
                 page.getPageNum(),
                 page.getPageSize(),
-                mapper.count(viewer, mine, assigned, excludeSelf, unclaimedOnly, filter),
+                mapper.count(viewer, mine, assigned, excludeSelf, unclaimedOnly, state, filter),
                 items);
     }
 

@@ -197,6 +197,9 @@ class ConsultationWorkflowTest {
                 }) ddl("ALTER TABLE wallet_withdrawal_order ADD COLUMN " + column);
         tables("V78__alipay_sandbox_withdrawal_transfers.sql", "wallet_withdrawal_transfer_log");
         tables("V79__consultation_message_reads.sql", "consultation_message_read");
+        new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                new org.springframework.core.io.ClassPathResource("db/migration/R__doctor_review_notification_reads.sql"))
+                .populate(schemaConnection);
         ddl("ALTER TABLE wallet_sandbox_account ADD COLUMN frozen_cents BIGINT DEFAULT 0 NOT NULL");
         ddl(
                 "ALTER TABLE wallet_sandbox_account ADD COLUMN income_available_cents BIGINT"
@@ -1060,6 +1063,100 @@ class ConsultationWorkflowTest {
         assertThrows(
                 BizException.class, () -> service.list(2, false, false, false, true, null, page));
         assertDoesNotThrow(() -> service.list(1, false, false, null, page));
+    }
+
+    @Test
+    void myAssignedCasesCombineStatusAndTopicAndRequireAnApprovedDoctor() {
+        approve(2); approve(3);
+        var first = service.publish(1, new PublishRequest("我的接诊筛选甲", "DIET", "用于验证本人接诊和问诊状态的组合筛选。", "", "", false, "assigned_filter_case_01"));
+        var second = service.publish(4, new PublishRequest("我的接诊筛选乙", "GLUCOSE", "用于验证本人接诊和问诊状态的组合筛选。", "", "", false, "assigned_filter_case_02"));
+        var other = service.publish(1, new PublishRequest("其他医生接诊筛选", "DIET", "用于验证不能查出其他医生接诊的求助。", "", "", false, "assigned_filter_case_03"));
+        service.claim(2, first.id()); service.claim(2, second.id()); service.claim(3, other.id());
+        jdbc.update("UPDATE consultation_request SET status='REPORT_READY' WHERE id=?", first.id());
+        var result = service.list(2, false, true, false, false, "REPORT_READY", "DIET", new PageQuery());
+        assertEquals(1, result.getTotal()); assertEquals(first.id(), result.getRecords().getFirst().id());
+        assertEquals(1, service.list(2, false, true, false, false, "IN_PROGRESS", null, new PageQuery()).getTotal());
+        assertEquals(0, service.list(3, false, true, false, false, "REPORT_READY", "DIET", new PageQuery()).getTotal());
+        assertEquals(1, service.list(3, false, true, false, false, "IN_PROGRESS", "DIET", new PageQuery()).getTotal());
+        var ordinary = assertThrows(BizException.class,
+                () -> service.list(1, false, true, false, false, "REPORT_READY", null, new PageQuery()));
+        assertEquals(com.threadfit.glucopilot.common.api.ErrorCode.FORBIDDEN, ordinary.getErrorCode());
+        jdbc.update("UPDATE consultation_doctor SET status='DISABLED' WHERE user_id=2");
+        assertThrows(BizException.class,
+                () -> service.list(2, false, true, false, false, "REPORT_READY", null, new PageQuery()));
+    }
+
+    @Test
+    void doctorReviewReadIsPrivateIdempotentAndRejectsNewerReviewVersions() {
+        approve(2);
+        long version = service.doctor(2).getVersion();
+        assertThrows(BizException.class, () -> service.readDoctorReview(1, new ReadDoctorReview(version)));
+        var stale = assertThrows(BizException.class,
+                () -> service.readDoctorReview(2, new ReadDoctorReview(version + 1)));
+        assertEquals(com.threadfit.glucopilot.common.api.ErrorCode.CONFLICT, stale.getErrorCode());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM consultation_doctor_review_read", Integer.class));
+        service.readDoctorReview(2, new ReadDoctorReview(version));
+        service.readDoctorReview(2, new ReadDoctorReview(version));
+        assertEquals(version, jdbc.queryForObject(
+                "SELECT review_version FROM consultation_doctor_review_read WHERE user_id=2", Long.class));
+        service.review(1, 2, new DoctorReview("DISABLED", "更新的审核结果", version));
+        assertThrows(BizException.class, () -> service.readDoctorReview(2, new ReadDoctorReview(version)));
+        assertEquals(version, jdbc.queryForObject(
+                "SELECT review_version FROM consultation_doctor_review_read WHERE user_id=2", Long.class));
+        service.readDoctorReview(2, new ReadDoctorReview(version + 1));
+    }
+
+    @Test
+    void squareStatusFiltersCombineOwnershipAndTopicBeforePagination() {
+        String[] statuses = {"WAITING", "IN_PROGRESS", "REPORT_READY", "CLOSED"};
+        for (String status : statuses) {
+            for (long patient : new long[] {1, 3, 4}) {
+                var item = service.publish(patient, new PublishRequest(
+                        "广场状态筛选测试", "GLUCOSE", "用于验证状态归属和分页条件组合后的查询结果。", "", "",
+                        false, "square_status_" + status + "_" + patient));
+                jdbc.update("UPDATE consultation_request SET status=?,doctor_user_id=? WHERE id=?",
+                        status, "WAITING".equals(status) ? null : 2L, item.id());
+            }
+        }
+        var inconsistent = service.publish(4, new PublishRequest(
+                "状态不一致测试求助", "GLUCOSE", "已绑定医生的记录不应显示为等待医生。", "", "",
+                false, "square_inconsistent_001"));
+        jdbc.update("UPDATE consultation_request SET doctor_user_id=2 WHERE id=?", inconsistent.id());
+        var otherTopic = service.publish(3, new PublishRequest(
+                "饮食分类测试求助", "DIET", "用于验证状态筛选还会同时限制分类。", "", "", false,
+                "square_status_diet_001"));
+        jdbc.update("UPDATE consultation_request SET status='REPORT_READY',doctor_user_id=2 WHERE id=?", otherTopic.id());
+        for (String status : statuses) {
+            var mine = service.list(1, true, false, false, false, status, "GLUCOSE", new PageQuery());
+            assertEquals(1, mine.getTotal());
+            assertTrue(mine.getRecords().getFirst().mine());
+            var others = service.list(1, false, false, true, false, status, "GLUCOSE", new PageQuery());
+            assertEquals(2, others.getTotal());
+            assertTrue(others.getRecords().stream().allMatch(row -> status.equals(row.status()) && !row.mine()));
+            assertTrue(others.getRecords().stream().noneMatch(row -> row.detailsVisible()));
+        }
+        var page = new PageQuery(); page.setPageSize(1);
+        var first = service.list(1, false, false, true, false, "REPORT_READY", "GLUCOSE", page);
+        assertEquals(2, first.getTotal()); assertEquals(1, first.getRecords().size());
+        page.setPageNum(2);
+        var second = service.list(1, false, false, true, false, "REPORT_READY", "GLUCOSE", page);
+        assertEquals(2, second.getTotal());
+        assertNotEquals(first.getRecords().getFirst().id(), second.getRecords().getFirst().id());
+        assertEquals(1, service.list(1, false, false, true, false, "REPORT_READY", "DIET", new PageQuery()).getTotal());
+    }
+
+    @Test
+    void squareStatusRejectsInvalidStatesAndConflictingLegacyFilters() {
+        for (String state : new String[] {"report_ready", "UNKNOWN", "WAITING' OR 1=1"}) {
+            var error = assertThrows(BizException.class,
+                    () -> service.list(1, false, false, false, false, state, null, new PageQuery()));
+            assertEquals(com.threadfit.glucopilot.common.api.ErrorCode.BAD_REQUEST, error.getErrorCode());
+        }
+        approve(2);
+        var error = assertThrows(BizException.class,
+                () -> service.list(2, false, false, false, true, "REPORT_READY", null, new PageQuery()));
+        assertEquals(com.threadfit.glucopilot.common.api.ErrorCode.BAD_REQUEST, error.getErrorCode());
+        assertDoesNotThrow(() -> service.list(1, false, false, false, false, "WAITING", null, new PageQuery()));
     }
 
     @Test

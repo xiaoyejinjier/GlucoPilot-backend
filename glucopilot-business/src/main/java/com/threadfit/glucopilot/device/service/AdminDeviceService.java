@@ -9,13 +9,16 @@ import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.mybatis.SoftDeletes;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
 import com.threadfit.glucopilot.device.adapter.support.DeviceCategories;
+import com.threadfit.glucopilot.device.adapter.support.DeviceCategoryHints;
 import com.threadfit.glucopilot.device.adapter.support.DeviceProviders;
 import com.threadfit.glucopilot.device.cloud.DeviceCloudCredentialService;
 import com.threadfit.glucopilot.device.dto.AdminDeviceDtos;
 import com.threadfit.glucopilot.device.entity.DeviceCloudCredential;
 import com.threadfit.glucopilot.device.entity.DeviceSyncLog;
+import com.threadfit.glucopilot.device.entity.DeviceSyncSample;
 import com.threadfit.glucopilot.device.entity.UserDevice;
 import com.threadfit.glucopilot.device.mapper.DeviceSyncLogMapper;
+import com.threadfit.glucopilot.device.mapper.DeviceSyncSampleMapper;
 import com.threadfit.glucopilot.device.mapper.UserDeviceMapper;
 import com.threadfit.glucopilot.user.entity.UserAccount;
 import com.threadfit.glucopilot.user.entity.UserProfile;
@@ -48,6 +51,7 @@ public class AdminDeviceService {
     private final UserAccountMapper userAccountMapper;
     private final UserProfileMapper userProfileMapper;
     private final DeviceSyncLogMapper deviceSyncLogMapper;
+    private final DeviceSyncSampleMapper deviceSyncSampleMapper;
     private final DeviceCloudCredentialService deviceCloudCredentialService;
 
     /**
@@ -147,12 +151,15 @@ public class AdminDeviceService {
         if (userId != null) {
             requireUser(userId);
         }
+        String name = request.getDeviceName().trim();
+        String model = normalizeModel(request.getDeviceModel());
         UserDevice row = new UserDevice();
         row.setDeviceSn(sn);
-        row.setDeviceName(request.getDeviceName().trim());
+        row.setDeviceName(name);
         row.setProvider(resolveProvider(request.getProvider()));
-        row.setDeviceCategory(DeviceCategories.normalize(request.getDeviceCategory()));
-        row.setDeviceModel(normalizeModel(request.getDeviceModel()));
+        row.setDeviceCategory(DeviceCategoryHints.resolveOrSuggest(
+                DeviceCategories.normalize(request.getDeviceCategory()), sn, name, model));
+        row.setDeviceModel(model);
         row.setUserId(userId);
         row.setDeviceStatus(1);
         userDeviceMapper.insert(row);
@@ -166,10 +173,13 @@ public class AdminDeviceService {
         if (userId != null) {
             requireUser(userId);
         }
-        row.setDeviceName(request.getDeviceName().trim());
+        String name = request.getDeviceName().trim();
+        String model = normalizeModel(request.getDeviceModel());
+        row.setDeviceName(name);
         row.setProvider(resolveProvider(request.getProvider()));
-        row.setDeviceCategory(DeviceCategories.normalize(request.getDeviceCategory()));
-        row.setDeviceModel(normalizeModel(request.getDeviceModel()));
+        row.setDeviceCategory(DeviceCategoryHints.resolveOrSuggest(
+                DeviceCategories.normalize(request.getDeviceCategory()), row.getDeviceSn(), name, model));
+        row.setDeviceModel(model);
         row.setUserId(userId);
         userDeviceMapper.updateById(row);
         return getItem(id);
@@ -213,6 +223,32 @@ public class AdminDeviceService {
                         .syncedAt(log.getGmtCreate())
                         .build())
                 .toList();
+    }
+
+    public AdminDeviceDtos.SyncSamplesResponse listSyncSamples(Long deviceId, Long logId) {
+        requireDevice(deviceId);
+        DeviceSyncLog log = deviceSyncLogMapper.selectById(logId);
+        if (log == null || !deviceId.equals(log.getDeviceId())) {
+            throw new BizException(ErrorCode.NOT_FOUND, "同步流水不存在");
+        }
+        List<AdminDeviceDtos.SyncSamplePoint> points = deviceSyncSampleMapper.selectList(
+                        new LambdaQueryWrapper<DeviceSyncSample>()
+                                .eq(DeviceSyncSample::getSyncLogId, logId)
+                                .eq(DeviceSyncSample::getDeviceId, deviceId)
+                                .orderByAsc(DeviceSyncSample::getRecordedAt)
+                                .orderByAsc(DeviceSyncSample::getId))
+                .stream()
+                .map(s -> AdminDeviceDtos.SyncSamplePoint.builder()
+                        .recordedAt(s.getRecordedAt())
+                        .nodeCode(s.getNodeCode())
+                        .glucoseValue(s.getGlucoseValue())
+                        .build())
+                .toList();
+        return AdminDeviceDtos.SyncSamplesResponse.builder()
+                .syncedAt(log.getGmtCreate())
+                .sampleCount(log.getSampleCount() == null ? points.size() : log.getSampleCount())
+                .points(points)
+                .build();
     }
 
     public AdminDeviceDtos.CloudAuthStatus cloudAuth(Long deviceId) {

@@ -46,6 +46,7 @@ public class ConsultationController {
             @RequestParam(defaultValue = "false") boolean assigned,
             @RequestParam(defaultValue = "false") boolean hideMine,
             @RequestParam(defaultValue = "false") boolean unclaimedOnly,
+            @RequestParam(required = false) String status,
             @RequestParam(required = false) String topic,
             @Valid PageQuery page) {
         return ok(
@@ -55,6 +56,7 @@ public class ConsultationController {
                         assigned,
                         hideMine,
                         unclaimedOnly,
+                        status,
                         topic,
                         page));
     }
@@ -79,6 +81,13 @@ public class ConsultationController {
     public ResponseEntity<ApiResponse<DoctorProfile>> apply(
             @Valid @RequestBody DoctorApplication request) {
         return ok(service.apply(RequestContext.requireUserId(), request));
+    }
+
+    @PutMapping("/consultation-doctors/me/review/read")
+    public ResponseEntity<ApiResponse<Void>> readDoctorReview(
+            @Valid @RequestBody ReadDoctorReview request) {
+        service.readDoctorReview(RequestContext.requireUserId(), request);
+        return ok(null);
     }
 
     @PostMapping("/consultations/{id}/claim")

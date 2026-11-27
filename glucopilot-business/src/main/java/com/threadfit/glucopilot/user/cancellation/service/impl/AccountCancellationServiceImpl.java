@@ -12,6 +12,7 @@ import com.threadfit.glucopilot.common.enums.CodeEnum.CancellationVerifyChannel;
 import com.threadfit.glucopilot.common.exception.BizException;
 import com.threadfit.glucopilot.common.util.EmailUtils;
 import com.threadfit.glucopilot.common.util.PhoneUtils;
+import com.threadfit.glucopilot.consultation.mapper.ConsultationMapper;
 import com.threadfit.glucopilot.user.cancellation.service.AccountCancellationService;
 import com.threadfit.glucopilot.user.cancellation.service.CaptchaService;
 import com.threadfit.glucopilot.user.cancellation.service.WalletCheckService;
@@ -66,12 +67,16 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
     private static final long RECOVER_REAPPLY_LOCK_MS = 24L * 3600_000L;
     private static final int MAX_VERIFY_FAILURES = 5;
 
+    /** 问诊进行中阻断原因码（precheck 第五项，独立于钱包四类资产）。 */
+    private static final String CONSULTATION_IN_FLIGHT = "CONSULTATION_IN_FLIGHT";
+
     private final UserAccountMapper userAccountMapper;
     private final UserAccountCancellationMapper cancellationMapper;
     private final UserCancelLogMapper userCancelLogMapper;
     private final AuthService authService;
     private final CaptchaService captchaService;
     private final WalletCheckService walletCheckService;
+    private final ConsultationMapper consultationMapper;
 
     /** 验证失败计数（userId -> 累计失败次数）。 */
     private final ConcurrentHashMap<Long, Integer> verifyFailCount = new ConcurrentHashMap<>();
@@ -110,10 +115,14 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         UserAccountCancellation active = findActive(userId);
         LocalDateTime recoveredAt = latestRecoveredAt(userId);
         boolean recentlyRecovered = recoveredAt != null && isWithinReapplyLock(recoveredAt);
-        boolean assetPassed = walletCheckService.check(userId).passed();
+        WalletCheckService.WalletCheckResult wallet = walletCheckService.check(userId);
+        boolean assetPassed = wallet.passed();
+        String assetReason = wallet.reasonCode();
+        boolean consultationInFlight = consultationMapper.countInFlight(userId) > 0;
 
         String blockCode = null;
         String blockMessage = null;
+        String blockReasonCode = null;
         Long isolateUntil = null;
         if (status == AccountStatus.CANCELLING.getCode()) {
             blockCode = "CANCELLING";
@@ -135,7 +144,12 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
             blockMessage = "账号恢复后 24 小时内不可再次注销，请稍后再试";
         } else if (!assetPassed) {
             blockCode = "ASSET_PENDING";
-            blockMessage = "存在未结清资产，请先提现或结清后再申请";
+            blockMessage = walletBlockMessage(assetReason);
+            blockReasonCode = assetReason;
+        } else if (consultationInFlight) {
+            blockCode = "ASSET_PENDING";
+            blockMessage = "有进行中的接诊，请先完成或等待问诊结束";
+            blockReasonCode = CONSULTATION_IN_FLIGHT;
         } else if (status != AccountStatus.NORMAL.getCode()) {
             blockCode = "ACCOUNT_UNUSABLE";
             blockMessage = "当前账号状态不可注销";
@@ -144,7 +158,7 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         boolean noActiveApplication = active == null
                 && status != AccountStatus.CANCELLING.getCode()
                 && status != AccountStatus.CANCELLED_RECOVERABLE.getCode();
-        List<PrecheckCheck> checks = new ArrayList<>(4);
+        List<PrecheckCheck> checks = new ArrayList<>(5);
         checks.add(
                 PrecheckCheck.builder()
                         .code("ACCOUNT_SAFE")
@@ -158,6 +172,7 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
                         .passed(assetPassed)
                         .title("资产已结清")
                         .detail(assetPassed ? "无未提现余额或未结清订单" : "存在未提现余额或未结清订单")
+                        .reasonCode(assetReason)
                         .build());
         checks.add(
                 PrecheckCheck.builder()
@@ -173,11 +188,20 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
                         .title("已过重新提交间隔")
                         .detail(recentlyRecovered ? "距上次恢复不足 24 小时" : "距上次恢复已超过 24 小时")
                         .build());
+        checks.add(
+                PrecheckCheck.builder()
+                        .code("CONSULTATION_IN_FLIGHT")
+                        .passed(!consultationInFlight)
+                        .title("无进行中的接诊")
+                        .detail(consultationInFlight ? "有进行中的接诊，请先完成或等待问诊结束" : "无进行中的接诊")
+                        .reasonCode(consultationInFlight ? CONSULTATION_IN_FLIGHT : null)
+                        .build());
 
         return PrecheckView.builder()
                 .canCancel(blockCode == null)
                 .blockCode(blockCode)
                 .blockMessage(blockMessage)
+                .blockReasonCode(blockReasonCode)
                 .isolateUntil(isolateUntil)
                 .checks(checks)
                 .build();
@@ -200,6 +224,23 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
             return "账号处于注销可恢复状态";
         }
         return "当前账号状态不可注销";
+    }
+
+    /** 钱包资产阻断原因码 → 用户可读文案（submit 409 message 与 precheck blockMessage 共用）。 */
+    private static String walletBlockMessage(String reasonCode) {
+        if (WalletCheckService.BALANCE.equals(reasonCode)) {
+            return "钱包存在未提现余额，请先提现后再申请注销";
+        }
+        if (WalletCheckService.INCOME_PENDING.equals(reasonCode)) {
+            return "存在未提现的问诊收入，请先提现后再申请注销";
+        }
+        if (WalletCheckService.WITHDRAWAL_IN_FLIGHT.equals(reasonCode)) {
+            return "有正在处理的提现申请，请等待处理完成后再申请注销";
+        }
+        if (WalletCheckService.RECHARGE_IN_FLIGHT.equals(reasonCode)) {
+            return "有未完成的充值订单，请等待订单关闭后再申请注销";
+        }
+        return "存在未结清资产，请先提现或结清后再申请注销";
     }
 
     @Override
@@ -286,13 +327,14 @@ public class AccountCancellationServiceImpl implements AccountCancellationServic
         // 验证方式由前端显式选择：1/2 必须是已绑定的手机号/邮箱，3 必须是本账号微信。
         int verifyType = request.getVerifyType();
         assertVerifyTarget(account, verifyType);
-        consumeVerifyCode(userId, verifyType, account, request);
 
-        // 钱包/资产校验占位：默认通过，规则确定后由实现决定失败语义
+        // 钱包/资产校验必须在消费验证码之前：失败不消耗一次性凭证、不累计失败锁
         WalletCheckService.WalletCheckResult wallet = walletCheckService.check(userId);
         if (!wallet.passed()) {
-            throw new BizException(ErrorCode.CONFLICT, "存在未结清资产，暂无法注销");
+            throw new BizException(ErrorCode.CONFLICT, walletBlockMessage(wallet.reasonCode()));
         }
+
+        consumeVerifyCode(userId, verifyType, account, request);
 
         LocalDateTime now = LocalDateTime.now();
         UserAccountCancellation record = new UserAccountCancellation();

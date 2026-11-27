@@ -6,6 +6,7 @@ import com.threadfit.glucopilot.common.api.PageResult;
 import com.threadfit.glucopilot.common.constant.PermCodes;
 import com.threadfit.glucopilot.food.dto.AdminFoodDtos;
 import com.threadfit.glucopilot.food.service.AdminFoodService;
+import com.threadfit.glucopilot.food.service.FoodGiDemoService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -37,6 +38,7 @@ public class AdminFoodController {
 
     /** 管理端食品分类和食品维护服务。 */
     private final AdminFoodService adminFoodService;
+    private final FoodGiDemoService giDemo;
 
     /** 查询全部未删除的食品分类，供管理页面展示和下拉框选择。 */
     @GetMapping("/food-categories")
@@ -86,7 +88,9 @@ public class AdminFoodController {
             @RequestParam(required = false) Boolean enabled,
             @RequestParam(required = false) Boolean pendingReview,
             @Valid PageQuery query) {
-        return ApiResponse.ok(adminFoodService.pageFoods(categoryId, keyword, enabled, pendingReview, query));
+        var page = adminFoodService.pageFoods(categoryId, keyword, enabled, pendingReview, query);
+        giDemo.adminItems(page.getRecords());
+        return ApiResponse.ok(page);
     }
 
     /** 新建食品；@Valid 会校验食品名称和分类 ID。 */

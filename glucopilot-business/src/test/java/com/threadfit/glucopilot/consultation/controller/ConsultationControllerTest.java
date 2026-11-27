@@ -135,11 +135,11 @@ class ConsultationControllerTest {
                         .andReturn()
                         .getResponse()
                         .getStatus());
-        verify(service).list(eq(1L), eq(false), eq(false), eq(true), eq(false), isNull(), any());
+        verify(service).list(eq(1L), eq(false), eq(false), eq(true), eq(false), isNull(), isNull(), any());
         assertEquals(
                 200,
                 web.perform(get("/api/v1/consultations")).andReturn().getResponse().getStatus());
-        verify(service).list(eq(1L), eq(false), eq(false), eq(false), eq(false), isNull(), any());
+        verify(service).list(eq(1L), eq(false), eq(false), eq(false), eq(false), isNull(), isNull(), any());
     }
 
     @Test
@@ -156,6 +156,36 @@ class ConsultationControllerTest {
                         .andReturn()
                         .getResponse()
                         .getStatus());
-        verify(service).list(eq(2L), eq(false), eq(false), eq(true), eq(true), eq("DIET"), any());
+        verify(service).list(eq(2L), eq(false), eq(false), eq(true), eq(true), isNull(), eq("DIET"), any());
+    }
+
+    @Test
+    void doctorReviewReadRequiresIdentityAndVersionAndIgnoresExternalUserId() throws Exception {
+        String path = "/api/v1/consultation-doctors/me/review/read";
+        assertEquals(401, web.perform(put(path).contentType("application/json").content("{\"version\":3}"))
+                .andReturn().getResponse().getStatus());
+        RequestContext.setUserId(1L);
+        for (String body : new String[] {"{}", "{\"version\":-1}"})
+            assertEquals(400, web.perform(put(path).contentType("application/json").content(body))
+                    .andReturn().getResponse().getStatus());
+        var response = web.perform(put(path).param("userId", "2")
+                .contentType("application/json").content("{\"version\":\"3\"}"))
+                .andReturn().getResponse();
+        assertEquals(200, response.getStatus());
+        assertEquals("no-store", response.getHeader("Cache-Control"));
+        verify(service).readDoctorReview(eq(1L), argThat(request -> request.version() == 3L));
+    }
+
+    @Test
+    void statusAndMineFiltersUseCurrentAccountAndNoStore() throws Exception {
+        RequestContext.setUserId(1L);
+        var response = web.perform(get("/api/v1/consultations")
+                .param("mine", "true").param("status", "REPORT_READY")
+                .param("topic", "DIET").param("viewer", "999"))
+                .andReturn().getResponse();
+        assertEquals(200, response.getStatus());
+        assertEquals("no-store", response.getHeader("Cache-Control"));
+        verify(service).list(eq(1L), eq(true), eq(false), eq(false), eq(false),
+                eq("REPORT_READY"), eq("DIET"), any());
     }
 }

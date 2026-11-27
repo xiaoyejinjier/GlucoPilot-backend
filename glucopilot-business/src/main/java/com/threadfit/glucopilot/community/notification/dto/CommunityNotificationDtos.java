@@ -36,7 +36,9 @@ public final class CommunityNotificationDtos {
             long consultations,
             String latestConsultationMessageId,
             java.util.List<com.threadfit.glucopilot.consultation.entity.ConsultationUnreadNotice>
-                    consultationConversations) {}
+                    consultationConversations,
+            long doctorReviews,
+            com.threadfit.glucopilot.consultation.entity.DoctorReviewNotice doctorReview) {}
 
     public record Read(String kind, String throughId) {}
 }

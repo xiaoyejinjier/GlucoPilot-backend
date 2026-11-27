@@ -43,6 +43,8 @@ public interface ConsultationMapper {
 
     DoctorProfile lockDoctor(@Param("user") long user);
 
+    int readDoctorReview(@Param("user") long user, @Param("version") long version);
+
     int insertDoctor(@Param("user") long user, @Param("form") DoctorApplication form);
 
     int updateDoctor(@Param("user") long user, @Param("form") DoctorApplication form);
@@ -62,6 +64,7 @@ public interface ConsultationMapper {
             @Param("assigned") boolean assigned,
             @Param("hideMine") boolean hideMine,
             @Param("unclaimedOnly") boolean unclaimedOnly,
+            @Param("status") String status,
             @Param("topic") String topic);
 
     List<ConsultationRow> list(
@@ -70,6 +73,7 @@ public interface ConsultationMapper {
             @Param("assigned") boolean assigned,
             @Param("hideMine") boolean hideMine,
             @Param("unclaimedOnly") boolean unclaimedOnly,
+            @Param("status") String status,
             @Param("topic") String topic,
             @Param("limit") int limit,
             @Param("offset") long offset);
@@ -118,6 +122,9 @@ public interface ConsultationMapper {
     int creditDoctor(@Param("user") long user);
 
     int markPaid(@Param("no") String no);
+
+    /** 作为医生仍在进行中且未支付的问诊单数量（注销预检第五项阻断）。 */
+    long countInFlight(@Param("doctor") long doctor);
 
     int entry(
             @Param("no") String no,

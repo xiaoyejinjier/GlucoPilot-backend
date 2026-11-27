@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.threadfit.glucopilot.community.notification.mapper.CommunityNotificationMapper">
+    <select id="selectDoctorReviewNotice" resultType="com.threadfit.glucopilot.consultation.entity.DoctorReviewNotice">
+        SELECT CONCAT('',d.version) version,d.status,d.reviewed_at
+        FROM consultation_doctor d
+        JOIN user_account u ON u.id=d.user_id AND u.is_deleted=0 AND u.account_status=1
+        LEFT JOIN consultation_doctor_review_read r ON r.user_id=d.user_id AND r.review_version&gt;=d.version
+        WHERE d.user_id=#{user} AND d.status IN ('APPROVED','REJECTED','DISABLED')
+          AND d.reviewed_at IS NOT NULL AND r.user_id IS NULL
+    </select>
     <!-- 连续发送的多条消息聚合为一个问诊提醒，COUNT仅用于未读角标。 -->
     <select id="selectConsultationNotices" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationUnreadNotice">
         SELECT c.id consultation_id,c.title,

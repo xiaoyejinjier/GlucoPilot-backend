@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.threadfit.glucopilot.notification.mapper.UserReminderMapper">
+    <select id="doctorReviewVersion" resultType="long">
+        SELECT version FROM consultation_doctor
+        WHERE user_id=#{userId} AND status IN ('APPROVED','REJECTED','DISABLED') AND reviewed_at IS NOT NULL
+    </select>
+    <!-- 先取版本再条件写入；批量已读不吞掉取快照之后的新审核结果。 -->
+    <insert id="readDoctorReviewVersion">
+        INSERT INTO consultation_doctor_review_read(user_id,review_version)
+        SELECT user_id,version FROM consultation_doctor
+        WHERE user_id=#{userId} AND version=#{version}
+          AND status IN ('APPROVED','REJECTED','DISABLED') AND reviewed_at IS NOT NULL
+        ON DUPLICATE KEY UPDATE
+          review_version=GREATEST(review_version,VALUES(review_version)),read_at=CURRENT_TIMESTAMP(3)
+    </insert>
     <select id="consultationCursors" resultType="com.threadfit.glucopilot.consultation.entity.ConsultationReadCursor">
         SELECT c.id consultation_id,MAX(m.id) through_id
         <include refid="com.threadfit.glucopilot.consultation.mapper.ConsultationConversationMapper.unreadScope"/>

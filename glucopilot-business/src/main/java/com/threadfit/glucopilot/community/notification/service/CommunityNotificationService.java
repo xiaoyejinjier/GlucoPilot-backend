@@ -50,6 +50,8 @@ public class CommunityNotificationService {
         long reports = ((Number) feedback.get("total")).longValue();
         var consultation = mapper.selectConsultationCounts(viewer);
         long consultations = ((Number) consultation.get("total")).longValue();
+        var doctorReview = mapper.selectDoctorReviewNotice(viewer);
+        long doctorReviews = doctorReview == null ? 0 : 1;
         return new Summary(
                 direct.unreadCount(),
                 likes,
@@ -63,14 +65,17 @@ public class CommunityNotificationService {
                         + comments
                         + follows
                         + reports
-                        + consultations,
+                        + consultations
+                        + doctorReviews,
                 direct.latestMessageId(),
                 direct.latestSenderId(),
                 latest == 0 ? null : Long.toString(latest),
                 feedback.get("latest") == null ? null : feedback.get("latest").toString(),
                 consultations,
                 consultation.get("latest") == null ? null : consultation.get("latest").toString(),
-                mapper.selectConsultationNotices(viewer));
+                mapper.selectConsultationNotices(viewer),
+                doctorReviews,
+                doctorReview);
     }
 
     public PageResult<Notice> list(long viewer, String kind, PageQuery q) {
